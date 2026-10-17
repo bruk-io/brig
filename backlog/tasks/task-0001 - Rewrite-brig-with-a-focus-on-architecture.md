@@ -5,6 +5,7 @@ status: To Do
 assignee:
   - '@bruk'
 created_date: '2026-10-17 19:05'
+updated_date: '2026-10-17 20:15'
 labels:
   - brig
   - size-8
@@ -60,7 +61,7 @@ I would prefer all logs to be JSON-shaped and consistent.
 - [ ] Seatbelt: build its slice before a Mac run proves it, or wait for a Mac run? Carried forward: bwrap comes first; this is decided before the Seatbelt work starts.
 - [ ] The log envelope: its fields (time, level, source, event, then the event's own fields?), and whether "all logs JSON-shaped and consistent" becomes a rule in the philosophy plugin for every repository. Carried forward: a design task before the supervisor program writes its first log line.
 - [ ] The docs theme: bh-01's components or Material for MkDocs? Carried forward: decided by the docs task, before its first page.
-- [ ] The ruff hook that formats every file an agent edits: add it to `.claude/settings.json`, or run ruff only in `just done`? Carried forward: decided by the scaffolding task, which owns the settings file after the seed.
+- [x] The ruff hook that formats every file an agent edits: add it to `.claude/settings.json`, or run ruff only in `just done`? Settled by TASK-0001.01: no hook. Ruff runs only in `just done`, matching this intent's own words above ("ruff ... run only when the work is done").
 - [x] The SPEC's numbering: settled by decision-0001 (rule 18): new rulings are this board's decisions, and the old SPEC's are cited as "old SPEC decision-NNN".
 - [x] What must not break: settled by the owner: no backwards compatibility, so brig's ten laws (criterion 17) are all that must not break.
 
