@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "likec4": {
+      "command": "npx",
+      "args": ["-y", "@likec4/mcp@1.60.0"],
+      "env": { "LIKEC4_WORKSPACE": "docs/architecture" }
+    }
+  }
+}
