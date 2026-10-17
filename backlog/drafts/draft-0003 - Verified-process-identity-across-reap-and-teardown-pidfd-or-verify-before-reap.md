@@ -1,0 +1,39 @@
+---
+id: DRAFT-0003
+title: >-
+  Verified process identity across reap and teardown (pidfd, or
+  verify-before-reap)
+status: Draft
+assignee: []
+created_date: '2026-10-17 21:53'
+labels:
+  - brig
+  - teardown
+dependencies: []
+references:
+  - >-
+    backlog/decisions/decision-0001 -
+    Rebuild-brig-from-empty-in-three-layers-domain-infra-and-presentation.md
+parent_task_id: TASK-0001
+type: design
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+## Why
+
+TASK-0001.03's adversarial review flagged that on the normal journey (create -> run_jail -> destroy_jail), the pid `destroy_jail` probes and signals during teardown has already been freed by `run_jail`'s blocking reap. TASK-0001.03 fixed the two concrete bugs this produced (teardown's `Verify` now reaps non-blockingly before checking the group with `killpg`, so an exited-but-unreaped process is collected instead of answering "alive" forever, and the ladder's last rung reaps deterministically after `SignalKind.KILL`, since that signal cannot be ignored) -- see `src/brig/domain/teardown.py` and `src/brig/infra/processes.py` as of that task.
+
+What is still open, and is a POSIX-wide hazard rather than a bug introduced by brig: once a pid is freed (by `run_jail`'s reap, or by teardown's own reap after KILL), nothing stops the OS from reusing that exact pid for an unrelated process before the next probe. If that happens, `Verify` would read the new, unrelated process as the jail's own and `SignalGroup` would signal it. This is an extremely narrow window in practice (confirmed empirically to be unreachable on every test this task runs), but it is a real gap in the guarantee `presentation/api.py`, `presentation/errors.py` and `domain/teardown.py` all state in terms of "no process of the jail is left" / "still alive".
+
+Two directions were named by the review, neither attempted in TASK-0001.03 (out of its scope as a walking skeleton):
+
+1. **pidfd** (Linux `pidfd_open`): a stable file-descriptor handle on a process that cannot be reused for a different one, so a later probe can never be confused about identity. Linux-only; needs a story for Seatbelt/macOS and any future jail type without it.
+2. **Verify before reap**: restructure `run_jail`/`start` so the jail's exit is observed without releasing the identity (e.g. a non-blocking poll loop) until teardown has had its say, rather than reaping unconditionally and handing back a bare exit code.
+
+## Open questions
+
+- [ ] Is this worth closing before Seatbelt (jail_types/seatbelt.py) adds a second jail type, or can every jail type's driver carry the same narrow residual risk for now?
+- [ ] Does a per-platform split (pidfd on Linux, something else on macOS) fit the "jail type is a slice" rule (decision-0001 rule 3), or does identity tracking belong at a layer above jail types?
+<!-- SECTION:DESCRIPTION:END -->
