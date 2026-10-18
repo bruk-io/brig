@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@bruk'
 created_date: '2026-10-17 22:57'
-updated_date: '2026-10-18 04:36'
+updated_date: '2026-10-18 04:38'
 labels:
   - brig
   - size-2
@@ -222,4 +222,53 @@ uv run python3 scripts/c4lint.py docs/architecture
 done: 1 step(s) failed: typecheck
 error: recipe `done` failed on line 71 with exit code 1
 ```
+
+### Review (independent, did not do the work)
+
+Verdict: NOT CLOSED, on process only. AC#1 is genuinely met; the close is blocked because
+nothing was committed, so this bug cannot record its repro (`close-task` refuses: 'a bug
+closes with its repro recorded'; `record-check --repro` in turn refuses while
+`pypeeker_rules/tests/test_brig_rules.py` is modified-uncommitted). Unblocking step for the
+worker or the owner: commit this task's two files, then
+`record-check TASK-0002 --repro -- uv run pytest pypeeker_rules/tests/test_brig_rules.py -k stateful_class_outside_infra`,
+then re-run `close-task`. A reviewer must not commit the work.
+
+Evidence checked independently rather than taken from the notes above:
+- `just test-pypeeker-rules` 22/22. The 6 new tests exercise the real rule through the CLI
+  (`build_fixture` + `pypeeker index` + `check --strict`; `assert_rule_fires` demands
+  `[brig-class-forms]` in the output), not a stub. One positive planted violation (bare
+  stateful class under src/brig/domain) and five controls (same class in infra/, Exception
+  subclass assigning self in __init__, class-level field, `enum.Enum` and `t.Protocol`
+  attribute-chain bases with instance state).
+- `just gates` exit 0 on the live tree, no `brig-class-forms` finding. Clean by conformance:
+  no class under src/brig declares an attribute-chain base today.
+- Read the rule. The three-way `_classify_header_bases` is the right shape, because
+  `_stateful_outside_infra` consumes exemption by negation, where a two-way
+  'cannot tell -> False' reads as 'confirmed not exempt' and fires. The ambiguous bucket is
+  excluded; a compound header still fires through the inheritance part.
+  `_declares_instance_state`'s `ScopeKind.FUNCTION` span containment correctly separates
+  `self.x = ...` in a method from a class-level field, both of which the binder records as
+  VARIABLE members of the class scope.
+
+Findings:
+- (blocking, process) Uncommitted work, above. Not a defect in the change.
+- (medium, already filed) A base re-exported through a project module resolves to a real
+  same-file IMPORT and lands in `disallowed`, so the inheritance part fires on a genuinely
+  exempt base -- a false positive, and unfixable single-file. Already filed as TASK-0001.19,
+  confirmed present on the board. No new draft.
+- (low, accepted and documented) An attribute-chain base that is genuinely disallowed plus
+  instance state stays clean. Conservative false-negative direction, same accepted gap as
+  `brig-one-writer`'s aliased-module-import gap; stated in the module docstring and the rule
+  message. No draft.
+- (not this task) `just done`'s single failing step is `typecheck` at
+  `src/brig/presentation/drivers/bwrap.py:73`, `assert_never` over
+  `_StartSupervisedCommand | _AwaitSupervisorDone`. Verified foreign: bwrap.py unmodified
+  since f43c40f, both variants come from the concurrent TASK-0001.15 work's uncommitted
+  `src/brig/domain/effects.py`, and nothing under pypeeker_rules/ can reach mypy's verdict on
+  src/brig/. Every other step green (lint, gates, rule tests, unit, integration, e2e, docs
+  build, architecture validate, architecture lint).
+- The review-time docstring corrections are prose only; no behaviour change.
+
+The full-tier check this review ran is recorded above. The working-tree diff attributable to
+this task remains confined to pypeeker_rules/brig.py and pypeeker_rules/tests/test_brig_rules.py.
 <!-- SECTION:NOTES:END -->
