@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 20:04'
-updated_date: '2026-10-18 22:22'
+updated_date: '2026-10-18 22:30'
 labels:
   - brig
   - size-1
@@ -169,4 +169,6 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+No repro: fix and discriminating tests landed together, no earlier failing-state commit to run record-check --repro against. Same pattern as TASK-0002/TASK-0005/TASK-0001.19/TASK-0006/TASK-0001.21/TASK-0011/TASK-0012/TASK-0014. Discrimination was re-verified independently by the reviewer rather than taken on report: the pre-fix parse was reconstructed in memory (reading src/brig/infra/processes.py, replacing the new try/except block with the original three unguarded lines, exec'ing the result as a module -- no file on disk changed) and driven against the same fabricated /proc-shaped directories the two new tests build. Both shapes raised the exact escape this task describes: "IndexError: list index out of range" out of group_alive, for the malformed-only directory and for the malformed-plus-well-formed one. Against the landed fix both return the asserted bool.
 <!-- SECTION:NOTES:END -->
