@@ -6,7 +6,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-10-17 21:53'
-updated_date: '2026-10-18 01:18'
+updated_date: '2026-10-18 01:22'
 labels:
   - brig
   - ci
@@ -73,14 +73,19 @@ blocker and `--privileged` is overkill. (`seccomp=unconfined --cap-drop=ALL` as 
 `setting up uid map` — an artifact of root needing CAP_SETUID in the parent namespace to write a
 full uid_map; irrelevant to CI, which runs as the unprivileged `runner` user.)
 
-Two further facts measured here that matter for the CI question:
+Two further points, one measured and one inferred from it:
 
-- **`/usr/bin/bwrap` is `-rwxr-xr-x`, not setuid.** It therefore has no path to a namespace other
-  than the unprivileged-userns one.
-- **bwrap creates a user namespace unconditionally**, regardless of flags: `bwrap --ro-bind / / --
-  true`, with no `--unshare-*` at all, fails identically. So dropping or narrowing `--unshare-all`
-  is *not* an escape hatch from this restriction — the dependency is on bwrap itself, not on the
-  flag. Any later filesystem-policy slice inherits the same constraint.
+- **Measured: `/usr/bin/bwrap` is `-rwxr-xr-x`, not setuid.** (Corroborated by
+  `50-bubblewrap.conf`'s own comment, which tells an administrator who disables userns to
+  "use dpkg-statoverride to make /usr/bin/bwrap setuid root" — i.e. it is not, as shipped.)
+- **Inferred from that: `--unshare-all` is not the load-bearing part, so narrowing it is not an
+  escape hatch.** A non-setuid bwrap has no privileged route to any namespace, so it needs an
+  unprivileged user namespace whatever flags it is given; the dependency is on bwrap itself, not
+  on this flag, and any later filesystem-policy slice inherits the same constraint. Supporting but
+  *not* conclusive observation: `bwrap --ro-bind / / -- true`, with no `--unshare-*` at all, fails
+  identically in the default container — though that was Docker's seccomp filter, and the probe
+  did not isolate which clone flag was refused, so it does not by itself prove `CLONE_NEWUSER` is
+  what bwrap always requests.
 
 #### Measured from Ubuntu 24.04's own packages (in-container, so: how Ubuntu ships it)
 
@@ -119,9 +124,12 @@ Two further facts measured here that matter for the CI question:
   `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.
 - **PR #11489 ("[Ubuntu] Disable apparmor user namespace restrictions")**, which would have set
   that sysctl at image-build time, was **CLOSED unmerged** (2025-01-28).
-- A code search of `actions/runner-images` for `apparmor` and for
-  `apparmor_restrict_unprivileged_userns` returns **0 hits**: the image build does nothing to
-  relax it either.
+- The image build does nothing to relax it either. `images/ubuntu/scripts/build/configure-environment.sh`
+  is the only place the Ubuntu image writes sysctls, and it writes exactly four — `vm.max_map_count`,
+  `fs.inotify.max_user_watches`, `fs.inotify.max_user_instances`, `vm.mmap_rnd_bits` — none
+  AppArmor-related. A code search of the repo for `apparmor` returns 0 hits; that zero is
+  trustworthy because the same search for `sysctl` returns 2 (both `configure-environment.sh`),
+  so the index does cover these build scripts.
 
 #### Answer to the spike's question
 
@@ -132,8 +140,9 @@ confidence but not as fact:
 1. Ubuntu 24.04 ships the restriction on (measured in-package).
 2. It denies userns to any binary without a `userns`-granting AppArmor profile (the package's own
    documented semantics).
-3. bwrap has no such profile, the enabling one ships disabled in an uninstalled package, and bwrap
-   cannot avoid userns (all measured).
+3. bwrap has no such profile, and the enabling one ships disabled in an uninstalled package (both
+   measured); bwrap cannot avoid userns because it is not setuid (measured that it is not; the
+   "therefore needs userns" step is inference).
 4. GitHub keeps AppArmor enabled by stated policy, rejected the PR that would have set the sysctl,
    and its image build touches neither (primary sources).
 
@@ -165,15 +174,18 @@ Notes on the shape of it:
   `ubuntu-*-arm`, or on a non-Ubuntu runner. Guarded, it is correct whether or not the restriction
   is present — which is also why it is safe to add *before* the push that confirms the diagnosis,
   rather than after.
-- **Why the blunt sysctl rather than the surgical `apparmor-profiles` + `aa-enforce bwrap` profile:**
-  brig *grades which boundary enforced what*. With the AppArmor bwrap profile loaded, a denial a
-  battery observes could come from AppArmor's stacked child subprofile rather than from bwrap's own
-  namespace and mount policy, and brig would have no way to tell the two apart — it would credit
-  bwrap for the host LSM's work. Setting the sysctl to 0 takes AppArmor out of the picture entirely,
-  so every grade brig reports on CI is attributable to the jail under test. That is the right
-  trade for a grading library specifically, even though for an ordinary consumer of bwrap the
-  narrower profile would be the better-hygiene choice. Worth stating in the CI config or
-  decision-0001 so a future reader doesn't "harden" it back and silently corrupt the grades.
+- **Why this rather than the surgical `apparmor-profiles` + `aa-enforce bwrap` profile:** only that
+  it is smaller — one line, no package install, and it is the workaround runner-images #10443
+  documents. The alternative needs `apt-get install apparmor-profiles` plus
+  `aa-enforce /usr/share/apparmor/extra-profiles/bwrap-userns-restrict`, for no benefit brig can
+  currently use. Note what neither option does: **setting this sysctl to 0 does not take AppArmor
+  out of the picture.** AppArmor stays loaded, and `/etc/apparmor.d/unprivileged_userns` — the
+  profile unconfined processes transition into on creating a userns, which carries
+  `audit deny capability` — still applies. So if a future battery needs to attribute a denial to
+  bwrap rather than to the host LSM, that is an open problem under *either* choice, and this
+  recommendation does not address it.
 - No new task filed: this is one line of CI config, and the spike's own remaining criterion (push,
   observe) already covers confirming it.
+
+Fix applied, 2026-10-18: .github/workflows/ci.yml now runs 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true' after installing bubblewrap, per this draft's investigation. Owner approved applying it now (before the push decision) since it's a single guarded line with no downside on a kernel that lacks the Ubuntu patch. Residual open items from the investigation, NOT addressed by this fix: (1) the AppArmor unprivileged_userns transition profile still denies capabilities inside the new namespace independently of bwrap's own policy, so a future battery cannot yet attribute a denial to bwrap vs the host LSM -- a separate spike if a battery ever needs that; (2) re-verify this step when ubuntu-latest migrates off 24.04 to 26.04, rather than assuming it carries forward; (3) confirmed Docker is NOT used by brig's e2e tests (bwrap runs directly on the runner's kernel), so the Docker-container seccomp finding in this draft is not load-bearing for CI. This draft's own push-and-read criterion still stands -- this fix is informed prediction, not a verified CI pass.
 <!-- SECTION:NOTES:END -->
