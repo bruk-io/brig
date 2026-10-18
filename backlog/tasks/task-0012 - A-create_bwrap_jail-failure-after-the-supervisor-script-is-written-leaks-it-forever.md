@@ -3,7 +3,7 @@ id: TASK-0012
 title: >-
   A create_bwrap_jail failure after the supervisor script is written leaks it
   forever
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 16:16'
@@ -207,4 +207,19 @@ done: all steps passed
 ```
 
 No repro: the fix (src/brig/presentation/api.py) and both regression tests were authored together in one change; there is no earlier commit where the tests exist against still-buggy code for record-check --repro to run against. Discriminating power was nonetheless verified independently by the reviewer rather than taken on report: (a) the teardown shape -- pre-fix the deletion sat behind 'if state is not GroupState.GONE: raise', so the new integration test's 'assert not script.exists()' could not have passed; it also asserts the exception itself via pytest.raises + exc_info.value.process, so it cannot pass by masking it; (b) the create-time shape -- measured directly that _supervisors_for(WHOLE_HOST_READ_ONLY) writes its real file to the state dir BEFORE run() is ever called (one new file observed on disk), so pre-fix the new e2e test's set-equality assertion on the state dir would have seen a leftover file.
+
+Closed on independent review (reviewer did not do the work). All four ACs genuinely met.
+
+AC#1/#3 (code, src/brig/presentation/api.py): create_bwrap_jail wraps only the run() call; 'except BaseException' deletes the script only when supervisor_script is not None (it is None whenever an explicit supervisors= skipped _supervisors_for, so nothing is deleted that was never written), unlink(missing_ok=True), then a bare 'raise' -- the original exception propagates unchanged, nothing swallowed or rewrapped. Verified in-container that this holds for a non-documented exception type too (api.run forced to raise RuntimeError: 0 files before, 0 after, RuntimeError propagated). destroy_jail's deletion is now unconditional and sits before the 'if state is not GroupState.GONE: raise JailTeardownFailed', so it runs on both the success and the failure path and the raise still fires. Checked the deliberate non-wrapping of destroy_jail's own run(): operations.destroy yields only Verify/SignalGroup, both documented and implemented in drivers/bwrap.py as sentinel-returning, unwrapped arms -- consistent with .claude/rules/driver-exception-boundary.md.
+
+AC#2/#4 (tests): both read in full and both discriminate against pre-fix code (see the No repro note above for the measurements). The integration test proves the exception, not just the file.
+
+Verification run by the reviewer, not taken on report: record-check --tier full green on macOS, nothing reformatted (git status unchanged after). Both new test files pass on macOS (2 passed) and in a fresh privileged ubuntu:24.04 linux/amd64 brig-probe-amd64 container with real bwrap (5 passed, 1 skipped as designed). Both failure shapes reproduced independently in that container with the reviewer's own throwaway probe: no file left behind either way.
+
+Findings:
+1. (Medium, recorded not filed) CI blind spot: the shape-1 e2e test runs only where bwrap is ABSENT, i.e. never on CI's Linux, so deleting create_bwrap_jail's try/except would leave the suite green on Linux. Checked whether a CI-running test was available and it genuinely is not: operations.create yields only StartSupervisedCommand (SupervisorPort), no ProcessPort effect a FakeProcesses can fail, and an explicit supervisors= is exactly what prevents a script from being written at all -- so no fakes-based repro exists; and decision-0001 rule 5 plus the brig-no-patching pypeeker gate forbid a committed monkeypatch test. The inverse-skipif therefore matches this repo's own host-shape convention. Recorded here so a future refactor that silently removes the fix is traceable.
+2. (Low) The implementing agent ticked its own AC#1-#4 before review; under close-work the tick is the reviewer's signal. Each was independently re-judged here and genuinely holds, so no tick changed.
+3. (Filed) The Linux posix_spawnp finding is real and was reproduced independently by the reviewer (ubuntu:24.04 amd64, CPython 3.12.3/glibc 2.39: os.posix_spawnp on an unresolvable bare name returns a pid, child exits 127, no exception). Not already on the board under any name -> DRAFT-0014, which also records the sharper consequence: on Linux a missing argv[0] produces a healthy-looking SpawnedProcess, so SpawnError never fires. Non-blocking.
+
+Not done by the reviewer: the commit. This plugin's guardrail denies git commit to the reviewing agent, so src/brig/presentation/api.py, tests/e2e/test_supervisor_script_cleanup.py and tests/integration/test_teardown_failure_deletes_script.py are still uncommitted in the working tree and must be committed by the dispatching session.
 <!-- SECTION:NOTES:END -->
