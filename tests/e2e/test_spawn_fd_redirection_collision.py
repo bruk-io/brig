@@ -16,14 +16,14 @@ that pair's `DUP2` before `argv[0]` ever ran.
 Forces the exact allocation TASK-0005 measured: one target's source is itself (the
 common case an unencumbered process hits on its very first `os.pipe()`), and the
 other target's own number is a hole, freed and made this process's lowest free fd,
-right before the colliding source is relocated. The allocation is deterministic
-without this test filling anything in: `os.dup(0)`, immediately closed, always
-returns this process's *lowest* free fd -- which by definition means every fd below
-it is already open, no holes -- so the two `os.pipe()` calls right after it are
-guaranteed to land on that freed number and the next three in order, with nothing
-scattered below to steal one instead. Closing `request_write_fd` then frees the
-second of those four numbers, again as this process's new lowest free fd, right
-before the colliding source is relocated onto it.
+right before the colliding source is relocated. The first `os.pipe()` call returns
+this process's two lowest free fds, so every number up to and including
+`request_write_fd` is open; closing `request_write_fd` then makes that number this
+process's new lowest free fd, by the same POSIX guarantee, right before the
+colliding source is relocated onto it. (The second `os.pipe()` call's own numbers
+play no part in this: POSIX only guarantees each call returns the lowest free pair
+*at that moment* -- nothing holds the two calls' own four numbers consecutive if
+something else has an fd open in between, and nothing here needs them to be.)
 """
 
 import os
@@ -63,9 +63,6 @@ def test_spawn_does_not_clobber_a_redirected_fd_whose_relocated_source_lands_on_
     to it fails and nothing arrives on `events_read_fd`; against the fix, the
     probe's payload arrives unchanged.
     """
-    probe_fd = os.dup(0)  # this process's lowest free fd -- proves no holes below it
-    os.close(probe_fd)
-
     request_read_fd = request_write_fd = events_read_fd = events_write_fd = -1
     process_pid: int | None = None
     try:
@@ -90,10 +87,7 @@ def test_spawn_does_not_clobber_a_redirected_fd_whose_relocated_source_lands_on_
     finally:
         for fd in (request_read_fd, request_write_fd, events_read_fd, events_write_fd):
             if fd >= 0:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+                os.close(fd)
 
     assert exit_code == 0, f"probe did not exit cleanly (pid={process_pid}): {exit_code!r}"
     assert received == _EVENTS_PAYLOAD
