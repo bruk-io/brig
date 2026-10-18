@@ -88,3 +88,75 @@ silently implied away.
   to a caller as a new, unexpected latency source on every spawn -- `shutil.which`'s
   own cost is bounded by PATH's length, same order of magnitude as the exec itself.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Implementation report
+
+Implemented exactly as planned in shape, with one load-bearing correction to the
+plan's stated mechanism, caught by the plan's own Risks section (verify with a
+case where env's PATH differs from this process's own) and confirmed by advisor.
+
+**The plan's instruction was measured false.** The plan said the pre-check's
+search path should come from env's own PATH when env is given, "since that's
+what the new process's own exec search actually uses." Measured directly, on
+both Apple libc (macOS) and glibc (brig-probe-amd64:latest, Linux): `os.posix_spawnp`'s
+own PATH search consults the *calling* process's real `os.environ["PATH"]`,
+never the `env` argument -- `env` only becomes the child's own environment once
+exec succeeds. Proof: `os.posix_spawnp(name, argv, {"PATH": bin_dir})` with this
+process's real PATH unchanged fails to find a binary that only exists in
+`bin_dir` (on Linux: NORAISE, child exits 127 -- the exact shape this task was
+filed for, now reproduced via `env` instead of a bare missing command); the
+mirror case (narrow `env["PATH"]`, name resolvable on this process's own
+`os.environ`) spawns fine. So the implemented pre-check searches this process's
+own `os.environ.get("PATH", os.defpath)` unconditionally, ignoring `env`
+entirely -- this is what actually predicts the real spawn below, on every
+platform measured. Both docstrings (`spawn`, `SpawnError`) state this
+corrected mechanism and name the measurement.
+
+Checked every production `spawn()` call site for exposure to the now-rejected
+wrong mechanel: `presentation/drivers/bwrap.py`'s call passes no `env` at all
+(unaffected). `infra/supervisor/link.py`'s call passes `env=_SUPERVISOR_ENV`,
+where `_SUPERVISOR_ENV["PATH"]` is a snapshot of `os.environ["PATH"]` taken at
+import time -- in production these are normally equal, so the wrong mechanism
+would rarely have misfired there, but the corrected implementation removes the
+dependency on that coincidence entirely by consulting the real `os.environ` at
+call time, same as the OS itself does.
+
+### Changes
+- `src/brig/infra/processes.py`: added `shutil.which` import; `spawn()` now
+  pre-checks `argv[0]` against `os.environ.get("PATH", os.defpath)` before
+  calling `os.posix_spawnp`, raising `SpawnError(argv, errno=errno.ENOENT)` when
+  it can't resolve. Rewrote `spawn()`'s and `SpawnError`'s docstrings to state
+  the real, narrowed guarantee and the residual Linux TOCTOU race honestly.
+- `tests/e2e/test_processes_gateway.py`: six new tests -- unresolvable bare name
+  raises (both platforms now); resolvable bare name unaffected; direct path
+  (`/`) bypasses PATH search either way; `env`'s own narrower PATH does NOT
+  make the pre-check raise for a name on this process's real PATH; a name
+  resolvable only through `env`'s PATH DOES raise (this is the Linux-reproducing
+  proof -- confirmed in the container to be exactly `32512 == 127<<8` without
+  the fix).
+
+### Proof
+- `just lint`, `just typecheck`, `just gates`, `just done` all green on macOS
+  (Darwin 27).
+- Full suite (`tests/unit tests/integration tests/e2e`) run for real in a fresh
+  privileged `ubuntu:24.04`/amd64 container with real `bwrap` 0.9.0
+  (`brig-probe-amd64:latest`): 95 passed, 3 skipped (pre-existing, unrelated
+  thread-safety skips), 0 failed -- nothing from TASK-0013's restructuring
+  regressed.
+- Confirmed in that same container: a raw `os.posix_spawnp('definitely-not-real-xyz', ...)`
+  still does not raise and the child still exits 127 (`status=32512`) -- the
+  original bug reproduces unchanged outside `spawn()`'s own pre-check. Against
+  `spawn()` itself, the same shape now raises `SpawnError` (test passed above).
+
+### Residual gap (named honestly, not closed)
+The TOCTOU race between the pre-check and the real spawn is unchanged: on
+Linux, nothing raises if `argv[0]` vanishes in that window, and the child still
+exits 127 unexplained. On macOS the OS's own raise still covers it. This matches
+the plan's own accepted-residual framing in AC#2's decision.
+
+Both ACs hold and are checked. Status left In Progress per instructions --
+review/close left to the reviewer.
+<!-- SECTION:NOTES:END -->
