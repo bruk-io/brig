@@ -1,12 +1,64 @@
 """Exceptions brig's public API can raise for the bwrap walking skeleton (decision-0001
 rule 13).
 
-One subclass per failure. `presentation/drivers/bwrap.py` is the only module that calls
-infra, so it is the only one that catches an infra exception and raises one of these in
-its place -- an embedder handles brig's own types without ever needing infra's.
+One subclass per failure. `presentation/drivers/bwrap.py` and `presentation/api.py` (the
+real wiring, by that module's own docstring) are the only modules that call infra, so
+they are the only ones that catch an infra exception and raise one of these in its
+place -- an embedder handles brig's own types without ever needing infra's.
 """
 
 from brig.domain.effects import Process
+from brig.domain.policy.paths import Bind
+
+
+class StateDirectoryUnreachable(Exception):
+    """Raised when a caller's own `FsPolicy` names a read-only ancestor bind of
+    brig's own state directory whose source does not already contain that
+    directory's own leaf (TASK-0001.22) -- refused here, before bwrap is ever
+    invoked, in place of letting this surface as `JailExitUnknown` (then
+    `JailTeardownFailed` on the following `destroy_jail`) once bwrap itself
+    cannot create the mountpoint (`bwrap: Can't mkdir <state_dir>: Read-only
+    file system`, measured against real bwrap).
+
+    `presentation/api.py`'s `_check_state_dir_reachable` is the one place this
+    is raised, using `domain/jail_types/bwrap.py`'s own pure
+    `covering_ancestor_bind` to find the offending bind and then doing the one
+    host filesystem check (I/O, rule 2) that decides whether it actually
+    blocks `state_dir`.
+
+    Args:
+        state_dir: Brig's own resolved state directory (`infra/state_dir.py`)
+            that the jail's policy would leave unreachable.
+        ancestor: The policy's own bind whose read-only ancestor mount blocks it.
+    """
+
+    def __init__(self, state_dir: str, ancestor: Bind) -> None:
+        super().__init__(
+            f"policy names a read-only ancestor bind of brig's own state directory "
+            f"({state_dir!r}) at {ancestor.jail_path!r} (sourced from "
+            f"{ancestor.host_path!r}), which does not contain the directory's own "
+            f"leaf -- make that bind writable, include the leaf in its source, or "
+            f"move BRIG_HOME outside it"
+        )
+        self.state_dir = state_dir
+        self.ancestor = ancestor
+
+
+class StateDirectoryInvalid(Exception):
+    """Raised when `BRIG_HOME` names a value brig's own state directory cannot
+    use (`infra/state_dir.py`'s `resolve`) -- translated here from infra's own
+    `ValueError`, the one place this module's driver-exception-boundary rule
+    says that happens (an embedder handles brig's own types without ever
+    seeing `infra`'s).
+
+    Args:
+        value: The offending `BRIG_HOME` value `resolve` refused -- not an
+            absolute path.
+    """
+
+    def __init__(self, value: str) -> None:
+        super().__init__(f"BRIG_HOME is not usable as brig's own state directory: {value!r}")
+        self.value = value
 
 
 class JailSpawnFailed(Exception):

@@ -19,6 +19,8 @@ from brig.presentation.errors import (
     JailSpawnFailed,
     JailTeardownFailed,
     JailWaitTimedOut,
+    StateDirectoryInvalid,
+    StateDirectoryUnreachable,
 )
 from brig.presentation.ports import ProcessUnknown, SupervisorDoneUnknown
 from brig.presentation.report import render
@@ -37,6 +39,8 @@ __all__ = [
     "JailTeardownFailed",
     "JailWaitTimedOut",
     "ProcessUnknown",
+    "StateDirectoryInvalid",
+    "StateDirectoryUnreachable",
     "SupervisorDoneUnknown",
     "WHOLE_HOST_READ_ONLY",
     "create_bwrap_jail",

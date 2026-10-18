@@ -47,7 +47,17 @@ from pathlib import Path
 
 import pytest
 
-from brig import WHOLE_HOST_READ_ONLY, Bind, FsPolicy, create_bwrap_jail, destroy_jail, run_jail
+from brig import (
+    WHOLE_HOST_READ_ONLY,
+    Bind,
+    FsPolicy,
+    StateDirectoryUnreachable,
+    create_bwrap_jail,
+    destroy_jail,
+    run_jail,
+)
+from brig.infra.state_dir import ensure as _ensure_state_dir
+from brig.infra.state_dir import resolve as _resolve_state_dir
 
 _VIRTUAL_FILESYSTEMS = frozenset({"proc", "sys", "dev", "run"})
 """Top-level entries `_mirror_policy_excluding` never binds, mirror or not: none of
@@ -247,6 +257,149 @@ def test_a_read_only_bind_refuses_a_write_from_inside_the_jail() -> None:
 
         assert exit_code == 2  # EROFS: this path's bind is read-only
         assert not target_path.exists()
+
+
+def _policy_excluding_tmp_and_the_state_dir_itself() -> FsPolicy:
+    """A policy that excludes `/tmp` -- the exact shape that broke every jail
+    under TASK-0006's own root-cause report -- *and*, surgically, the state
+    directory's own leaf (`infra/state_dir.py`'s `BRIG_HOME`/`~/.brig`), while
+    still binding everything else that sits alongside it under its own parent
+    (e.g. every other entry under `/root`, read-only).
+
+    Excluding the state directory's own top-level entry wholesale (e.g. all of
+    `/root`) was tried first and measured to break this battery's own probe
+    container for an unrelated reason: `uv`'s own managed CPython install lives
+    under that same top-level entry (`~/.local/share/uv/...`), so withholding
+    all of it takes the interpreter down with it -- `bwrap: execvp
+    /work/.venv/bin/python: No such file or directory`, a broken jail, not
+    evidence about the state directory's own bind. Drilling one level deeper --
+    binding every *other* child of the state directory's own parent, and
+    withholding only the state directory's own leaf -- keeps the interpreter
+    (and everything else that happens to share that parent) reachable while
+    still genuinely excluding the one path this test means to withhold.
+
+    That is still not `/tmp` alone, which is the point: `_mirror_policy_excluding`
+    binds every other top-level entry read-only already, so a policy excluding
+    only `/tmp` would, on most hosts, still cover the state directory by
+    coincidence (its parent is some other top-level entry this battery does not
+    otherwise need to touch) -- the jail would then start whether or not the
+    unconditional bind in `compile_supervisor_launch` actually did anything, and
+    a test that cannot fail is not evidence. With the state directory's own leaf
+    excluded here instead, the *only* thing that can make the supervisor's
+    script reachable is that unconditional bind: remove it and this jail goes
+    back to exactly TASK-0006's original bug (`JailExitUnknown`, the
+    supervisor's own script unreachable) -- which this test would then catch.
+    """
+    state_path = _ensure_state_dir(_resolve_state_dir())
+    parent = state_path.parent
+    top_level_name = state_path.relative_to("/").parts[0]
+
+    mirror = _mirror_policy_excluding("tmp", top_level_name)
+    siblings = tuple(
+        Bind(host_path=str(parent / child), jail_path=str(parent / child))
+        for child in sorted(os.listdir(parent))
+        if child != state_path.name
+    )
+    return FsPolicy(binds=mirror.binds + siblings)
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bwrap is not available; test skips on macOS, runs in CI on Linux",
+)
+def test_a_policy_excluding_tmp_still_lets_the_jail_start() -> None:
+    """TASK-0006 AC#3: a policy that excludes `/tmp` still lets the jail start --
+    the supervisor's script no longer lives there (`infra/state_dir.py`), and
+    brig's own state directory is bound into every bwrap launch unconditionally,
+    regardless of `policy` (`domain/jail_types/bwrap.py`'s
+    `compile_supervisor_launch`, TASK-0006 AC#1). See
+    `_policy_excluding_tmp_and_the_state_dir_itself`'s own docstring for why the
+    policy this test builds also excludes the state directory's own leaf, not
+    merely `/tmp`, so this stays attributable to that unconditional bind.
+    """
+    policy = _policy_excluding_tmp_and_the_state_dir_itself()
+
+    jail = create_bwrap_jail((sys.executable, "-c", "import sys; sys.exit(0)"), policy=policy)
+    exit_code = run_jail(jail)
+    destroy_jail(jail)
+
+    assert exit_code == 0  # the jail's supervisor started and ran its command at all
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bwrap is not available; test skips on macOS, runs in CI on Linux",
+)
+def test_a_policy_bind_at_the_state_dirs_own_jail_path_does_not_shadow_it() -> None:
+    """TASK-0006's own plan named this as a risk, not merely assumed: the
+    unconditional bind has to land in the compiled argv at a position bwrap
+    actually honors over a *conflicting* policy bind, verified empirically
+    against real bwrap rather than by reading flag order alone -- bwrap applies
+    overlapping binds in argv order, later wins, and `_compile_binds(policy)`'s
+    own output always precedes the unconditional bind
+    (`domain/jail_types/bwrap.py`'s `compile_supervisor_launch`).
+
+    This builds a policy that names an unrelated, empty host directory at
+    exactly the state directory's own jail path -- not merely a policy that
+    leaves that path unnamed (the other two fs-policy tests above already cover
+    that shape). If the unconditional bind's position in the compiled argv ever
+    regressed to *before* the policy's own binds, this decoy would win instead,
+    the supervisor's script would not be where the jail's PID 1 looks for it,
+    and this would fail with TASK-0006's original signature (`JailExitUnknown`)
+    rather than merely passing for an unrelated reason.
+    """
+    state_path = _ensure_state_dir(_resolve_state_dir())
+    with tempfile.TemporaryDirectory() as decoy_dir:
+        policy = FsPolicy(
+            binds=(
+                *WHOLE_HOST_READ_ONLY.binds,
+                Bind(host_path=decoy_dir, jail_path=str(state_path)),
+            )
+        )
+
+        jail = create_bwrap_jail((sys.executable, "-c", "import sys; sys.exit(0)"), policy=policy)
+        exit_code = run_jail(jail)
+        destroy_jail(jail)
+
+    assert exit_code == 0  # the unconditional bind, compiled later, wins over the decoy
+
+
+def test_a_read_only_ancestor_bind_lacking_the_state_dirs_leaf_is_refused_loudly() -> None:
+    """TASK-0001.22: a *read-only* ancestor bind of brig's own state directory,
+    sourced from somewhere that does not already contain the state directory's
+    own leaf, is refused loudly (`StateDirectoryUnreachable`) before bwrap is
+    ever invoked -- rather than reaching bwrap and surfacing as
+    `JailExitUnknown` (then `JailTeardownFailed` on the following
+    `destroy_jail`).
+
+    Measured directly against real bwrap in `brig-probe-amd64:latest`, with
+    `BRIG_HOME` pointed at an otherwise-untouched ancestor (this task's own
+    filing): this exact shape produces `bwrap: Can't mkdir <state_dir>:
+    Read-only file system`, then `JailExitUnknown` -- the chosen outcome here
+    is to turn that into this dedicated exception, raised by
+    `_supervisors_for`'s own `_check_state_dir_reachable`
+    (`presentation/api.py`) before `create_bwrap_jail` gets anywhere near
+    starting a supervisor. Two candidate fixes that would instead make this
+    shape *work* were also measured against real bwrap and killed (both
+    `domain/jail_types/bwrap.py`'s own module docstring and TASK-0001.22's own
+    filing have the measurements) -- refusal is what is left.
+
+    This needs no real bwrap jail at all, unlike this battery's other tests:
+    the refusal happens in pure Python, before bwrap is ever invoked, so this
+    runs on every platform (including macOS, where the rest of this battery
+    skips) rather than being guarded by `shutil.which("bwrap")`.
+    """
+    state_path = _ensure_state_dir(_resolve_state_dir())
+    with tempfile.TemporaryDirectory() as empty_ancestor_source:
+        policy = FsPolicy(
+            binds=(Bind(host_path=empty_ancestor_source, jail_path=str(state_path.parent)),)
+        )
+
+        with pytest.raises(StateDirectoryUnreachable) as exc_info:
+            create_bwrap_jail((sys.executable, "-c", "import sys; sys.exit(0)"), policy=policy)
+
+    assert exc_info.value.state_dir == str(state_path)
+    assert exc_info.value.ancestor == policy.binds[0]
 
 
 @pytest.mark.skipif(

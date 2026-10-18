@@ -29,10 +29,59 @@ reader" gap `Plan.inheritable_fds`'s own docstring already records for a differe
 field. ``compile_supervisor_launch`` is what actually builds the supervisor's own
 bwrap-wrapped launch line, so that is where a filesystem policy has to land to mean
 anything.
+
+TASK-0006: ``compile_supervisor_launch`` also takes ``state_dir`` -- the already-
+resolved directory presentation found the assembled supervisor script written
+into (`infra/state_dir.py`; locating and creating it is I/O, rule 2, so domain
+only ever receives the plain string presentation hands in, the same pattern
+``supervisor_path`` itself already follows). It adds one unconditional
+``--ro-bind state_dir state_dir``, after ``policy``'s own binds and before
+``_NAMESPACE_FLAGS``: structural, like ``_NAMESPACE_FLAGS``/``_INHERITABLE_FDS``
+below, never part of the caller's own ``FsPolicy``, and bwrap applies overlapping
+binds in argv order (later wins), so placing it after the policy's own binds
+means a policy bind at *exactly* this same path can never shadow it first
+(``tests/e2e/test_fs_policy_battery.py``'s
+``test_a_policy_bind_at_the_state_dirs_own_jail_path_does_not_shadow_it``,
+verified against real bwrap).
+
+That is a narrower guarantee than "reachable regardless of the caller's own
+policy", which an earlier revision of this docstring claimed. Measured against
+real bwrap (adversarial review of TASK-0006/0009, with ``BRIG_HOME`` pointed at
+an otherwise-untouched ancestor so the result is not confounded by anything
+else that ancestor happens to also hold): a *writable* ancestor bind of
+``state_dir`` works regardless of whether its own source contains
+``state_dir``'s leaf, and a *read-only* ancestor bind works when its source
+does contain that leaf -- but a read-only ancestor bind whose source does
+*not* contain it fails, because bwrap creates a bind's missing mountpoint
+directories in the new root before applying that bind's own mount, in argv
+order, and by the time this unconditional bind runs the ancestor already
+occupies that subtree read-only. The caller's own ``FsPolicy`` cannot make
+this bind *vanish*, or make a same-path bind *win* over it -- both still
+hold.
+
+TASK-0001.22: two candidate fixes that would make the shape above work
+regardless were measured against real bwrap and killed. ``--dir <state_dir>``
+issued ahead of the ancestor bind EROFSes identically (the ancestor bind's own
+mountpoint-creation step is what fails, before ``--dir`` is even reached, in
+both orderings tried); issued after the ancestor bind, it hits the same EROFS
+``--dir`` was meant to avoid. Giving the state dir a fixed, always-topmost
+jail path (e.g. ``/brig-state``, parallel to ``/``) does not help either, and
+is strictly worse: measured directly, it breaks the *default* policy itself
+(``WHOLE_HOST_READ_ONLY``), because that path does not exist on the real host
+root either, and creating it hits the exact same read-only-mountpoint EROFS
+one mount earlier than this bug ever reached. So this module does not attempt
+to make the shape reachable; ``covering_ancestor_bind`` (below) is the pure
+half of refusing it instead -- `presentation/api.py`'s own
+``_check_state_dir_reachable`` is the shell that uses it, with the one host
+filesystem check (whether the governing ancestor's own source already
+contains ``state_dir``'s leaf) this module's own purity rule (rule 2) keeps
+out of here, and raises ``StateDirectoryUnreachable`` before bwrap is ever
+invoked, rather than letting this surface as ``JailExitUnknown`` ->
+``JailTeardownFailed``.
 """
 
 from brig.domain.plan import Plan
-from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, FsPolicy
+from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, Bind, FsPolicy
 
 _NAMESPACE_FLAGS: tuple[str, ...] = (
     "--unshare-all",
@@ -133,14 +182,70 @@ def _compile_binds(policy: FsPolicy) -> tuple[str, ...]:
     )
 
 
+def covering_ancestor_bind(policy: FsPolicy, state_dir: str) -> Bind | None:
+    """Which of `policy`'s own binds, if any, governs `state_dir`'s own parent
+    directory at the moment `compile_supervisor_launch`'s unconditional bind
+    actually runs (TASK-0001.22): the last bind in `policy.binds` whose own
+    `jail_path` is a strict ancestor of `state_dir` -- bwrap mounts in argv
+    order, and a later mount at a path replaces the whole view beneath it
+    (the same "later wins" semantics `compile_supervisor_launch`'s own
+    docstring already states for an *exact*-path overlap), so whichever such
+    bind comes last in `policy.binds` is the one still in effect at
+    `state_dir`'s parent once every one of `policy`'s own binds has applied,
+    just before the unconditional bind itself does. `None` when no bind in
+    `policy` names an ancestor of `state_dir` at all -- bwrap's own new root
+    starts as a writable tmpfs, so an uncovered ancestor needs no mount of
+    its own to let a missing `state_dir` be created in it, measured directly
+    against real bwrap.
+
+    Pure (rule 2): a path-string computation over `policy` and `state_dir`,
+    touching no filesystem. Deciding whether the returned bind actually
+    *blocks* `state_dir`'s own creation needs to know whether that bind's own
+    source already contains `state_dir`'s leaf, which is I/O (`os.path`/
+    `pathlib`) -- left to `presentation/api.py`'s own
+    `_check_state_dir_reachable`, the one layer allowed to do it.
+
+    Compares `jail_path`/`state_dir` as literal strings, not normalized paths
+    -- a `policy` naming an un-normalized ancestor (e.g. `/root/../root`) is
+    outside what this function reasons about, the same way `FsPolicy`/`Bind`
+    (`domain/policy/paths.py`) make no normalization promise of their own.
+
+    Picking the *last* ancestor bind, specifically (not the longest-matching
+    one, or the one with the fewest path components), is what matches real
+    bwrap when two of `policy`'s own binds are both ancestors of `state_dir`
+    at different depths: measured directly, a later, *shallower* read-only
+    bind hides an earlier, deeper one entirely (the view it replaces includes
+    everything nested under it), so the shallower one -- last in argv order --
+    is correctly what this returns and what `_check_state_dir_reachable` then
+    judges. The reverse arrangement (an earlier shallow read-only bind, then a
+    later deep bind nested inside it) is a different, pre-existing failure
+    this function does not need to detect: that later bind's own mountpoint
+    creation already fails against bwrap, for reasons having nothing to do
+    with `state_dir` -- measured directly, the identical jail breaks the same
+    way with no `state_dir` bind appended at all, so a caller policy shaped
+    like that was already unmountable before this function or
+    `compile_supervisor_launch`'s own unconditional bind ever entered the
+    picture.
+    """
+    ancestor_binds = tuple(
+        bind
+        for bind in policy.binds
+        if bind.jail_path != state_dir and state_dir.startswith(bind.jail_path.rstrip("/") + "/")
+    )
+    return ancestor_binds[-1] if ancestor_binds else None
+
+
 def compile_supervisor_launch(
-    supervisor_path: tuple[str, ...], policy: FsPolicy = WHOLE_HOST_READ_ONLY
+    supervisor_path: tuple[str, ...],
+    *,
+    state_dir: str,
+    policy: FsPolicy = WHOLE_HOST_READ_ONLY,
 ) -> tuple[str, ...]:
     """Wrap `supervisor_path` in this jail type's own bwrap flags, so bwrap starts
     the supervisor named there as the jail's one process, seeing exactly the paths
-    `policy` names and nothing else (TASK-0001.16) -- this function's own job
-    before TASK-0001.15 step 4 pointed it at the real command directly, now aimed
-    at the supervisor instead (decision-0002).
+    `policy` names, plus `state_dir`, and nothing else (TASK-0001.16, TASK-0006) --
+    this function's own job before TASK-0001.15 step 4 pointed it at the real
+    command directly, now aimed at the supervisor instead (decision-0002).
 
     `policy` defaults to `WHOLE_HOST_READ_ONLY` (`domain/policy/paths.py`): the
     whole host root, read-only -- the thinnest policy that lets the supervisor's
@@ -149,6 +254,19 @@ def compile_supervisor_launch(
     parameter existed, so a caller that never names a policy of its own sees no
     change.
 
+    `state_dir` has no default: every caller passes the state directory it
+    actually resolved (`infra/state_dir.py`) and wrote the supervisor's own script
+    into, bound unconditionally in the compiled argv -- always present, always
+    after `policy`'s own binds, so a same-path policy bind can never shadow it
+    (this module's own docstring has the measured limits of that guarantee: it
+    does not make every ancestor bind a policy might name safe -- a `policy`
+    naming a *read-only* ancestor bind of `state_dir` whose own source lacks
+    `state_dir`'s leaf is instead refused before this function is ever called,
+    `presentation/api.py`'s `_check_state_dir_reachable` using this module's own
+    `covering_ancestor_bind`, TASK-0001.22) -- a plain string, the same way
+    `supervisor_path` already crosses from presentation into domain (rule 2:
+    domain does no I/O to locate either).
+
     `supervisor_path` is presentation's own concern: this jail type's driver finds
     wherever the file `infra/supervisor/wire.py` and `program.py` assemble into
     actually lives (`domain/jail_types/bwrap.py`'s module docstring) and hands the
@@ -156,4 +274,12 @@ def compile_supervisor_launch(
     (which paths, namespace isolation, `--new-session`'s TIOCSTI closure) but does
     no I/O of its own to locate anything (rule 2).
     """
-    return ("bwrap", *_compile_binds(policy), *_NAMESPACE_FLAGS, *supervisor_path)
+    return (
+        "bwrap",
+        *_compile_binds(policy),
+        "--ro-bind",
+        state_dir,
+        state_dir,
+        *_NAMESPACE_FLAGS,
+        *supervisor_path,
+    )

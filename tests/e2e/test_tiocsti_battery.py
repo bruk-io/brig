@@ -44,7 +44,7 @@ lands only on this freshly made pty, never on the operator's own terminal.
   TASK-0001.11's differential, grading the attribution itself rather than only the
   end-to-end property. Runs the probe through brig's real bwrap argv and, built
   locally here (never by changing production code -- see
-  ``_BWRAP_ARGV_WITHOUT_NEW_SESSION``'s own docstring), the same argv with
+  ``_bwrap_argv_prefix_without_new_session``'s own docstring), the same argv with
   ``--new-session`` removed, both directly through ``brig.infra.processes.spawn``.
 
 AC#2 asks that bwrap's `--new-session` close this hole "and not infra's setsid". This
@@ -83,6 +83,7 @@ from collections.abc import Callable
 import pytest
 
 from brig import create_bwrap_jail, destroy_jail, run_jail
+from brig.infra import state_dir
 from brig.infra.processes import ProcessUnknown, reap, spawn
 
 _ERRNO_EXIT_OFFSET = 100
@@ -128,43 +129,101 @@ battery only ever runs on Linux, since bwrap is Linux-only.
 """
 
 
-_BWRAP_ARGV_PREFIX: tuple[str, ...] = (
-    "bwrap",
-    "--ro-bind",
-    "/",
-    "/",
-    "--unshare-all",
-    "--die-with-parent",
-    "--new-session",
-    "--",
-)
-"""Mirrors `domain/jail_types/bwrap.py`'s own `_BWRAP_ARGV`, kept as a local copy
-rather than an import: decision-0001 rule 4 lets an e2e test import the public API,
-or one `brig.infra` module for a gateway test, never a `domain` module directly, and
-this differential needs a variant `compile_run` itself deliberately never produces
-(the same argv with `--new-session` stripped), which only exists by building it here,
-locally, rather than by changing production code. There is also no public entry point
-that would hand back a compiled `Plan`'s argv instead: `create_bwrap_jail` compiles
-and starts the process in the same call and returns neither (checked --
-`presentation/api.py` and `brig/__init__.py` name nothing that returns a `Plan`), so
-this is the only way to get at these flags from `tests/e2e/` at all, not a shortcut
-taken over an available public one.
+def _resolved_state_dir() -> str:
+    """Brig's own real state directory (`infra/state_dir.py`, TASK-0006), resolved
+    and created exactly the way `presentation/api.py`'s own `_resolved_state_dir`
+    does. This differential spawns real bwrap directly (`_bwrap_differential_probe`,
+    through `brig.infra.processes.spawn`, bypassing the public API entirely), so it
+    has to perform that same real I/O itself -- a hand-built argv that merely named
+    the right string, with no directory actually there to bind, would make real
+    bwrap fail to start for a reason this differential does not mean to grade.
+    """
+    return str(state_dir.ensure(state_dir.resolve()))
 
-The cost of the copy is real and not hidden: if `_BWRAP_ARGV` ever changes, this
-constant has to change with it by hand, and nothing in this suite catches that drift
-mechanically -- it is a maintenance obligation on whoever next edits
-`domain/jail_types/bwrap.py`, not a gap any other test here closes.
-"""
 
-_BWRAP_ARGV_WITHOUT_NEW_SESSION: tuple[str, ...] = tuple(
-    flag for flag in _BWRAP_ARGV_PREFIX if flag != "--new-session"
-)
-"""The same prefix with `--new-session` removed -- derived from the one literal above
-by filtering, rather than retyped as a second literal, so the two can only ever differ
-by that one flag. That is the entire point of a differential: TASK-0001.12 measured
-this by hand (positive control injects; the real argv is denied; this argv injects
-again) and this is that same negative half, committed for real.
-"""
+def _bwrap_argv_prefix(state_dir: str) -> tuple[str, ...]:
+    """Mirrors `domain/jail_types/bwrap.py`'s own `_NAMESPACE_FLAGS` (namespace-
+    isolation flags) plus `_compile_binds`'s output for the default
+    `WHOLE_HOST_READ_ONLY` policy (the `--ro-bind / /` triple) and TASK-0006's own
+    unconditional state-dir bind, built here rather than imported: decision-0001
+    rule 4 lets an e2e test import the public API, or one `brig.infra` module for a
+    gateway test, never a `domain` module directly, and this differential needs a
+    variant `compile_run` itself deliberately never produces (the same argv with
+    `--new-session` stripped), which only exists by building it here, locally,
+    rather than by changing production code. There is also no public entry point
+    that would hand back a compiled `Plan`'s argv instead: `create_bwrap_jail`
+    compiles and starts the process in the same call and returns neither (checked
+    -- `presentation/api.py` and `brig/__init__.py` name nothing that returns a
+    `Plan`), so this is the only way to get at these flags from `tests/e2e/` at
+    all, not a shortcut taken over an available public one.
+
+    Takes `state_dir` as a plain parameter rather than resolving it itself
+    (TASK-0006/0009 adversarial review): the state directory's own triple is the
+    one real-filesystem-dependent part of this prefix, and the unit-layer fidelity
+    check that cross-checks this whole function against `compile_supervisor_launch`'s
+    real output (`tests/unit/test_bwrap_compile.py`'s
+    `test_e2e_tiocsti_battery_bwrap_argv_prefix_matches_compile_supervisor_launch`)
+    must never perform that real I/O, or read `os.environ`, merely to build a pure
+    tuple of strings for an assertion -- measured directly: before this parameter
+    existed, that unit test called `_resolved_state_dir()` here, which recreated
+    `~/.brig` on every `just test-unit` run. This module's own callers below still
+    pass the real, resolved state directory (`_resolved_state_dir()`), since they
+    run real bwrap and need the real path; the unit test passes
+    `_STATE_DIR_PLACEHOLDER` instead, the same opaque-string treatment
+    `compile_supervisor_launch` itself gives `state_dir` (rule 2).
+
+    A function, not a module-level constant, since this module's own callers still
+    need `_resolved_state_dir()`'s real, ensured path threaded through at call
+    time, and this module must not perform that real I/O merely by being imported
+    (`pyproject.toml`'s own `[tool.pypeeker.import-time-side-effects]` allow-list
+    has no entry for this module either).
+
+    The cost of the copy is real and not hidden: if `_NAMESPACE_FLAGS` or
+    `_compile_binds`'s default-policy output ever change, this has to change with
+    it by hand -- but that drift no longer goes uncaught (TASK-0009):
+    `tests/unit/test_bwrap_compile.py::test_e2e_tiocsti_battery_bwrap_argv_prefix_matches_compile_supervisor_launch`
+    asserts this exact output against `compile_supervisor_launch`'s real output for
+    the same (default) policy, fed the same literal state-dir placeholder on both
+    sides, in a layer that is allowed to import both, so a future un-mirrored
+    change fails loudly there instead of silently here.
+
+    Importing this module from `tests/unit/test_bwrap_compile.py` at all -- even
+    only for this one function, now parameterised away from real I/O -- still
+    pulls `brig`, `brig.domain.*`, `brig.infra.*` and `brig.presentation.*` into a
+    unit test's import graph by way of this module's own `from brig import ...`
+    below, a hop `decision-0001` rule 4's own pypeeker check
+    (`brig-test-layers`/`_unit_test_violations`) does not see, because it inspects
+    only direct `brig.*` imports, not one reached through `tests.e2e`. DRAFT-0013
+    is the open board question for exactly this gap (tests-to-tests imports, not
+    covered the way rule 4's integration clause covers `brig`-package imports) --
+    this function's own real-I/O half is fixed; that remaining import-graph
+    question is DRAFT-0013's to settle, not this function's.
+    """
+    return (
+        "bwrap",
+        "--ro-bind",
+        "/",
+        "/",
+        "--ro-bind",
+        state_dir,
+        state_dir,
+        "--unshare-all",
+        "--die-with-parent",
+        "--new-session",
+        "--as-pid-1",
+        "--",
+    )
+
+
+def _bwrap_argv_prefix_without_new_session(state_dir: str) -> tuple[str, ...]:
+    """The same prefix with `--new-session` removed -- derived from
+    `_bwrap_argv_prefix()` by filtering, rather than retyped as a second literal,
+    so the two can only ever differ by that one flag. That is the entire point of
+    a differential: TASK-0001.12 measured this by hand (positive control injects;
+    the real argv is denied; this argv injects again) and this is that same
+    negative half, committed for real.
+    """
+    return tuple(flag for flag in _bwrap_argv_prefix(state_dir) if flag != "--new-session")
 
 
 def _bwrap_differential_probe(argv_prefix: tuple[str, ...]) -> Callable[[], int]:
@@ -436,10 +495,14 @@ def test_new_session_is_the_sole_closer_of_tiocsti_when_infra_detaches_no_sessio
     _skip_unless_new_sessions_closure_is_attributable()
     _skip_if_tiocsti_unavailable()
 
-    with_new_session = _run_in_pty_session(_bwrap_differential_probe(_BWRAP_ARGV_PREFIX))
+    resolved_state_dir = _resolved_state_dir()
+
+    with_new_session = _run_in_pty_session(
+        _bwrap_differential_probe(_bwrap_argv_prefix(resolved_state_dir))
+    )
     assert with_new_session == _ERRNO_EXIT_OFFSET + _DENIED_ERRNO
 
     without_new_session = _run_in_pty_session(
-        _bwrap_differential_probe(_BWRAP_ARGV_WITHOUT_NEW_SESSION)
+        _bwrap_differential_probe(_bwrap_argv_prefix_without_new_session(resolved_state_dir))
     )
     assert without_new_session == 0

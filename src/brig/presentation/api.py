@@ -15,12 +15,14 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from brig.domain import operations
 from brig.domain.effects import ExitCodeUnknown, GroupState, Process
 from brig.domain.jail_types import bwrap
 from brig.domain.policy.env import DENY_ALL, EnvPolicy
 from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, FsPolicy
+from brig.infra import state_dir as _state_dir_mod
 from brig.infra.processes import ProcessUnknown as _InfraProcessUnknown
 from brig.infra.processes import SpawnedProcess
 from brig.infra.processes import group_alive as _group_alive
@@ -31,7 +33,13 @@ from brig.infra.processes import signal_group as _signal_group
 from brig.infra.processes import spawn as _spawn
 from brig.infra.supervisor import assemble, link
 from brig.presentation.drivers.bwrap import run
-from brig.presentation.errors import JailExitUnknown, JailTeardownFailed, JailWaitTimedOut
+from brig.presentation.errors import (
+    JailExitUnknown,
+    JailTeardownFailed,
+    JailWaitTimedOut,
+    StateDirectoryInvalid,
+    StateDirectoryUnreachable,
+)
 from brig.presentation.ports import (
     ProcessPort,
     ProcessUnknown,
@@ -66,12 +74,83 @@ embedder forever.
 
 
 @functools.cache
+def _resolved_state_dir() -> str:
+    """Brig's own runtime-state directory (`infra/state_dir.py`, TASK-0006):
+    resolved from `BRIG_HOME`/`~/.brig` and created if it does not exist yet,
+    once per process and cached for the rest of this process's life, the same
+    way `_supervisor_path` below is -- both do real I/O (a `mkdir`, here) that
+    must never run at import time.
+
+    A plain string, not a `Path`: this is what crosses into domain
+    (`compile_supervisor_launch`'s own `state_dir` parameter, rule 2 -- domain
+    does no I/O to locate or create anything itself).
+
+    `BRIG_HOME` is brig's own host-side operational setting, never routed
+    through `EnvPolicy` scrubbing -- that governs what the *jailed command*
+    sees in `env` (`domain/policy/env.py`'s own docstring), never brig's own
+    configuration for where it writes its own files (`infra/state_dir.py`'s
+    own docstring says the same).
+
+    Raises:
+        StateDirectoryInvalid: `BRIG_HOME` names a value `infra.state_dir.resolve`
+            refuses (not an absolute path) -- translated from infra's own
+            `ValueError` here, this module's own job under the driver-exception-
+            boundary rule: the one place an infra exception becomes one of
+            `presentation/errors.py`'s own types, so an embedder never needs to
+            handle `infra`'s.
+    """
+    try:
+        resolved = _state_dir_mod.resolve()
+    except ValueError as exc:
+        raise StateDirectoryInvalid(str(exc)) from exc
+    return str(_state_dir_mod.ensure(resolved))
+
+
+def _check_state_dir_reachable(policy: FsPolicy, state_dir: str) -> None:
+    """Refuse, before bwrap is ever invoked, a `policy` that would leave `state_dir`
+    unreachable inside the jail (TASK-0001.22): a read-only ancestor bind of
+    `state_dir` whose own source does not already contain `state_dir`'s own leaf.
+    `domain/jail_types/bwrap.py`'s `compile_supervisor_launch`'s unconditional bind
+    still runs after `policy`'s own binds, so it is never shadowed at `state_dir`'s
+    own exact path -- but bwrap creates a bind's missing mountpoint directories in
+    the new root before applying that bind's own mount, in argv order, and a
+    read-only ancestor bind whose source lacks the leaf means that creation fails
+    with `EROFS`: measured against real bwrap as `bwrap: Can't mkdir <state_dir>:
+    Read-only file system`, then `JailExitUnknown` (and `JailTeardownFailed` on the
+    following `destroy_jail`). This function turns that into one clear, dedicated
+    refusal instead, before bwrap is ever invoked at all.
+
+    `bwrap.covering_ancestor_bind` (domain, pure) finds which of `policy`'s own
+    binds, if any, actually governs `state_dir`'s own parent at that moment; this
+    function does the one host filesystem existence check that decides whether it
+    blocks `state_dir` -- I/O, which is why domain itself cannot do it (rule 2).
+
+    A `None` or `writable` governing bind is always safe (measured against real
+    bwrap: a writable ancestor works regardless of whether its own source contains
+    the leaf, and no ancestor at all leaves bwrap's own new root -- a writable
+    tmpfs by default -- free to create `state_dir` itself).
+
+    Raises:
+        StateDirectoryUnreachable: `policy` names a read-only ancestor bind of
+            `state_dir` whose own source does not contain `state_dir`'s leaf.
+    """
+    ancestor = bwrap.covering_ancestor_bind(policy, state_dir)
+    if ancestor is None or ancestor.writable:
+        return
+    suffix = state_dir[len(ancestor.jail_path.rstrip("/")) :]
+    host_equivalent = ancestor.host_path.rstrip("/") + suffix
+    if not Path(host_equivalent).is_dir():
+        raise StateDirectoryUnreachable(state_dir, ancestor)
+
+
+@functools.cache
 def _supervisor_path() -> tuple[str, ...]:
     """Where this host's own assembled supervisor file actually is: rule 17's
     one file (`infra.supervisor.assemble.assembled_source()` -- `wire.py` +
     `program.py`, stdlib only, refusing to run under an interpreter older
-    than 3.15), written once per process to a fresh temporary file and cached
-    for the rest of this process's life.
+    than 3.15), written once per process to a fresh file inside brig's own
+    state directory (`_resolved_state_dir`, TASK-0006) and cached for the
+    rest of this process's life.
 
     `functools.cache` makes this function's own body -- the write -- run at
     most once, the first real call, never at import time: writing a file is
@@ -79,16 +158,29 @@ def _supervisor_path() -> tuple[str, ...]:
     effects]` allow-list has no entry for this module, so doing this eagerly
     at module scope would trip that rule, not just style.
 
-    Reachable inside a bwrap jail under the default policy (`domain/policy/
-    paths.py`'s `WHOLE_HOST_READ_ONLY`, TASK-0001.16) because that policy
-    binds the whole host root, read-only -- this venv and this repository
-    included, the same bind the walking skeleton already relied on for `true`
-    to be reachable, now also for wherever `tempfile.NamedTemporaryFile`
-    actually placed this file. A jail created with a narrower `policy` of its
-    own is this path's responsibility to stay reachable under too --
-    `create_bwrap_jail`'s own `policy` parameter does not relax that, it is
-    the caller's own policy that has to still cover wherever this file
-    actually landed.
+    Reachable inside a bwrap jail under most of the caller's own `policy`
+    shapes (TASK-0006): `compile_supervisor_launch` binds `_resolved_state_dir()`
+    unconditionally, so wherever `tempfile.NamedTemporaryFile`'s own
+    collision-safe random suffix actually placed this file stays reachable
+    even under a policy that excludes everything else this file used to
+    depend on (`/tmp`, before this task; the whole host root, under
+    `WHOLE_HOST_READ_ONLY`, incidentally covered it too). A jail created with
+    a narrower `policy` of its own no longer has to also happen to cover this
+    path -- that was exactly TASK-0006's bug.
+
+    Not reachable under every policy, though: measured against real bwrap
+    (adversarial review of TASK-0006/0009), a policy naming a *read-only*
+    ancestor bind of this state directory, sourced from somewhere that does
+    not already contain the directory's own leaf, still breaks the jail
+    (`bwrap: Can't mkdir <state_dir>: Read-only file system` ->
+    `JailExitUnknown`) -- `domain/jail_types/bwrap.py`'s own module docstring
+    has the full, measured scope of what "unconditional" actually covers here.
+    TASK-0001.22: rather than lift that limit (two candidate fixes were
+    measured against real bwrap and both killed -- that module's own
+    docstring has the measurements), `_supervisors_for`'s own
+    `_check_state_dir_reachable` refuses a policy of that exact shape loudly,
+    with `StateDirectoryUnreachable`, before this function is ever reached for
+    that jail at all.
 
     `-I` (isolated mode, TASK-0001.15/.17 adversarial review) runs this
     interpreter ignoring `PYTHONPATH`/`PYTHONHOME` and without adding user
@@ -105,7 +197,11 @@ def _supervisor_path() -> tuple[str, ...]:
     so running it under `-I` changes nothing it does.
     """
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", prefix="brig-supervisor-", delete=False
+        mode="w",
+        suffix=".py",
+        prefix="brig-supervisor-",
+        delete=False,
+        dir=_resolved_state_dir(),
     ) as handle:
         handle.write(assemble.assembled_source())
     return (sys.executable, "-I", handle.name)
@@ -123,7 +219,9 @@ def _supervisor_argv() -> tuple[str, ...]:
     launch line instead, built fresh by `_supervisors_for` below rather than varying
     this.
     """
-    return bwrap.compile_supervisor_launch(_supervisor_path(), WHOLE_HOST_READ_ONLY)
+    return bwrap.compile_supervisor_launch(
+        _supervisor_path(), state_dir=_resolved_state_dir(), policy=WHOLE_HOST_READ_ONLY
+    )
 
 
 @dataclass(frozen=True)
@@ -221,10 +319,24 @@ def _supervisors_for(policy: FsPolicy) -> SupervisorPort:
     docstring: whichever instance opened a jail's events pipe is the only one
     that can still read or close it) -- `Jail.supervisors` is what carries this
     one back to `run_jail`/`destroy_jail` for the same jail later.
+
+    `_check_state_dir_reachable` (TASK-0001.22) runs first, for either branch,
+    rather than only the non-default one: `WHOLE_HOST_READ_ONLY`'s own single
+    read-only bind at `/` is itself a read-only ancestor bind of `state_dir`, and
+    this is the one place that stays true for it too, even though it never fails
+    in practice (`_resolved_state_dir()` already created the leaf before this
+    runs, so `/`'s own source always contains it). That check raises
+    `StateDirectoryUnreachable` should `policy` name a read-only ancestor bind of
+    brig's own state directory whose source does not contain its leaf
+    (`_check_state_dir_reachable`'s own docstring).
     """
+    state_dir = _resolved_state_dir()
+    _check_state_dir_reachable(policy, state_dir)
     if policy == WHOLE_HOST_READ_ONLY:
         return _supervisors()
-    supervisor_argv = bwrap.compile_supervisor_launch(_supervisor_path(), policy)
+    supervisor_argv = bwrap.compile_supervisor_launch(
+        _supervisor_path(), state_dir=state_dir, policy=policy
+    )
     return _real_supervisor_port(link.LiveSupervisors(supervisor_argv))
 
 
@@ -283,8 +395,13 @@ def create_bwrap_jail(
     world regardless of what domain state asked for it.
 
     `presentation/drivers/bwrap.py`'s `run` raises `JailSpawnFailed` should the
-    supervisor's own start fail; nothing in this function's own body raises, so it is
-    not in this docstring.
+    supervisor's own start fail. Resolving brig's own state directory
+    (`_resolved_state_dir`, above) raises `StateDirectoryInvalid` should
+    `BRIG_HOME` name a value it cannot use. `_supervisors_for` raises
+    `StateDirectoryUnreachable` should `policy` name a read-only ancestor bind
+    of that state directory whose own source lacks its leaf (TASK-0001.22).
+    Nothing else in this function's own body raises, so nothing else is in this
+    docstring.
     """
     resolved_supervisors = supervisors if supervisors is not None else _supervisors_for(policy)
     plan = bwrap.compile_run(command, env=env)

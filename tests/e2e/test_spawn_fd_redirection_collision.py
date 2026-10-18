@@ -16,11 +16,14 @@ that pair's `DUP2` before `argv[0]` ever ran.
 Forces the exact allocation TASK-0005 measured: one target's source is itself (the
 common case an unencumbered process hits on its very first `os.pipe()`), and the
 other target's own number is a hole, freed and made this process's lowest free fd,
-right before the colliding source is relocated. `_fill_fd_holes_below` first closes
-off every lower candidate this pytest process itself happens to carry, so which fd
-`os.dup` would pick is this test's choice, not whatever this run's own fd table
-left behind -- the same reasoning `test_spawn_close_action_race.py`'s calibration
-already applies to a different hazard in this same function.
+right before the colliding source is relocated. The allocation is deterministic
+without this test filling anything in: `os.dup(0)`, immediately closed, always
+returns this process's *lowest* free fd -- which by definition means every fd below
+it is already open, no holes -- so the two `os.pipe()` calls right after it are
+guaranteed to land on that freed number and the next three in order, with nothing
+scattered below to steal one instead. Closing `request_write_fd` then frees the
+second of those four numbers, again as this process's new lowest free fd, right
+before the colliding source is relocated onto it.
 """
 
 import os
@@ -47,25 +50,6 @@ uncaught `OSError` (a nonzero exit), not a silent gap in what this test reads ba
 """
 
 
-def _fill_fd_holes_below(limit: int) -> list[int]:
-    """Dup fd `0` onto every closed fd number in `[3, limit)`, and return the
-    numbers filled so the caller can close them again once the test is done.
-
-    Leaves this test free to force a hole at one specific, chosen number without
-    some other, lower hole already in this pytest process's own fd table (capture
-    fds, plugin sockets, anything else already closed below `limit`) stealing the
-    next `os.dup`/`os.pipe` allocation instead.
-    """
-    filled: list[int] = []
-    for fd in range(3, limit):
-        try:
-            os.fstat(fd)
-        except OSError:
-            os.dup2(0, fd)
-            filled.append(fd)
-    return filled
-
-
 def test_spawn_does_not_clobber_a_redirected_fd_whose_relocated_source_lands_on_a_target() -> None:
     """TASK-0005 AC#1/AC#2: a source fd relocated out of a collision must never
     land on `fds`'s own target numbers, and a `CLOSE` action must never undo the
@@ -79,20 +63,19 @@ def test_spawn_does_not_clobber_a_redirected_fd_whose_relocated_source_lands_on_
     to it fails and nothing arrives on `events_read_fd`; against the fix, the
     probe's payload arrives unchanged.
     """
-    probe_fd = os.dup(0)
-    next_fd = probe_fd
+    probe_fd = os.dup(0)  # this process's lowest free fd -- proves no holes below it
     os.close(probe_fd)
-    filled = _fill_fd_holes_below(next_fd)
 
     request_read_fd = request_write_fd = events_read_fd = events_write_fd = -1
     process_pid: int | None = None
     try:
         request_read_fd, request_write_fd = os.pipe()
         events_read_fd, events_write_fd = os.pipe()
+        target_events = request_write_fd
         os.close(request_write_fd)  # the sole hole: freed, and this process's lowest free fd
+        request_write_fd = -1
 
         target_request = request_read_fd
-        target_events = request_write_fd
         process = spawn(
             (sys.executable, "-c", _EVENTS_PROBE, str(target_events)),
             _STDIO_FDS,
@@ -111,8 +94,6 @@ def test_spawn_does_not_clobber_a_redirected_fd_whose_relocated_source_lands_on_
                     os.close(fd)
                 except OSError:
                     pass
-        for fd in filled:
-            os.close(fd)
 
     assert exit_code == 0, f"probe did not exit cleanly (pid={process_pid}): {exit_code!r}"
     assert received == _EVENTS_PAYLOAD

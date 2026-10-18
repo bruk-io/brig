@@ -59,7 +59,23 @@ suggests:
    to start that file — it runs in the library's own process, on the host side of the
    boundary, and is never part of that assembly (TASK-0001.13's Container view caught this
    ambiguous the first time it was drawn: `wire.py`/`program.py` cross into the new
-   `supervisor` container; `link.py` stays in `library`). New domain
+   `supervisor` container; `link.py` stays in `library`). `wire.py`'s message format is
+   therefore shared, not duplicated, on the host side: `link.py` imports it directly
+   (`from brig.infra.supervisor import wire`), which costs nothing there since both
+   modules are stdlib-only and same-package in the library's own process. On the jail
+   side, `program.py` duplicates that same format by convention instead — matching
+   `wire.py`'s message-kind and field names literally rather than importing them —
+   because rule 17 requires the delivered file to be exactly `wire.py` and `program.py`'s
+   sources, importing nothing else (pinned by a test asserting the assembled source is
+   exactly the two, and refusing an older interpreter): a qualified `import
+   brig.infra.supervisor.wire` would commit that dropped file to `brig` being installed
+   wherever it runs, exactly what rule 17 rules out, and a bare `import wire` is not a
+   form `program.py`'s own location inside the `brig.infra.supervisor` package can
+   produce during ordinary development or type-checking. Rule 17 forces only that
+   jail-side duplication; the host side's sharing by import is unconstrained by it and
+   simply free. The two are kept in agreement by matching literal field names rather
+   than a shared import, pinned by an e2e test that runs the real assembled file as a
+   subprocess and checks its emitted events against `wire.py`'s own expected shapes. New domain
    effects (`StartSupervisedCommand`, `AwaitSupervisorDone`) replace most of today's direct
    `Spawn`/`Reap`/`Verify` shape for the normal path; `SignalGroup` stays, since the supervisor
    still needs telling to shut its child down on TERM/KILL.
@@ -84,7 +100,9 @@ suggests:
    full (revisited against the supervisor's simplification), the log envelope, and egress — both
    of the latter two name the supervisor in their own open questions, so design them after, not
    before; Seatbelt can start as soon as the supervisor's wire *shape* (not full implementation) is
-   settled, since `program.py`/`wire.py` are meant to be jail-type-agnostic.
+   settled, since `program.py`/`wire.py` are meant to be jail-type-agnostic — with
+   `wire.py`'s format shared by import on the host (`link.py`) and duplicated by
+   convention in `program.py` per rule 17, as (1) above states.
 
 ## Consequences
 
