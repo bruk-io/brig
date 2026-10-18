@@ -5,7 +5,7 @@ status: To Do
 assignee:
   - '@bruk'
 created_date: '2026-10-17 19:05'
-updated_date: '2026-10-17 20:15'
+updated_date: '2026-10-18 02:29'
 labels:
   - brig
   - size-8
@@ -56,11 +56,11 @@ I would prefer all logs to be JSON-shaped and consistent.
 
 ## Open questions
 
-- [ ] Reservations (`.reserve(`): carry over the per-jail socket directory an embedder can reserve before the jail starts, or drop it? Carried forward: decided when the first embedder moves to the new API and says whether it needs one.
-- [ ] Egress: cooperative as today (the workload is pointed at the proxy and may ignore it), or enforced, by relaying the jail's only route out through the supervisor to the proxy? Carried forward: a design task before the egress work; the skeleton has no egress.
-- [ ] Seatbelt: build its slice before a Mac run proves it, or wait for a Mac run? Carried forward: bwrap comes first; this is decided before the Seatbelt work starts.
-- [ ] The log envelope: its fields (time, level, source, event, then the event's own fields?), and whether "all logs JSON-shaped and consistent" becomes a rule in the philosophy plugin for every repository. Carried forward: a design task before the supervisor program writes its first log line.
-- [ ] The docs theme: bh-01's components or Material for MkDocs? Carried forward: decided by the docs task, before its first page.
+- [x] Reservations (`.reserve(`): carry over the per-jail socket directory an embedder can reserve before the jail starts, or drop it? Settled by decision-0002: carry it over, as a request channel (name, bound_path, endpoint reservation against a per-jail channel directory, readiness a verified connect, never path existence). Full implementation is a later slice; the shape is decided.
+- [ ] Egress: cooperative as today (the workload is pointed at the proxy and may ignore it), or enforced, by relaying the jail's only route out through the supervisor to the proxy? Carried forward: decision-0002 resequenced this to be designed after the supervisor lands (egress's own open question names the supervisor), not before; the cooperative-vs-enforced choice itself is still open.
+- [ ] Seatbelt: build its slice before a Mac run proves it, or wait for a Mac run? Carried forward: bwrap comes first; this is decided before the Seatbelt work starts. Per decision-0002, Seatbelt can start once the supervisor's wire shape (not full implementation) is settled, since program.py/wire.py are meant to be jail-type-agnostic.
+- [ ] The log envelope: its fields (time, level, source, event, then the event's own fields?), and whether "all logs JSON-shaped and consistent" becomes a rule in the philosophy plugin for every repository. Carried forward: decision-0002 resequenced this to be designed after the supervisor lands (the envelope's own open question names the supervisor's first log line), not before; the fields themselves are still open.
+- [x] The docs theme: bh-01's components or Material for MkDocs? Settled by TASK-0001.02: Material for MkDocs; bh-01 is a UI/artifact design system, not an MkDocs theme, and Material integrates natively with mkdocstrings and mkdocs-likec4.
 - [x] The ruff hook that formats every file an agent edits: add it to `.claude/settings.json`, or run ruff only in `just done`? Settled by TASK-0001.01: no hook. Ruff runs only in `just done`, matching this intent's own words above ("ruff ... run only when the work is done").
 - [x] The SPEC's numbering: settled by decision-0001 (rule 18): new rulings are this board's decisions, and the old SPEC's are cited as "old SPEC decision-NNN".
 - [x] What must not break: settled by the owner: no backwards compatibility, so brig's ten laws (criterion 17) are all that must not break.
@@ -68,6 +68,7 @@ I would prefer all logs to be JSON-shaped and consistent.
 ## References
 
 - decision-0001 (accepted): the design. Where it is built, the layout, the rules and the pypeeker rule that enforces each boundary, what is kept, cut and paused, and the order, outside-in.
+- decision-0002 (proposed): the supervisor, request channels, and the grading skeleton -- the next slice's shape, and a revised order for decision-0001's step 4.
 - The owner's philosophy plugin: the Python rules and the test rules (unit, integration, e2e, defined by where the mocks start), from knowhere.
 - The c4-architecture plugin, from knowhere (`likec4-diagrams`: scaffold.py's layout, c4lint, the hard rules).
 - `@likec4/mcp` (1.60.0), `mkdocs-likec4` (1.2.2), `mkdocstrings-python` (2.0.9), `rust-just` (1.59.0): the versions current on 2026-10-17.
