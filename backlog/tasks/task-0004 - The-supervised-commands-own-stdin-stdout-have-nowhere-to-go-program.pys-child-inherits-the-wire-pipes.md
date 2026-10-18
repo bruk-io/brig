@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 04:34'
-updated_date: '2026-10-18 08:14'
+updated_date: '2026-10-18 08:22'
 labels:
   - brig
   - size-3
@@ -357,6 +357,69 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+### Review (not closed): AC#3 has a measured counterexample
+
+Verdict: **not closed**, left In Progress. AC#1, #2, #4, #5 verified met; AC#3 is not met
+as worded ("correct regardless of this process's own fd-allocation state").
+
+**Blocking finding -- `_resolve_fd_sources` can relocate a source *onto a target*, and
+`_fd_actions` then closes it.** `os.dup` returns the lowest free fd number, and a target
+number (3 or 4) is a candidate whenever it is free -- contrary to that function's own
+docstring, which justifies the relocation by claiming targets "are not fds this process
+has open at all" and therefore cannot be returned. Measured on macOS, through the real
+code, no mocking:
+
+```
+a, b = os.pipe()   # 3, 4
+c, d = os.pipe()   # 5, 6
+os.close(b)        # fd 4 free, lowest; 3/5/6 open
+_resolve_fd_sources({3: a, 4: d})
+  -> resolved {3: 4, 4: 6}, relocated (4,)
+_fd_actions(resolved)
+  -> [DUP2 4->3, DUP2 6->4, CLOSE 4, CLOSE 6]
+```
+
+The `CLOSE 4` closes the fd the preceding `DUP2 6->4` just put the events channel on.
+Confirmed end to end through `processes.spawn(..., fds={3: a, 4: d})` in that same fd
+layout: the spawned child reports `fd4 FAILED: [Errno 9] Bad file descriptor` on
+`os.write(4, ...)`. In the supervisor's real use that is the events channel absent from
+`program.py`, silently, for an embedder whose fd table happens to have a hole at 3 or 4
+-- the exact "regardless of allocation state" property AC#3 claims. The fix is to exclude
+the target set when relocating (dup until the result is outside `targets`, or dup with a
+minimum via `fcntl.F_DUPFD` past `max(targets)`), and to not `CLOSE` a source number that
+is itself a target.
+
+**Supporting finding (why it shipped): the collision path has zero regression coverage.**
+With the whole `if source in targets:` relocation branch deleted in a container copy, the
+suite stays green (`pytest tests/` -> 58 passed, 2 skipped on privileged
+`ubuntu:24.04`/amd64). Under `uv run`/pytest the two pipes land at fds 12-15, so no
+collision ever occurs in the suite -- a test must force the allocation state, not merely
+drive `link.py`. Independently measured that the branch *is* load-bearing: with
+`_resolve_fd_sources` monkeypatched to the naive identity on macOS (where the pipes do
+land at 3-6), `LiveSupervisors.start(("/bin/echo", "hello"))` fails outright --
+`program.py` raises `OSError: [Errno 9] Bad file descriptor` at `_read_exec_request`,
+surfacing as `SupervisorSpawnError`. Filed as DRAFT for the coverage, alongside the fix.
+
+### What was verified and does hold
+
+- **AC#1**: wire protocol genuinely on `wire.REQUEST_FD`/`EVENTS_FD` (3/4); `link._start`
+  passes `fds={3: ..., 4: ...}` and `inheritable_fds=(0, 1, 2)`; `program.py` reads/writes
+  only those numbers and gives the real command no file action for 0/1/2. Measured: a real
+  supervised `/bin/echo hello` printed `hello` on this reviewer's own terminal and
+  returned 0.
+- **AC#2**: `_start_child`'s two `POSIX_SPAWN_CLOSE` actions are present and
+  **discriminating**, not asserted: with both removed in a container copy,
+  `test_a_supervised_commands_direct_write_to_the_events_fd_cannot_reach_it` is the one
+  test that fails (1 failed, 5 passed in that file). The review follow-up genuinely fixed
+  the regression test rather than only noting the gap -- the confused-deputy hole
+  TASK-0001.15's adversarial review found is re-proved closed under the fd-3/4 design.
+- **AC#5**: `record-check --tier full` on macOS -- all steps passed, no files reformatted
+  or fixed by the run (`git status` unchanged after it). Fresh privileged
+  `--platform linux/amd64 ubuntu:24.04` container (`brig-probe-amd64:latest`), repo copied
+  in, `uv sync`, `pytest tests/ pypeeker_rules/tests -rs` -> **80 passed, 2 skipped**, both
+  skips with measured reasons unrelated to this task.
+- **AC#4** was verified independently by the dispatching reviewer and not re-derived here.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
