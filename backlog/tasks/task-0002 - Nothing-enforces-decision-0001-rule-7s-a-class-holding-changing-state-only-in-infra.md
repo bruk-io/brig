@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@bruk'
 created_date: '2026-10-17 22:57'
-updated_date: '2026-10-18 03:50'
+updated_date: '2026-10-18 03:51'
 labels:
   - brig
   - size-2
@@ -43,4 +43,9 @@ TASK-0001.04 closed the brig-class-forms gaps for the inheritance restriction (a
 ### Proof
 - just gates, just done green; either a real new finding on a planted violation, or a decision
   record.
+
+### Risks
+- "Instance state" needs a real, checkable definition (e.g. any assignment to self.<name>
+  inside __init__ outside a frozen dataclass) -- vague enough to false-positive on edge cases
+  if not scoped carefully; verify against brig's own existing classes before trusting the rule.
 <!-- SECTION:PLAN:END -->
