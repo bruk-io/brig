@@ -6,7 +6,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-10-18 04:34'
-updated_date: '2026-10-18 07:28'
+updated_date: '2026-10-18 07:31'
 labels:
   - brig
 dependencies: []
@@ -125,10 +125,11 @@ failed every jailed command. But `/bin/echo hello` is an ordinary, non-adversari
 command that succeeds outside a jail and reports failure inside one. The cause is the
 sealed pipe itself: fd 1's read end is closed in `_start_child`'s own `finally`, so the
 command's first write gets `EPIPE`/`SIGPIPE` with no reader anywhere, and whatever the
-command does about that becomes its exit code. coreutils `echo` catches the write error
-and exits 1; a command leaving `SIGPIPE` at its default disposition would be killed
-outright and report `-13`; `sh`'s builtin `echo` fails but lets the script's own
-`exit 0` stand. Which of the three happens is the command's business, not brig's --
+command does about that becomes its exit code. Measured: coreutils `echo` catches the write
+error and exits 1, while `sh`'s builtin `echo` fails but lets the script's own
+`exit 0` stand. Inferred, not measured here: a command leaving `SIGPIPE` at its
+default disposition would be killed outright and report `-13` -- no command in the
+table above does that, so the table is not evidence of it. Which of the three happens is the command's business, not brig's --
 brig's part is that the exit code it hands the embedder is no longer the exit code the
 same command would have had outside the jail.
 
