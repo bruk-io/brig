@@ -3,14 +3,17 @@ id: TASK-0002
 title: >-
   Nothing enforces decision-0001 rule 7's 'a class holding changing state only
   in infra/'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@bruk'
 created_date: '2026-10-17 22:57'
-updated_date: '2026-10-18 02:06'
+updated_date: '2026-10-18 03:50'
 labels:
   - brig
   - size-2
 dependencies: []
+modified_files:
+  - pypeeker_rules/brig.py
 parent_task_id: TASK-0001
 type: bug
 ---
@@ -25,3 +28,19 @@ TASK-0001.04 closed the brig-class-forms gaps for the inheritance restriction (a
 <!-- AC:BEGIN -->
 - [ ] #1 Either brig-class-forms rejects a stateful class outside infra/, with a planted-violation test, or a decision record says why that clause of rule 7 stays a review-time concern
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+### Order of work
+1. Investigate whether pypeeker's current DSL can express "a class with instance state
+   (assigns to self in __init__) outside src/brig/infra/" -- check columns.py/universes.py
+   directly, do not assume from the earlier class-forms work's own limitations (that was about
+   base-class facts specifically, a different question).
+2. If yes: add the check to brig-class-forms with a planted-violation test. If no: a decision
+   record saying why, same pattern as the earlier partial gaps.
+
+### Proof
+- just gates, just done green; either a real new finding on a planted violation, or a decision
+  record.
+<!-- SECTION:PLAN:END -->
