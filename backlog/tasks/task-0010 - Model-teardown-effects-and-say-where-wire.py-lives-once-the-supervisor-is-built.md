@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-10-18 03:11'
-updated_date: '2026-10-18 04:34'
+updated_date: '2026-10-18 13:24'
 labels: []
 dependencies: []
 type: bug
@@ -63,4 +63,6 @@ on the host side (link.py), duplicated by convention on the jail side
 (program.py), with the two kept in agreement by matching literal `kind`/field
 names rather than a shared import, and pinned by whatever test a later step
 of TASK-0001.15 adds.
+
+No repro: this task is a documentation/model-accuracy fix (an orphaned C4 relationship, container-attribution text, and decision-0002's own wording) with no code behavior to reproduce a failure against; AC#1-#3 are verified by board/text inspection and by just gates (pypeeker rule 6), recorded above and in TASK-0007's own close.
 <!-- SECTION:NOTES:END -->
