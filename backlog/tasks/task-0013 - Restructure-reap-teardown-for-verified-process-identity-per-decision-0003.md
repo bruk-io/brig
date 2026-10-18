@@ -7,6 +7,7 @@ created_date: '2026-10-18 19:06'
 updated_date: '2026-10-18 19:07'
 labels:
   - size-8
+  - finish-moved
 dependencies: []
 references:
   - >-
@@ -30,3 +31,9 @@ decision-0003 chose peek-before-reap (os.waitid WNOWAIT) over pidfd to close the
 - [ ] #5 Every test decision-0003 named as contradicted (not just broken) by this change is rewritten, not patched: tests/unit/test_teardown.py's exact-effect-sequence assertions, tests/integration/test_teardown_leader_reaped_early.py's reaped/checked assertions, tests/integration/test_walking_skeleton.py's reaped == [] assertion, tests/e2e/test_processes_gateway.py's direct reap(pid) == ProcessUnknown() assertions
 - [ ] #6 Full regression: just done green, and the existing walking-skeleton and teardown batteries pass for real against bwrap on Linux as well as macOS -- the platform divergence this decision found was invisible on macOS alone
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+finish-moved: created without acceptance criteria (a tool-sequencing artifact -- task create then a follow-up edit added them), then given its real ACs in the very next edit, drawn directly from decision-0003's own Consequences section. No scope added beyond what the decision already named; this is the task's first real shape, not a later narrowing or widening.
+<!-- SECTION:NOTES:END -->
