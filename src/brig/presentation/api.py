@@ -321,11 +321,13 @@ class Jail:
     (`tests/e2e/test_processes_gateway.py`), now has to name its own.
 
     `supervisor_script` is the path of the fresh supervisor script file
-    `_supervisors_for` wrote for this jail, for `destroy_jail` to delete once
-    teardown confirms nothing can still need it (TASK-0001.21) -- `None` for a
-    `Jail` built with an explicit `supervisors` of its own (`create_bwrap_jail`
-    never wrote a file for it in the first place) or built directly, outside
-    `create_bwrap_jail`, the same as the gateway test above.
+    `_supervisors_for` wrote for this jail, for `destroy_jail` to delete once its
+    own teardown has run (TASK-0001.21; TASK-0012: whether or not that teardown
+    found `GroupState.GONE` -- `destroy_jail`'s own docstring has the reasoning
+    for why that is still safe) -- `None` for a `Jail` built with an explicit
+    `supervisors` of its own (`create_bwrap_jail` never wrote a file for it in the
+    first place) or built directly, outside `create_bwrap_jail`, the same as the
+    gateway test above.
     """
 
     process: Process
@@ -377,6 +379,15 @@ def create_bwrap_jail(
     of that state directory whose own source lacks its leaf (TASK-0001.22).
     Nothing else in this function's own body raises, so nothing else is in this
     docstring.
+
+    TASK-0012: once `_supervisors_for` has written `supervisor_script`, no `Jail`
+    exists yet to carry that path to a later `destroy_jail` call -- this is the
+    only function that still holds it. Should `run` raise anything at all before
+    returning (`JailSpawnFailed`, the one documented case, but this catches
+    unconditionally rather than naming it, so a future failure added to that call
+    is never a second leak to rediscover), the just-written file is deleted here
+    before the exception propagates unchanged: a side effect alongside the raise,
+    never a replacement for it.
     """
     if supervisors is not None:
         resolved_supervisors: SupervisorPort = supervisors
@@ -384,7 +395,12 @@ def create_bwrap_jail(
     else:
         resolved_supervisors, supervisor_script = _supervisors_for(policy)
     plan = bwrap.compile_run(command, env=env)
-    process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
+    try:
+        process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
+    except BaseException:
+        if supervisor_script is not None:
+            supervisor_script.unlink(missing_ok=True)
+        raise
     return Jail(
         process=process, supervisors=resolved_supervisors, supervisor_script=supervisor_script
     )
@@ -449,17 +465,23 @@ def destroy_jail(
     `run_jail` resolves it (TASK-0001.16) -- the only port that still has `jail`'s
     own events pipe open to close, once its own `policy` differs from the default.
 
-    Once teardown has confirmed `GroupState.GONE` -- proof nothing from `jail` will
-    ever read its own supervisor script again -- deletes `jail.supervisor_script`,
-    if it names one (TASK-0001.21: `None` for a `Jail` built with its own explicit
-    `supervisors`, or built directly outside `create_bwrap_jail`, neither of which
-    had a file written for them). Never before that confirmation: deleting earlier
-    would risk the jail's own supervisor still needing to read it. `missing_ok=True`
-    makes a repeated `destroy_jail` call on an already-torn-down `jail` safe; any
-    other `OSError` the deletion itself raises (a permissions change, a read-only
-    state directory) is swallowed rather than escaping a teardown that has already
-    verified the thing that actually matters -- the jail's own process group is
-    gone -- the same way `Supervisor.close` swallows a close failure during
+    Deletes `jail.supervisor_script`, if it names one (TASK-0001.21: `None` for a
+    `Jail` built with its own explicit `supervisors`, or built directly outside
+    `create_bwrap_jail`, neither of which had a file written for them) -- once the
+    kill ladder's own verify has run, whether or not it found `GroupState.GONE`
+    (TASK-0012). The file only ever needs to not be deleted *before* it was exec'd,
+    never while a process is still running from it, and by the time teardown's own
+    verify has run at all, any exec that was ever going to happen already happened:
+    the supervisor either already read and exec'd the script, or it never will,
+    since nothing past this point gives it another chance to start reading it for
+    the first time. A `JailTeardownFailed` (the group still alive after the kill
+    ladder) means a process from that group may still be running -- never that the
+    *script file itself* might still be read for the first time, which is the only
+    thing deleting it early would risk. `missing_ok=True` makes a repeated
+    `destroy_jail` call on an already-torn-down `jail` safe; any other `OSError`
+    the deletion itself raises (a permissions change, a read-only state directory)
+    is swallowed rather than escaping a teardown that has already run its own
+    verify -- the same way `Supervisor.close` swallows a close failure during
     teardown (`infra/supervisor/link.py`'s own docstring).
 
     Raises:
@@ -468,10 +490,10 @@ def destroy_jail(
     resolved_supervisors = supervisors if supervisors is not None else jail.supervisors
     state = run(operations.destroy(jail.process), processes, resolved_supervisors)
     resolved_supervisors.close(jail.process.pid)
-    if state is not GroupState.GONE:
-        raise JailTeardownFailed(jail.process)
     if jail.supervisor_script is not None:
         try:
             jail.supervisor_script.unlink(missing_ok=True)
         except OSError:
             pass
+    if state is not GroupState.GONE:
+        raise JailTeardownFailed(jail.process)
