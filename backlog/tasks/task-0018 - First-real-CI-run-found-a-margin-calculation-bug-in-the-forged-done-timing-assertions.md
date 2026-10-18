@@ -7,9 +7,10 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 23:30'
-updated_date: '2026-10-18 23:35'
+updated_date: '2026-10-18 23:36'
 labels:
   - size-1
+  - finish-moved
 dependencies: []
 modified_files:
   - tests/e2e/test_supervisor_link_gateway.py
@@ -158,4 +159,6 @@ pending by design, #4 is the documented escape hatch, #5 is the owner's next ste
 
 Owner: add the `finish-moved` label with its note, commit the test file, confirm CI green on the
 re-push, tick AC#3, then run close-task. Status left In Progress.
+
+finish-moved: created with only a description, then given its real ACs in the very next edit (drawn from the already-completed fix and verification) -- this is the task's first real shape, not a later scope change.
 <!-- SECTION:NOTES:END -->
