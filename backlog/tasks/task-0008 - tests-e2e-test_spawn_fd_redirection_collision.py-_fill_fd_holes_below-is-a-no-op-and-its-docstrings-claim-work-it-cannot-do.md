@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0014
+id: TASK-0008
 title: >-
   tests/e2e/test_spawn_fd_redirection_collision.py: _fill_fd_holes_below is a
   no-op, and its docstrings claim work it cannot do
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-18 08:40'
 labels: []
