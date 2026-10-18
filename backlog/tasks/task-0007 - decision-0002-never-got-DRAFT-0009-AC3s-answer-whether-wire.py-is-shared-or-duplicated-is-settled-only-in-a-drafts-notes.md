@@ -3,11 +3,11 @@ id: TASK-0007
 title: >-
   decision-0002 never got DRAFT-0009 AC#3's answer: whether wire.py is shared or
   duplicated is settled only in a draft's notes
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 08:08'
-updated_date: '2026-10-18 14:46'
+updated_date: '2026-10-18 14:48'
 labels:
   - brig
   - size-1
@@ -128,4 +128,16 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+Reviewed independently against TASK-0007's own two ACs; both met.
+
+AC#1 (decision-0002's own text states the shared-on-the-host / duplicated-in-the-jail split and why rule 17 forces it): met. The diff adds the split to decision-0002 item 1, next to the existing wire.py/program.py/link.py assembly text, and a pointer clause to item 5's Seatbelt-readiness sentence (the place the bug description says Seatbelt's picker-up will look). The rule-17 rationale checks out against decision-0001 line 136, which does require the delivered file to be exactly wire.py + program.py importing nothing else. The paragraph's ancillary claim that the agreement is pinned by an e2e test running the real assembled file as a subprocess and checking events against wire.py's own shapes was verified, not assumed: tests/e2e/test_supervisor_assemble.py::test_real_assembled_file_runs_the_supervisor_journey_under_this_interpreter drives the subprocess through wire.REQUEST_FD/wire.EVENTS_FD, wire.encode_exec_request and wire.decode_event. No finding.
+
+AC#2 (DRAFT-0009's status reflects reality): met, confirmed from two sides -- DRAFT-0009 is gone from 'backlog draft list', and TASK-0010 is Done at 3/3 with DRAFT-0009's criteria, including the wire.py one quoted in this bug's description.
+
+Full check (record-check --tier full) ended 'done: all steps passed'; git status after it matched the session-start snapshot exactly, so nothing was reformatted or fixed by the check.
+
+Findings: none at any severity, and no drafts filed.
+
+One open item for whoever owns the commit: the decision-0002 edit is still uncommitted in the working tree. The reviewer's guardrail refused the commit (the reviewer does not change the work it reviews), so the commit the task authorized was not made here -- it needs one commit of 'backlog/decisions/decision-0002 - The-supervisor-request-channels-and-the-grading-skeleton-the-next-slices-shape.md' alone, leaving the three sibling tasks' files untouched.
 <!-- SECTION:NOTES:END -->
