@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 08:22'
-updated_date: '2026-10-18 08:37'
+updated_date: '2026-10-18 08:40'
 labels:
   - brig
   - size-2
@@ -190,4 +190,23 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+## Review (philosophy:close-work, independent verification)
+
+All three acceptance criteria verified and ticked. **Not closed**: the fix cannot be committed on its own.
+
+**Verified independently**
+- AC#1: `fcntl.F_DUPFD` with floor `max(targets) + 1` returns a free fd strictly greater than every target, so a relocated source can never land on one. A source already open can never be returned by F_DUPFD, so no second-order collision with another pair's source either. `_fd_actions`'s `set(resolved_fds.values()) - set(resolved_fds)` is correct: DUP2 actions precede CLOSE actions in the list, and no CLOSE can name a target. Checked three-target and self-collision shapes by hand.
+- AC#2: reproduced the pre-fix failure independently, by reconstructing the old `_resolve_fd_sources` (bare `os.dup`) and `_fd_actions` (blanket CLOSE) in-process and monkeypatching them onto `brig.infra.processes`, rather than trusting the self-report. Result: `OSError: [Errno 9] Bad file descriptor` from the probe child, exit 1, empty read -- the test's two assertions both fail. Post-fix the test passes.
+- AC#3: the docstring's false 'fds's own targets are not candidates' claim is gone, replaced with the correct reasoning that os.dup returns the lowest free fd and a target number is a candidate whenever this process has a hole there.
+- `record-check --tier full`: 'done: all steps passed'. No files reformatted by the check (`git status` unchanged against the session-start snapshot).
+- TASK-0004's oracle re-run in `brig-probe-amd64:latest` (--platform linux/amd64 --privileged, repo copied to writable /work, uv sync): `create_bwrap_jail(('/bin/echo','hello'))` through `run_jail` printed hello and returned 0. The new e2e test also passes in that container.
+
+**Blocking finding: the fix is not separable from TASK-0004's uncommitted work**
+`git show HEAD:src/brig/infra/processes.py` has neither `_resolve_fd_sources` nor `_fd_actions` nor `spawn`'s `fds=` parameter -- the last commits on main are board-only. The whole `fds` redirection feature (both helpers, `spawn`'s `fds=` parameter and docstring paragraph, `_close_actions`'s `protect=`, the retry restructure into try/finally) is TASK-0004's, still uncommitted. `git add src/brig/infra/processes.py` would therefore land TASK-0004's unreviewed wire-protocol plumbing under a TASK-0005 commit message, and the file cannot be split (no interactive add in this environment). Nothing was committed, and the tree was left untouched.
+
+Resolution for whoever owns the sequencing: TASK-0005's hunks should land as part of TASK-0004's own commit, or TASK-0004 should be committed first and TASK-0005 committed on top. This is a board-sequencing decision, not a defect in the fix.
+
+**Secondary finding (filed as a draft): `_fill_fd_holes_below` is a no-op and two docstrings claim otherwise**
+`probe_fd = os.dup(0)` returns the lowest free fd, so every fd in `[3, next_fd)` is already open by construction; `os.fstat` succeeds on all of them and `filled` is always empty. The test is genuinely deterministic -- but because of the `os.dup(0)` probe plus POSIX lowest-free allocation across the two `os.pipe()` calls, not because the helper forces anything. AC#2 still holds (the discrimination is measured, above), but the module docstring and the helper's own docstring both describe work the helper cannot perform.
 <!-- SECTION:NOTES:END -->
