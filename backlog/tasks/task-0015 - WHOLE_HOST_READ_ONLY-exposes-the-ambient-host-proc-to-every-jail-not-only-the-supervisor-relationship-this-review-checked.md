@@ -11,6 +11,7 @@ updated_date: '2026-10-18 21:42'
 labels:
   - brig
   - size-3
+  - finish-moved
 dependencies: []
 references:
   - >-
@@ -278,4 +279,6 @@ its own namespace's processes") and was proven to fail loudly without the fix.
   finish-moved finding stands as stated.
 - The commit set for the worker is five files, not the four dirty at review start: the
   four source/test files plus this task file, now dirty from these review notes.
+
+finish-moved: promoted from a draft with no acceptance criteria, then given its real ACs in the same follow-up edit that set it In Progress -- drawn directly from decision-0004's own Consequences section, not a later scope change.
 <!-- SECTION:NOTES:END -->
