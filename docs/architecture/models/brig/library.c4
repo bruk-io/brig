@@ -1,0 +1,11 @@
+// Container: the library itself -- the only container that exists today.
+// Components live under models/brig/library/ via
+// `extend brig.library { <name> = component ... }`.
+model {
+  extend brig {
+    library = container 'Library' {
+      technology 'Python 3.15, stdlib only'
+      description 'The jailing library an embedder links: compiles a jail type\'s plan, performs its effects through a driver, and exposes the public API. Runs inside the embedder\'s own process -- there is no separate library process.'
+    }
+  }
+}

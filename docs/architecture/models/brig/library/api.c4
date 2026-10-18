@@ -1,0 +1,9 @@
+// Component: presentation/api.py.
+model {
+  extend brig.library {
+    api = component 'API' {
+      technology 'Python 3.15'
+      description 'brig\'s public entry point: creates a bwrap jail, runs a command in it, and destroys it, wiring domain operations through the bwrap driver and binding infra\'s processes module as the port\'s default implementation.'
+    }
+  }
+}

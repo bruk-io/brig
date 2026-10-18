@@ -1,0 +1,18 @@
+// Container: the supervisor (decision-0002) -- PLANNED, not built.
+// None of infra/supervisor/{wire,program,link}.py exist under src/brig yet.
+// Once built: wire.py + program.py assemble into the one file dropped as
+// PID 1 and cross into this container (decision-0001 rule 17); link.py is
+// the host's end of the same protocol and stays in the library container,
+// never here -- whether wire.py's format needs sharing across both sides
+// rather than crossing wholly is still open (DRAFT-0009).
+// This box is drawn now, ahead of the code, to pressure-test the boundary
+// decision-0002 proposes before anything is built against it.
+model {
+  extend brig {
+    supervisor = container 'Supervisor' {
+      #planned
+      technology 'Python 3.15, stdlib only'
+      description 'Planned, not built (decision-0002): PID 1 inside each jail\'s own PID namespace, reaping everything reparented to it and reporting one clean outcome, so the host tracks exactly one process instead of a process group from outside.'
+    }
+  }
+}

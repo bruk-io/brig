@@ -2,7 +2,44 @@
 // component<->component). Explicit endpoints only — no it/this, no sourceless
 // `-> x`. Inter-process edges carry a nested `technology`.
 model {
-  // extend brig {
-  //   webApp -> apiApp 'makes API calls to' { technology 'JSON/HTTPS' }
-  // }
+  extend brig {
+    // decision-0002: the library spawns the supervisor as a separate process
+    // (PID 1 inside the jail's own PID namespace) and talks to it over a
+    // pipe. #planned because the supervisor is designed, not built.
+    library -> supervisor 'spawns, and exchanges wire-protocol messages with,' {
+      #planned
+      technology 'newline-delimited JSON over a pipe'
+    }
+  }
+
+  // Component relationships inside the library container. decision-0001
+  // rule 1 at component scope: domain and infra components depend on
+  // neither presentation nor each other's layer; presentation's components
+  // depend on both.
+  extend brig.library {
+    // domain, internal to the layer
+    operations -> effects 'yields effect values from'
+    operations -> plan 'reads the compiled argv from'
+    operations -> teardown 'delegates the kill ladder to'
+    teardown -> effects 'yields effect values from'
+    bwrapJailType -> plan 'compiles a request into'
+
+    // presentation, internal to the layer
+    api -> errors 'raises failures as'
+    api -> ports 'satisfies the ProcessPort protocol defined in'
+    api -> bwrapDriver 'runs a jail operation through'
+    bwrapDriver -> errors 'raises infra failures as'
+    bwrapDriver -> ports 'calls infra via the protocol defined in'
+
+    // presentation -> domain (rule 1: presentation knows domain)
+    api -> operations 'drives the create, start, and destroy generators of'
+    api -> bwrapJailType 'compiles a bwrap request with'
+    api -> effects 'narrows driver replies using'
+    bwrapDriver -> effects 'performs the effects defined in'
+    errors -> effects 'names the failed process using'
+
+    // presentation -> infra (rule 1: presentation knows infra)
+    api -> processes 'binds the real implementation of its port from'
+    bwrapDriver -> processes 'translates spawn failures from'
+  }
 }

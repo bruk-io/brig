@@ -1,0 +1,9 @@
+// Component: domain/jail_types/bwrap.py.
+model {
+  extend brig.library {
+    bwrapJailType = component 'Bwrap Jail Type' {
+      technology 'Python 3.15'
+      description 'bwrap\'s slice of the domain: compiles a jail request into a Plan of bwrap\'s own flags ahead of the command it runs as the jail\'s one process. No I/O itself.'
+    }
+  }
+}

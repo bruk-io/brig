@@ -1,0 +1,9 @@
+// Component: presentation/ports.py.
+model {
+  extend brig.library {
+    ports = component 'Ports' {
+      technology 'Python 3.15'
+      description 'Protocols the presentation layer asks infra to satisfy, so a driver\'s signature names a port, never a concrete infra module, and a test can pass a fake of the same shape instead.'
+    }
+  }
+}

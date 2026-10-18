@@ -1,0 +1,9 @@
+// Component: infra/processes.py.
+model {
+  extend brig.library {
+    processes = component 'Processes' {
+      technology 'Python 3.15, stdlib only'
+      description 'Spawns a process, signals its group, reaps it, and checks whether a pid is alive. Plain data in and out -- never a brig type -- so only a presentation driver knows what the data means.'
+    }
+  }
+}

@@ -1,0 +1,9 @@
+// Component: domain/plan.py.
+model {
+  extend brig.library {
+    plan = component 'Plan' {
+      technology 'Python 3.15'
+      description 'What a jail type\'s compile step produces: the argv its one process runs and the file descriptors it may inherit across the spawn. No I/O itself.'
+    }
+  }
+}

@@ -1,0 +1,9 @@
+// Containers -- Brig. The library is real and shipping; the supervisor
+// (decision-0002, #planned) is designed but not built -- see its
+// description and the honest title below before reading this as fact.
+views {
+  view brigContainers of brig {
+    title 'Containers -- Brig (supervisor is a plan, not yet built)'
+    include *
+  }
+}

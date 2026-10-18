@@ -1,0 +1,9 @@
+// Component: domain/teardown.py.
+model {
+  extend brig.library {
+    teardown = component 'Teardown' {
+      technology 'Python 3.15'
+      description 'The verified kill ladder as a generator of effect values: verify before signalling, TERM before KILL, verify after every signal. No I/O itself.'
+    }
+  }
+}

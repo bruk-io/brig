@@ -1,0 +1,9 @@
+// Component: domain/operations.py.
+model {
+  extend brig.library {
+    operations = component 'Operations' {
+      technology 'Python 3.15'
+      description 'Create, start and destroy as generators of effect values: decides what should happen next, yields an Effect, resumes with whatever the driver sends back. No I/O itself.'
+    }
+  }
+}

@@ -1,0 +1,9 @@
+// Component: domain/effects.py.
+model {
+  extend brig.library {
+    effects = component 'Effects' {
+      technology 'Python 3.15'
+      description 'Effect values an operation or teardown may yield one at a time -- spawn a process, reap its exit, signal its group, verify it is gone -- for a driver to perform. No I/O itself.'
+    }
+  }
+}

@@ -1,0 +1,9 @@
+// Component: presentation/errors.py.
+model {
+  extend brig.library {
+    errors = component 'Errors' {
+      technology 'Python 3.15'
+      description 'The exceptions brig\'s public API raises, one subclass per failure, so an embedder only ever handles brig\'s own types and never infra\'s.'
+    }
+  }
+}

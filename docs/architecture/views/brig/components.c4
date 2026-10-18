@@ -1,0 +1,20 @@
+// Components -- the Library container (the only container with components
+// today; the supervisor is planned and has no code to show yet).
+views {
+  view brigLibraryComponents of brig.library {
+    title 'Components -- Brig Library'
+    include *
+
+    // Visual grouping only (decision-0001 rule 1), not a fourth abstraction
+    // level: domain and infra depend on neither presentation nor each other.
+    group 'domain' {
+      include effects, operations, teardown, plan, bwrapJailType
+    }
+    group 'infra' {
+      include processes
+    }
+    group 'presentation' {
+      include api, errors, ports, bwrapDriver
+    }
+  }
+}

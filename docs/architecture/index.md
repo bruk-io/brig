@@ -17,3 +17,46 @@ brigContext
 
 Source: [`views/brig/context.c4`](views/brig/context.c4),
 [`models/landscape.c4`](models/landscape.c4).
+
+## Containers
+
+brig has exactly one container that is actually built today: the **library**
+an embedder links, running inside the embedder's own process -- there is no
+separate brig process yet. The **supervisor** box below is decision-0002's
+design, not shipped code: none of `infra/supervisor/{wire,program,link}.py`
+exist under `src/brig` as of this writing. Once built, `wire.py` and
+`program.py` assemble into the one file dropped as PID 1 inside the jail
+(decision-0001 rule 17) and cross into this container; `link.py` is the
+host's end of that same wire protocol and stays in **library**, on the host
+side of the boundary -- not depicted below, since this view shows containers,
+not the components inside them. Whether `wire.py`'s own message format needs
+sharing with `link.py` rather than crossing wholly into `supervisor` is still
+open (DRAFT-0009), for whoever builds it. The supervisor box is drawn here,
+tagged `#planned`, specifically so the boundary can be read and questioned
+before anything is built against it -- do not mistake it for a built
+container.
+
+```likec4-view
+brigContainers
+```
+
+Source: [`views/brig/containers.c4`](views/brig/containers.c4),
+[`models/brig/library.c4`](models/brig/library.c4),
+[`models/brig/supervisor.c4`](models/brig/supervisor.c4),
+[`models/brig/_relationships.c4`](models/brig/_relationships.c4).
+
+## Components
+
+The library container's components, one per real module under
+`src/brig/{domain,infra,presentation}/`. The grouping shown is visual only
+(decision-0001 rule 1): domain's and infra's components depend on neither
+presentation's nor each other's layer; presentation's components depend on
+both. The supervisor has no components yet -- it has no code.
+
+```likec4-view
+brigLibraryComponents
+```
+
+Source: [`views/brig/components.c4`](views/brig/components.c4),
+[`models/brig/library.c4`](models/brig/library.c4) (one component per file under
+`models/brig/library/`).

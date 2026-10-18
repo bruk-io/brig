@@ -1,0 +1,9 @@
+// Component: presentation/drivers/bwrap.py.
+model {
+  extend brig.library {
+    bwrapDriver = component 'Bwrap Driver' {
+      technology 'Python 3.15'
+      description 'bwrap\'s driver: performs the effects an operation or teardown generator yields, translating each one into a ProcessPort call and back. The only component that knows both domain effects and infra\'s plain-data shape.'
+    }
+  }
+}
