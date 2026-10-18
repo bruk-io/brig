@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 20:04'
-updated_date: '2026-10-18 22:17'
+updated_date: '2026-10-18 22:18'
 labels:
   - brig
   - size-1
@@ -62,3 +62,45 @@ Not blocking TASK-0013: no instance has been measured, and bwrap.py's own docstr
   accidentally swallow something that SHOULD still cause the scan to report
   correctly for a genuinely-alive, well-formed entry elsewhere in /proc.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Implementation notes (2026-10-18)
+
+Fixed per the committed plan: `_group_alive_proc_scan`'s parse of a successfully-opened
+`/proc/<pid>/stat` line now catches `(IndexError, ValueError)` around
+`fields[0]`/`fields[2]`/`int(candidate_pgid)` and `continue`s to the next entry, the same
+tolerance the existing open/read `except` already had.
+
+One deviation from the plan's literal text, forced by `just gates`: the plan didn't say
+how the test would reach the malformed shapes without faking `/proc` (decision-0001 rule
+5 bars patches everywhere, and the e2e rule runs against the real thing). The real kernel
+never writes a malformed stat line, so proving the tolerance needs a real but *fabricated*
+`/proc`-shaped directory. Tried calling `_group_alive_proc_scan` directly from the test
+(rule 4 allows a gateway test to import one `brig.infra` module) -- pypeeker's
+`under-exposed-access` rule rejected it (protected name accessed from `tests`). Fallback:
+added the same `proc_root: str = "/proc"` parameter to the public `group_alive` too,
+defaulting to the real `/proc` for every production caller, so the test can call the
+public function directly instead of reaching into the private one.
+
+Three new tests in `tests/e2e/test_processes_gateway.py`:
+- `test_group_alive_tolerates_a_malformed_or_truncated_stat_line`: a fabricated
+  `/proc`-shaped tmp dir with three malformed entries (empty content, no `)` at all with a
+  non-numeric third field, and a well-formed `)` but too few fields after it) --
+  `group_alive` returns `False`, never raises.
+- `test_group_alive_still_finds_a_well_formed_match_past_malformed_entries`: the same three
+  malformed entries plus one well-formed, genuinely-matching entry -- `group_alive` still
+  returns `True`, proving the widened tolerance doesn't swallow a real match (the plan's
+  own stated risk).
+- `test_group_alive_returns_a_bool_never_raises_on_the_real_host`: `group_alive` against a
+  real spawned process with `held` non-empty, on this host.
+
+Proof the test fails pre-fix for the right reason: reverted just the new
+`try`/`except (IndexError, ValueError)` block (keeping the `proc_root` plumbing) and reran
+-- both malformed-shape tests failed with a raw `IndexError: list index out of range` at
+`fields[0], fields[2]` inside `_group_alive_proc_scan`, the exact escape this task
+describes. Re-applied the fix: all three new tests pass, and `just done` is fully green
+(lint, typecheck, gates, pypeeker rule tests, unit, integration x2, e2e, docs, architecture
+lint -- 169/169 relevant tests passed, no regressions).
+<!-- SECTION:NOTES:END -->
