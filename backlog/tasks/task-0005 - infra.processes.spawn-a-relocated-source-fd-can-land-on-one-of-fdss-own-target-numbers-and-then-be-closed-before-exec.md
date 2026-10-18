@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 08:22'
-updated_date: '2026-10-18 08:23'
+updated_date: '2026-10-18 08:35'
 labels:
   - brig
   - size-2
@@ -75,3 +75,53 @@ No test covers the collision path at all: deleting the whole relocation branch l
 - fd numbers are process-global, mutable state; a fix that works on macOS's fd layout
   but not Linux's (or vice versa) would hide the same bug again -- verify on both.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Fixed both halves of the bug.
+
+**`_resolve_fd_sources`**: relocation now uses `fcntl.fcntl(source, fcntl.F_DUPFD, max(targets) + 1)`
+instead of a bare `os.dup(source)`. `F_DUPFD` takes a floor -- the lowest free fd *at or
+above* a chosen number -- so the relocated fd is guaranteed to land past every target
+regardless of which lower numbers happen to be free, instead of landing on whichever is
+this process's lowest free fd overall (which is exactly a target number whenever this
+process has a hole there). Docstring's false "fds's own targets are not candidates"
+claim removed and replaced with why a bare `os.dup` could not be trusted here.
+
+**`_fd_actions`**: the `CLOSE` list is now `set(resolved_fds.values()) - set(resolved_fds)`
+(set difference against the target keys) instead of a blanket `resolved_fds.values()` --
+no `CLOSE` action can ever name a number some `DUP2` in the same list wrote a target onto,
+even if a future change to `_resolve_fd_sources` reintroduced the collision (the invariant
+is enforced once, here, not relied on silently at the one caller).
+
+**Regression test**: `tests/e2e/test_spawn_fd_redirection_collision.py` (e2e, not unit --
+decision-0001 rule 4 restricts `tests/unit/` to `brig.domain` only, and the
+`under-exposed-access` pypeeker rule blocks a test from reaching `_resolve_fd_sources`/
+`_fd_actions` directly; an earlier `tests/unit/test_processes.py` draft was deleted for
+exactly this). Forces the measured shape directly: one target's source is itself
+(self-collision, the common case), and the other target's own number is a hole this test
+frees and makes the process's lowest free fd right before the collision is resolved.
+`_fill_fd_holes_below` first closes off every lower candidate this pytest process's own fd
+table happens to carry, so which fd a bare `os.dup` would pick is forced, not ambient.
+
+Confirmed discriminating by reconstructing the pre-fix `_resolve_fd_sources`/`_fd_actions`
+(reverting just those two hunks in a scratch copy, not `git stash` -- the branch carries
+other agents' uncommitted work) and running the new test against it: fails with
+`OSError: [Errno 9] Bad file descriptor` from the probe child, exactly TASK-0005's own
+measured signature. Restored the fix and reran: passes.
+
+**`just gates`, `just done`**: both green (lint, typecheck, gates/pypeeker strict, pypeeker
+rule tests, unit, integration x2, e2e, docs build, architecture validate, architecture lint
+-- "done: all steps passed").
+
+**Both platforms**: ran the same e2e suite in `brig-probe-amd64:latest`
+(`--platform linux/amd64 --privileged`, repo copied to a writable `/work`, `uv sync`):
+`tests/e2e` -> 31 passed, 2 skipped (real bwrap present there, so the bwrap-gated batteries
+ran for real, not skipped as on macOS). `_fill_fd_holes_below`'s approach is
+allocation-order-agnostic by construction (it forces the state rather than assuming
+`/proc/self/fd` vs. the macOS probe-scan path land fds anywhere particular), so the same
+test exercises the same collision on both.
+
+**TASK-0004 oracle re-verified** in the same Linux container, post-fix: `create_bwrap_jail(("/bin/echo", "hello"))` through `run_jail` printed `hello` and returned exit code `0`; `destroy_jail` torn down clean.
+<!-- SECTION:NOTES:END -->
