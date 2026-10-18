@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 08:22'
-updated_date: '2026-10-18 08:40'
+updated_date: '2026-10-18 12:05'
 labels:
   - brig
   - size-2
@@ -209,4 +209,6 @@ Resolution for whoever owns the sequencing: TASK-0005's hunks should land as par
 
 **Secondary finding (filed as a draft): `_fill_fd_holes_below` is a no-op and two docstrings claim otherwise**
 `probe_fd = os.dup(0)` returns the lowest free fd, so every fd in `[3, next_fd)` is already open by construction; `os.fstat` succeeds on all of them and `filled` is always empty. The test is genuinely deterministic -- but because of the `os.dup(0)` probe plus POSIX lowest-free allocation across the two `os.pipe()` calls, not because the helper forces anything. AC#2 still holds (the discrimination is measured, above), but the module docstring and the helper's own docstring both describe work the helper cannot perform.
+
+No repro: the fix and its regression test (tests/e2e/test_spawn_fd_redirection_collision.py) were authored and committed together in one commit (a485ee1), alongside TASK-0001.15/.16/.17/TASK-0004, with which this file is also textually entangled -- there is no earlier commit where the test exists against still-buggy code to run record-check --repro against. The failure was nonetheless genuinely demonstrated, independently, twice: once by the implementing agent (reconstructed the pre-fix _resolve_fd_sources/_fd_actions in a scratch file, swapped it in, observed OSError: Bad file descriptor) and again by the reviewer (reconstructed the same pre-fix code via monkeypatch rather than trusting the first account, observed the identical OSError and both assertions failing). Both are recorded in this task's own notes above.
 <!-- SECTION:NOTES:END -->
