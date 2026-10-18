@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 14:48'
-updated_date: '2026-10-18 17:12'
+updated_date: '2026-10-18 17:15'
 labels:
   - brig
   - size-1
@@ -179,4 +179,6 @@ Independently redone, all green and not re-run needed next time:
 `No repro:` hatch: applies on the same grounds as TASK-0008 (dead-code/docstring
 overclaim, fix and discriminating test in one commit, no earlier failing-state commit)
 -- but moot until AC#2 is fixed.
+
+No repro: this bug is a set of untrue claims in a test file's own prose plus two dead statements, not a behaviour a test can fail on. The fix and the file's own discriminating test landed together in one change, so there is no earlier failing-state commit for record-check --repro to point at. The test's discriminating power was reconfirmed by reconstructing the pre-TASK-0005-fix shape (recorded above).
 <!-- SECTION:NOTES:END -->
