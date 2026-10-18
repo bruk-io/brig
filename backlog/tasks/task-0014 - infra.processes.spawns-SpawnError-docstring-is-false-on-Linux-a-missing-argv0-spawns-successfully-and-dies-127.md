@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 17:30'
-updated_date: '2026-10-18 20:57'
+updated_date: '2026-10-18 21:04'
 labels:
   - brig
   - size-2
@@ -225,4 +225,6 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+test append probe
 <!-- SECTION:NOTES:END -->
