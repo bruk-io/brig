@@ -3,7 +3,7 @@ id: TASK-0002
 title: >-
   Nothing enforces decision-0001 rule 7's 'a class holding changing state only
   in infra/'
-status: In Progress
+status: Done
 assignee:
   - '@bruk'
 created_date: '2026-10-17 22:57'
@@ -273,4 +273,6 @@ The full-tier check this review ran is recorded above. The working-tree diff att
 this task remains confined to pypeeker_rules/brig.py and pypeeker_rules/tests/test_brig_rules.py.
 
 No repro: this bug is a coverage gap (no rule part existed for rule 7's stateful-class clause), not a regression with a prior passing state in this commit's history. The rule and its planted-violation test (`test_brig_class_forms_fires_on_a_stateful_class_outside_infra`) were authored and committed together as one change, so there is no earlier commit to run that test against that would demonstrate the gap without reverting this fix itself -- doing so would exercise nothing about this fix's correctness beyond what the committed test suite (22 tests, including the two attribute-chain regression tests for the review's polarity finding) already covers.
+
+Independent review confirmed AC#1 met: brig-class-forms now rejects a stateful class outside infra/ (22/22 pypeeker rule tests, just gates clean), with a planted-violation test plus five controls. Review's one blocking finding (exempt-base polarity firing on an unresolvable attribute-chain base, e.g. a Protocol/Enum reached via `import typing`/`import enum` rather than `from typing import Protocol`) was fixed and re-verified: _declares_exempt_base's unresolvable case now reads as unknown rather than not-exempt, matching the sibling disallowed-base trait's own conservatism. Two accepted, documented residual gaps, same shape as brig-class-forms' existing ones: a base re-exported through a project module still false-positives (already tracked as TASK-0001.19); an attribute-chain base that is genuinely disallowed plus instance state stays clean (conservative false-negative, stated in the docstring). No repro recorded: this is a coverage-gap bug, not a regression -- rule and planted-violation test were authored and committed together, so there is no earlier commit to run the test against without reverting this fix itself.
 <!-- SECTION:NOTES:END -->
