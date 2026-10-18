@@ -8,11 +8,13 @@ into the port's default implementation; a caller wanting a fake passes its own
 instance into `SupervisorPort`'s default implementation, the same way.
 """
 
+import functools
 import signal
 import sys
+import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from brig.domain import operations
 from brig.domain.effects import ExitCodeUnknown, GroupState, Process
@@ -27,8 +29,7 @@ from brig.infra.processes import reap_deadline as _infra_reap_deadline
 from brig.infra.processes import reap_nowait as _reap_nowait
 from brig.infra.processes import signal_group as _signal_group
 from brig.infra.processes import spawn as _spawn
-from brig.infra.supervisor import link
-from brig.infra.supervisor import program as _supervisor_program
+from brig.infra.supervisor import assemble, link
 from brig.presentation.drivers.bwrap import run
 from brig.presentation.errors import JailExitUnknown, JailTeardownFailed, JailWaitTimedOut
 from brig.presentation.ports import (
@@ -63,47 +64,66 @@ short enough that a jailed process which never exits on its own does not hang th
 embedder forever.
 """
 
-_SUPERVISOR_PATH: tuple[str, ...] = (sys.executable, "-I", _supervisor_program.__file__)
-"""Where this host's own supervisor file actually is -- an interim stand-in for
-AC#1's assembled stdlib-only file (TASK-0001.15): runs `infra/supervisor/program.py`
-directly, as a script, through this same interpreter. Reachable inside a bwrap jail
-under the default policy (`domain/policy/paths.py`'s `WHOLE_HOST_READ_ONLY`, TASK-
-0001.16) because that policy binds the whole host root, read-only -- this venv and
-this repository included -- the same bind the walking skeleton already relied on for
-`true` to be reachable. A jail created with a narrower `policy` of its own is this
-path's responsibility to stay reachable under too -- `create_bwrap_jail`'s own
-`policy` parameter does not relax that, it is the caller's own policy that has to
-still cover wherever this interpreter and `program.py` actually live. `program.py`
-imports only the stdlib (its own docstring), which already satisfies rule 17's
-"stdlib only" for the one thing that matters here: nothing it does, once running,
-reaches back into brig. What this stand-in does *not* yet satisfy is "assembled...
-one file" (AC#1, still open) -- replace it with the real dropped artifact's path once
-that build step exists, and drop this paragraph.
 
-`-I` (isolated mode, TASK-0001.15/.17 adversarial review) runs this interpreter
-ignoring `PYTHONPATH`/`PYTHONHOME` and without adding user site-packages, regardless
-of what this process's own environment happens to carry -- belt and braces next to
-`infra.supervisor.link._start` no longer handing the supervisor process
-`EnvPolicy`-scrubbed environment at all (that module's own docstring explains why a
-mapping an embedder scrubbed for the *confined command* is not safe to also hand
-the process enforcing the confinement): `-I` closes the same hole a second,
-independent way, for whatever this process's own environment might someday carry.
-It does nothing for `LD_PRELOAD`, which the dynamic linker consults before the
-interpreter ever starts -- the env split is what closes that half. `program.py`
-imports only the stdlib, so running it under `-I` changes nothing it does.
-"""
+@functools.cache
+def _supervisor_path() -> tuple[str, ...]:
+    """Where this host's own assembled supervisor file actually is: rule 17's
+    one file (`infra.supervisor.assemble.assembled_source()` -- `wire.py` +
+    `program.py`, stdlib only, refusing to run under an interpreter older
+    than 3.15), written once per process to a fresh temporary file and cached
+    for the rest of this process's life.
 
-_SUPERVISOR_ARGV: tuple[str, ...] = bwrap.compile_supervisor_launch(
-    _SUPERVISOR_PATH, WHOLE_HOST_READ_ONLY
-)
-"""`_SUPERVISOR_PATH`, wrapped in bwrap's own namespace-isolation flags and the
-default policy's binds (`domain/jail_types/bwrap.py`'s `compile_supervisor_launch`,
-TASK-0001.16) -- the argv that starts the supervisor as a bwrap jail's own PID 1
-under `WHOLE_HOST_READ_ONLY`, the policy every jail gets unless `create_bwrap_jail`
-is given a different one. Computed once, here, for exactly that one policy; a jail
-created with a different `policy` gets its own launch line instead, built fresh by
-`_supervisors_for` below rather than varying this constant.
-"""
+    `functools.cache` makes this function's own body -- the write -- run at
+    most once, the first real call, never at import time: writing a file is
+    real I/O, and `pyproject.toml`'s own `[tool.pypeeker.import-time-side-
+    effects]` allow-list has no entry for this module, so doing this eagerly
+    at module scope would trip that rule, not just style.
+
+    Reachable inside a bwrap jail under the default policy (`domain/policy/
+    paths.py`'s `WHOLE_HOST_READ_ONLY`, TASK-0001.16) because that policy
+    binds the whole host root, read-only -- this venv and this repository
+    included, the same bind the walking skeleton already relied on for `true`
+    to be reachable, now also for wherever `tempfile.NamedTemporaryFile`
+    actually placed this file. A jail created with a narrower `policy` of its
+    own is this path's responsibility to stay reachable under too --
+    `create_bwrap_jail`'s own `policy` parameter does not relax that, it is
+    the caller's own policy that has to still cover wherever this file
+    actually landed.
+
+    `-I` (isolated mode, TASK-0001.15/.17 adversarial review) runs this
+    interpreter ignoring `PYTHONPATH`/`PYTHONHOME` and without adding user
+    site-packages, regardless of what this process's own environment happens
+    to carry -- belt and braces next to `infra.supervisor.link._start` no
+    longer handing the supervisor process `EnvPolicy`-scrubbed environment at
+    all (that module's own docstring explains why a mapping an embedder
+    scrubbed for the *confined command* is not safe to also hand the process
+    enforcing the confinement): `-I` closes the same hole a second,
+    independent way, for whatever this process's own environment might
+    someday carry. It does nothing for `LD_PRELOAD`, which the dynamic linker
+    consults before the interpreter ever starts -- the env split is what
+    closes that half. The assembled file imports only the stdlib (rule 17),
+    so running it under `-I` changes nothing it does.
+    """
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", prefix="brig-supervisor-", delete=False
+    ) as handle:
+        handle.write(assemble.assembled_source())
+    return (sys.executable, "-I", handle.name)
+
+
+@functools.cache
+def _supervisor_argv() -> tuple[str, ...]:
+    """`_supervisor_path()`, wrapped in bwrap's own namespace-isolation flags and the
+    default policy's binds (`domain/jail_types/bwrap.py`'s `compile_supervisor_launch`,
+    TASK-0001.16) -- the argv that starts the supervisor as a bwrap jail's own PID 1
+    under `WHOLE_HOST_READ_ONLY`, the policy every jail gets unless `create_bwrap_jail`
+    is given a different one. Computed once, here (and cached, the same way
+    `_supervisor_path` is, since both do no work worth repeating once done), for
+    exactly that one policy; a jail created with a different `policy` gets its own
+    launch line instead, built fresh by `_supervisors_for` below rather than varying
+    this.
+    """
+    return bwrap.compile_supervisor_launch(_supervisor_path(), WHOLE_HOST_READ_ONLY)
 
 
 @dataclass(frozen=True)
@@ -159,27 +179,39 @@ def _real_supervisor_port(live: link.LiveSupervisors) -> SupervisorPort:
     return _RealSupervisors(start=live.start, await_done=await_done, close=live.close)
 
 
-_live_supervisors = link.LiveSupervisors(_SUPERVISOR_ARGV)
-"""The one shared `LiveSupervisors` instance a jail created under the default
-policy (`WHOLE_HOST_READ_ONLY`) has its `create`/`start`/`destroy` driver calls
-wired to -- it has to be the same instance across all three, since it is what
-remembers which open `Supervisor` a `Process`'s pid still names between them
-(`infra.supervisor.link.LiveSupervisors`'s own docstring). TASK-0001.16: a jail
-created with a different `policy` gets its own dedicated instance from
-`_supervisors_for` instead, since its own launch line for the supervisor's file
-differs from this one's.
-"""
+@functools.cache
+def _live_supervisors() -> link.LiveSupervisors:
+    """The one shared `LiveSupervisors` instance a jail created under the default
+    policy (`WHOLE_HOST_READ_ONLY`) has its `create`/`start`/`destroy` driver calls
+    wired to -- it has to be the same instance across all three, since it is what
+    remembers which open `Supervisor` a `Process`'s pid still names between them
+    (`infra.supervisor.link.LiveSupervisors`'s own docstring). TASK-0001.16: a jail
+    created with a different `policy` gets its own dedicated instance from
+    `_supervisors_for` instead, since its own launch line for the supervisor's file
+    differs from this one's.
 
-_supervisors: SupervisorPort = _real_supervisor_port(_live_supervisors)
-"""The real `SupervisorPort` every bwrap jail gets by default, when its own
-`create_bwrap_jail` call names no `policy`/`supervisors` of its own.
-"""
+    Lazy and cached (`functools.cache`) for the same reason `_supervisor_path`/
+    `_supervisor_argv` are: it is built from `_supervisor_argv()`, which writes the
+    assembled file's real path the first time anything actually needs it, never at
+    import time.
+    """
+    return link.LiveSupervisors(_supervisor_argv())
+
+
+@functools.cache
+def _supervisors() -> SupervisorPort:
+    """The real `SupervisorPort` every bwrap jail gets by default, when its own
+    `create_bwrap_jail` call names no `policy`/`supervisors` of its own.
+
+    Lazy and cached for the same reason `_live_supervisors` is.
+    """
+    return _real_supervisor_port(_live_supervisors())
 
 
 def _supervisors_for(policy: FsPolicy) -> SupervisorPort:
     """The `SupervisorPort` `create_bwrap_jail` uses for `policy`, when its own
     caller names no explicit `supervisors` port of its own (TASK-0001.16): the
-    module's one shared instance (`_supervisors`) for `WHOLE_HOST_READ_ONLY`, the
+    module's one shared instance (`_supervisors()`) for `WHOLE_HOST_READ_ONLY`, the
     same instance every jail got before this parameter existed, or a dedicated
     `LiveSupervisors` -- built fresh here, cheap, since it does no I/O of its own
     until `start` is actually called -- for any other policy, since its own
@@ -191,8 +223,8 @@ def _supervisors_for(policy: FsPolicy) -> SupervisorPort:
     one back to `run_jail`/`destroy_jail` for the same jail later.
     """
     if policy == WHOLE_HOST_READ_ONLY:
-        return _supervisors
-    supervisor_argv = bwrap.compile_supervisor_launch(_SUPERVISOR_PATH, policy)
+        return _supervisors()
+    supervisor_argv = bwrap.compile_supervisor_launch(_supervisor_path(), policy)
     return _real_supervisor_port(link.LiveSupervisors(supervisor_argv))
 
 
@@ -207,13 +239,15 @@ class Jail:
     supervisor launch lines can differ, and whichever `LiveSupervisors` opened a
     jail's events pipe is the only one that can still read or close it
     (`infra.supervisor.link.LiveSupervisors`'s own invariant). Defaults to the
-    module's own shared instance (`_supervisors`) so a `Jail` built directly, for
+    module's own shared instance (`_supervisors()`) so a `Jail` built directly, for
     a gateway test that never calls `create_bwrap_jail` at all
-    (`tests/e2e/test_processes_gateway.py`), keeps working exactly as before.
+    (`tests/e2e/test_processes_gateway.py`), keeps working exactly as before --
+    `default_factory`, not a plain default, since `_supervisors()` is lazy now and
+    must not be forced merely by this class being defined at import time.
     """
 
     process: Process
-    supervisors: SupervisorPort = _supervisors
+    supervisors: SupervisorPort = field(default_factory=_supervisors)
 
 
 def create_bwrap_jail(
