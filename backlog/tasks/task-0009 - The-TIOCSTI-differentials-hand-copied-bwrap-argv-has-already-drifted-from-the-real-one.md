@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 12:55'
-updated_date: '2026-10-18 14:49'
+updated_date: '2026-10-18 14:54'
 labels:
   - brig
   - size-2
@@ -197,4 +197,6 @@ What stands in the way of closing:
 Other findings (neither blocks):
 2. (medium) The fidelity check inverts rule 4's unit clause: tests/unit/test_bwrap_compile.py now pulls brig, brig.infra.* and brig.presentation.* into a unit test's import graph through tests.e2e.test_tiocsti_battery's own 'from brig import ...'. brig-test-layers sees only direct brig.* imports, so it passes. Said in the reviewer's own voice: this is a real rule-4 departure the plan authorized, not merely 'unchecked'. DRAFT-0013 is already its home; no new draft filed.
 3. (low) tests/e2e/test_tiocsti_battery.py now imports two brig.infra modules (processes and state_dir); rule 4 allows one for a gateway test, and the count clause is unenforced. Arrived with TASK-0006's state-dir work but sits in this task's file. Joins DRAFT-0013's area rather than earning its own task.
+
+No repro: the argv-drift fix and the fidelity test that catches it landed together in one commit (e9d5440), entangled with TASK-0006's compile_supervisor_launch signature change (the fidelity test needed that signature to exist at all) -- no earlier commit of just this fix to run record-check --repro against. Same pattern as TASK-0002/TASK-0005/TASK-0001.19.
 <!-- SECTION:NOTES:END -->
