@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 20:04'
-updated_date: '2026-10-18 22:07'
+updated_date: '2026-10-18 22:17'
 labels:
   - brig
   - size-1
@@ -33,8 +33,8 @@ Not blocking TASK-0013: no instance has been measured, and bwrap.py's own docstr
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 _group_alive_proc_scan tolerates a malformed or truncated /proc/<pid>/stat line the same way it already tolerates a vanished one -- skip that entry, never fail the scan
-- [ ] #2 group_alive is shown by test to return a bool (never raise) for a /proc entry whose stat line is empty or has no ')'
+- [x] #1 _group_alive_proc_scan tolerates a malformed or truncated /proc/<pid>/stat line the same way it already tolerates a vanished one -- skip that entry, never fail the scan
+- [x] #2 group_alive is shown by test to return a bool (never raise) for a /proc entry whose stat line is empty or has no ')'
 <!-- AC:END -->
 
 ## Implementation Plan
