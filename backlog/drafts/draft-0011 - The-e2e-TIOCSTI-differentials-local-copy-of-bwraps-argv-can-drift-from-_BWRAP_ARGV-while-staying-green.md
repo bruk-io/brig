@@ -6,6 +6,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-10-18 04:43'
+updated_date: '2026-10-18 13:20'
 labels: []
 dependencies: []
 type: bug
@@ -26,3 +27,9 @@ This is imminent rather than hypothetical: TASK-0001.16 (Filesystem policy, In P
 - [ ] #1 A change to domain/jail_types/bwrap.py's _BWRAP_ARGV that is not mirrored in the e2e differential's copy causes a test in the suite to fail
 - [ ] #2 The chosen mechanism (public accessor, pypeeker rule exemption, equality assertion, or other) does not weaken decision-0001 rule 4's bar on domain imports from tests/e2e/
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Superseded by TASK-0009 (promoted from DRAFT-0015), which found the drift this draft predicted had actually happened (--as-pid-1 missing from the e2e differential's hand-copied argv) and carries the same fidelity-assertion fix. Archiving rather than promoting this one to avoid two tasks for one fix.
+<!-- SECTION:NOTES:END -->
