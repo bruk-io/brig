@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 13:05'
-updated_date: '2026-10-18 14:46'
+updated_date: '2026-10-18 14:51'
 labels:
   - brig
   - size-3
@@ -246,4 +246,16 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+Independent review (philosophy:close-work, reviewer did not do the work): all three acceptance criteria verified met; NOT closed, for two mechanical reasons outside the criteria.
+
+Verification performed. `record-check TASK-0006 --tier full` (just done) exited 0 on macOS and changed no file (git status identical before and after). Real Linux + real bwrap, brig-probe-amd64:latest --platform linux/amd64 --privileged, repo copied in and `uv sync`: full suite `pytest tests/ pypeeker_rules/tests -rs` -> 106 passed, 2 skipped (both pre-existing, measured: close-action-race fallback scan, no-setsid TIOCSTI gateway). AC#2's named test passes there (exit 2 / ENOENT, no JailExitUnknown). AC#3's `test_a_policy_excluding_tmp_still_lets_the_jail_start` passes. Attributability re-derived independently, not taken on faith: with the unconditional `--ro-bind state_dir state_dir` deleted from `compile_supervisor_launch` in a scratch container copy, both AC#3's test and `test_a_policy_bind_at_the_state_dirs_own_jail_path_does_not_shadow_it` FAIL with the original signature (`can't open file '/root/.brig/brig-supervisor-*.py'`, JailExitUnknown) while the rest pass. The filed bug also still reproduces exactly at committed HEAD in the same container (`/tmp/brig-supervisor-*.py` ENOENT -> JailExitUnknown), confirming the work is what fixes it.
+
+Blocker 1 (board rule): no repro is recorded. `board-check close TASK-0006` reports: a bug closes with its repro recorded. It cannot be recorded now -- `record-check --repro` requires the named test file to be committed and unmodified, and the fix edits `tests/e2e/test_fs_policy_battery.py` itself (it adds three tests to the same file). The repro should have been recorded against the pre-fix commit before the fix was written. Evidence that it reproduces at HEAD is in the paragraph above; whoever owns the finish line decides between recording it from the pre-fix commit or a `No repro:` note.
+
+Blocker 2 (uncommitted, and not separable): the work is entirely uncommitted and the reviewer may not commit it. The declared Modified files are also not an import-closed set -- `presentation/api.py` imports `StateDirectoryInvalid`/`StateDirectoryUnreachable` from `presentation/errors.py` (re-exported through `src/brig/__init__.py`), and neither file is on this task's list; they are TASK-0001.22's deliverable, physically inseparable from this change. Likewise `tests/unit/test_bwrap_compile.py` imports `_bwrap_argv_prefix` from `tests/e2e/test_tiocsti_battery.py` (TASK-0009's subject). The minimal tree that imports and tests green is: src/brig/infra/state_dir.py, src/brig/presentation/api.py, src/brig/presentation/errors.py, src/brig/__init__.py, src/brig/domain/jail_types/bwrap.py, tests/unit/test_bwrap_compile.py, tests/e2e/test_fs_policy_battery.py, tests/e2e/test_state_dir.py, tests/e2e/test_tiocsti_battery.py -- the overlap with TASK-0001.22 and TASK-0009 should be named in the commit message. decision-0002 and tests/e2e/test_spawn_fd_redirection_collision.py (TASK-0007/0008) have no dependency on this work and stay out.
+
+Finding (minor, no draft): AC#1's wording 'regardless of the caller's fs policy' is still broader than what is true, as the worker's own correction note records. It is defensible to leave ticked now that the one unreachable shape raises `StateDirectoryUnreachable` before bwrap runs rather than failing mysteriously, and TASK-0001.22 owns the residual gap -- but a reviewer cannot reword a criterion, so it is reported for whoever owns the finish line.
+
+Finding (minor, no draft -- belongs with TASK-0001.22): `_check_state_dir_reachable` runs only inside `_supervisors_for(policy)`, so a caller passing `supervisors=` explicitly to `create_bwrap_jail` bypasses the refusal entirely and gets the raw EROFS/JailExitUnknown back. Low realistic path (that parameter is the test-injection seam), adjacent to TASK-0001.22's area rather than worth its own task.
 <!-- SECTION:NOTES:END -->
