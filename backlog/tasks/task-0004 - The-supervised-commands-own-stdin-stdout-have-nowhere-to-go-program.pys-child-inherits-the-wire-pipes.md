@@ -3,8 +3,9 @@ id: TASK-0004
 title: >-
   The supervised command's own stdin/stdout have nowhere to go: program.py's
   child inherits the wire pipes
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-10-18 04:34'
 updated_date: '2026-10-18 07:58'
 labels:
