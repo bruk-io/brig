@@ -227,4 +227,36 @@ done: all steps passed
 ```
 
 test append probe
+
+(the stray line above is a reviewer tooling probe, not content)
+
+## Review (reviewer, not the implementer)
+
+Verdict: NOT closed. Left In Progress. The behaviour change is correct and the
+central correction to the plan is independently reproduced -- but the change
+lands two fresh measured-false claims about Linux into the very docstrings this
+task exists to make true about Linux. To be corrected inside TASK-0014; no
+drafts filed.
+
+### Independently verified (all of it holds)
+- **The PATH-source correction is real.** Reproduced from scratch, not trusted.
+  macOS (CPython 3.15, Darwin 27): a name resolvable ONLY through env's PATH
+  gives FileNotFoundError (posix_spawnp did NOT look there); a name resolvable
+  ONLY through os.environ's PATH, with env={'PATH': '/definitely/not/real'},
+  spawns and exits 0. Linux/glibc 2.39 (brig-probe-amd64:latest, amd64): the
+  same two cases give NORAISE status 32512 (127<<8), and NORAISE status 0.
+  os.posix_spawnp's own PATH search consults the CALLING process's os.environ,
+  never the env argument, on both libcs. The plan was wrong; the implementation
+  is right.
+- **Control flow.** The pre-check is the second statement in spawn(), before
+  _resolve_fd_sources and before any spawn, so it raises with no fds duplicated
+  or leaked. It uses os.environ.get('PATH', os.defpath), not env, and raises
+  SpawnError(argv, errno=errno.ENOENT).
+- **The two PATH-divergence tests genuinely discriminate, in opposite
+  directions**, against a naive search-env's-PATH implementation. The
+  ignores_envs_own_narrower_path one: a naive implementation resolves nothing,
+  raises, and the test expecting success fails. The
+  raises_for_a_name_only_envs_own_path_would_resolve one: a naive
+  implementation finds the probe in bin_dir, does not raise, and pytest.raises
+  fails. This pair would have caught the plan's own error.
 <!-- SECTION:NOTES:END -->
