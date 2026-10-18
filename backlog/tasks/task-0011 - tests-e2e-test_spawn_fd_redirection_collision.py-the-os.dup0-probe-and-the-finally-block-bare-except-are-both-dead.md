@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 14:48'
-updated_date: '2026-10-18 17:03'
+updated_date: '2026-10-18 17:07'
 labels:
   - brig
   - size-1
@@ -25,9 +25,9 @@ Found closing TASK-0008. TASK-0008 removed _fill_fd_holes_below but kept, and pr
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The os.dup(0)/os.close probe is removed, or its comment and the module docstring say what it actually establishes
-- [ ] #2 The module docstring credits the determinism to POSIX lowest-free-fd allocation by os.pipe() itself
-- [ ] #3 The finally block closes each fd without a bare except OSError, or the except is justified by a path that can actually raise
+- [x] #1 The os.dup(0)/os.close probe is removed, or its comment and the module docstring say what it actually establishes
+- [x] #2 The module docstring credits the determinism to POSIX lowest-free-fd allocation by os.pipe() itself
+- [x] #3 The finally block closes each fd without a bare except OSError, or the except is justified by a path that can actually raise
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -57,3 +57,13 @@ Found closing TASK-0008. TASK-0008 removed _fill_fd_holes_below but kept, and pr
   dead probe and the finally's except doesn't silently change what the test
   actually proves.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Removed the dead `os.dup(0)`/`os.close` probe pair (zero net effect on the fd table, nothing downstream used its value). Rewrote the module docstring to credit determinism to POSIX's own lowest-free-fd guarantee for `os.pipe()`, not the removed probe. Removed the finally block's bare `except OSError: pass`: every fd reaching it is either -1 (skipped) or genuinely open (both early closes already set their variable to -1), so no path can raise there.
+
+Reconfirmed discriminating power: monkeypatched `_resolve_fd_sources`/`_fd_actions` to the pre-TASK-0005-fix shape (bare `os.dup` instead of `fcntl.F_DUPFD`, blanket CLOSE instead of the target-excluding set) and ran the test function directly -- it failed for the right reason (probe's os.write got Bad file descriptor, exit code 1). Restored the real functions and reran -- passed.
+
+`just gates` and `just done` both green.
+<!-- SECTION:NOTES:END -->
