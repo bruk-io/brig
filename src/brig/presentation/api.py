@@ -30,9 +30,11 @@ from brig.infra import state_dir as _state_dir_mod
 from brig.infra.processes import ProcessUnknown as _InfraProcessUnknown
 from brig.infra.processes import SpawnedProcess
 from brig.infra.processes import group_alive as _group_alive
+from brig.infra.processes import group_alive_deadline as _group_alive_deadline
+from brig.infra.processes import peek as _infra_peek
 from brig.infra.processes import reap as _infra_reap
 from brig.infra.processes import reap_deadline as _infra_reap_deadline
-from brig.infra.processes import reap_nowait as _reap_nowait
+from brig.infra.processes import release as _release
 from brig.infra.processes import signal_group as _signal_group
 from brig.infra.processes import spawn as _spawn
 from brig.infra.supervisor import assemble, link
@@ -69,11 +71,28 @@ def _reap_deadline(pid: int, deadline: float) -> int | None | ProcessUnknown:
     return ProcessUnknown() if isinstance(result, _InfraProcessUnknown) else result
 
 
+def _peek(pid: int) -> int | None | ProcessUnknown:
+    """Adapt infra's `peek` to `ProcessPort`'s contract, the same way `_reap` adapts
+    `reap` (decision-0003).
+    """
+    result = _infra_peek(pid)
+    return ProcessUnknown() if isinstance(result, _InfraProcessUnknown) else result
+
+
 _DEFAULT_WAIT_TIMEOUT_S = 30.0
 """How long `run_jail` waits for a jail's process to exit when an embedder gives no
 `timeout_s` of its own (TASK-0001.06): long enough for an ordinary jailed command,
 short enough that a jailed process which never exits on its own does not hang the
 embedder forever.
+"""
+
+_DEFAULT_KILL_GRACE_S = 1.0
+"""How long `destroy_jail` lets the kill ladder's post-KILL rung poll group-liveness
+before giving up, when an embedder gives no `kill_grace_s` of its own (TASK-0001.07):
+long enough that the kernel has finished processing `SignalKind.KILL` on an ordinary
+multi-process group well before this passes, short enough that a group the kill
+ladder genuinely cannot bring down does not hang `destroy_jail` for long before it
+raises `JailTeardownFailed`.
 """
 
 
@@ -220,17 +239,21 @@ def _supervisor_path() -> tuple[str, ...]:
 @dataclass(frozen=True)
 class _RealProcesses:
     """`brig.infra.processes`'s own functions, as the `ProcessPort` an embedder gets by
-    default: data (six functions), nothing more, matching the port's shape exactly --
-    `reap` and `reap_deadline` through this module's own thin adapters above, which
-    translate infra's `ProcessUnknown` into the port's (`ports.py`'s own docstring).
+    default: data (seven functions), nothing more, matching the port's shape exactly --
+    `reap`, `reap_deadline` and `peek` through this module's own thin adapters above,
+    which translate infra's `ProcessUnknown` into the port's (`ports.py`'s own
+    docstring). `release` and `group_alive`/`group_alive_deadline` need no adapter:
+    neither crosses an infra-specific type (decision-0003).
     """
 
     spawn: Callable[[tuple[str, ...], tuple[int, ...]], SpawnedProcess] = _spawn
     reap: Callable[[int], int | ProcessUnknown] = _reap
     reap_deadline: Callable[[int, float], int | None | ProcessUnknown] = _reap_deadline
     signal_group: Callable[[int, signal.Signals], None] = _signal_group
-    reap_nowait: Callable[[int], int | None] = _reap_nowait
-    group_alive: Callable[[int], bool] = _group_alive
+    peek: Callable[[int], int | None | ProcessUnknown] = _peek
+    release: Callable[[int], None] = _release
+    group_alive: Callable[[int, frozenset[int]], bool] = _group_alive
+    group_alive_deadline: Callable[[int, int, float], bool] = _group_alive_deadline
 
 
 _processes: ProcessPort = _RealProcesses()
@@ -451,10 +474,19 @@ def run_jail(
 def destroy_jail(
     jail: Jail,
     *,
+    kill_grace_s: float = _DEFAULT_KILL_GRACE_S,
     processes: ProcessPort = _processes,
     supervisors: SupervisorPort | None = None,
 ) -> None:
     """Tear `jail` down, verified: no process of its group is left when this returns.
+
+    `kill_grace_s` (`_DEFAULT_KILL_GRACE_S` if not given) bounds the kill ladder's
+    post-KILL rung (TASK-0001.07): once `SignalKind.KILL` is sent, that rung polls
+    group-liveness for up to this long before giving up, rather than deciding the
+    instant after KILL -- the kernel finishing what KILL started is not
+    instantaneous, and a multi-process group's leader exiting no longer provides a
+    blocking barrier for the rest to finish behind (`domain/teardown.py`'s own
+    module docstring, decision-0003).
 
     Also releases whatever `supervisors` is still holding open for `jail`'s
     supervisor (`SupervisorPort.close`'s own docstring): a no-op if `run_jail`
@@ -488,7 +520,10 @@ def destroy_jail(
         JailTeardownFailed: the kill ladder's last verify still found the group alive.
     """
     resolved_supervisors = supervisors if supervisors is not None else jail.supervisors
-    state = run(operations.destroy(jail.process), processes, resolved_supervisors)
+    deadline = time.monotonic() + kill_grace_s
+    state = run(
+        operations.destroy(jail.process, deadline=deadline), processes, resolved_supervisors
+    )
     resolved_supervisors.close(jail.process.pid)
     if jail.supervisor_script is not None:
         try:

@@ -115,6 +115,19 @@ Decision, revised from this decision's own first draft in light of that:
   proven to work the same way everywhere"; it means "inherits whatever cross-platform liveness
   probe this decision's implementation task still has to design."
 
+## Amendment (2026-10-18, during TASK-0013's own scoping)
+
+The mixed case this decision flagged as unmeasured -- a deliberately-held zombie leader
+*alongside* another, genuinely-alive group member -- is now measured, on macOS, against the real
+`group_alive`: a backgrounded sibling (`sh -c 'sleep 5 & exit 7'`, the same pgid-inheritance shape
+any real multi-process jail group forms by) stays correctly reported `True` while the leader is
+held as a peeked-not-reaped zombie. `killpg`'s EPERM on macOS is narrower than this decision's own
+first revision worried: it appears only when the *entire* group has nothing left but zombies, not
+whenever any one member is held. **macOS's `group_alive` needs no change.** The real, narrowed
+scope is Linux only: `killpg` there answers "exists" for a zombie-only group the same as a
+genuinely-alive one, with no distinction between the two cases at all -- that is the one gap a new
+mechanism (per-member enumeration, `/proc`-based, excluding the known-held pid) has to close.
+
 ## Consequences
 
 - A new implementation task is needed, materially larger than this decision's own first draft

@@ -18,20 +18,22 @@ pid/pgid the same way it always signalled and probed the real command's.
 `.claude/rules/driver-exception-boundary.md`'s own discipline, re-run against this
 module (TASK-0001.15/.17 adversarial review, then re-grepped over every arm rather
 than only the one that review named -- that rule's whole point is that checking the
-touched call site alone is what let this escape twice before). The arms that wrap a
-port call in `try`/`except` are `Spawn`, `StartSupervisedCommand` and, new here,
-`AwaitSupervisorDone`: each had an exception *measured* crossing it (`SpawnError`/
-`OSError` for the first two; a raw `ValueError` out of `wire.decode_event` for the
-third, past every caller that only ever named `wire.WireError`).
+touched call site alone is what let this escape twice before; re-grepped again for
+TASK-0013/decision-0003's own new call sites, `peek`/`release`/`group_alive`/
+`group_alive_deadline`). The arms that wrap a port call in `try`/`except` are
+`Spawn`, `StartSupervisedCommand` and `AwaitSupervisorDone`: each had an exception
+*measured* crossing it (`SpawnError`/`OSError` for the first two; a raw `ValueError`
+out of `wire.decode_event` for the third, past every caller that only ever named
+`wire.WireError`).
 
-`Reap`, `SignalGroup` and `Verify` deliberately do not wrap theirs. Their ports are
-documented to hand back a sentinel rather than raise -- `ProcessPort.reap`/
-`reap_deadline` return `ProcessUnknown`, `reap_nowait` returns `None`,
-`group_alive` returns a bool, and `signal_group` swallows an already-gone group
-(`infra/processes.py`'s own docstring for it) -- so there is nothing here to
-translate. That is a claim about those ports' contracts, not an exemption: should
-any of them ever be measured raising, it is the same finding this module just fixed
-for `AwaitSupervisorDone`, and the fix is another wrapped arm, not a wider `except`.
+`Reap`, `SignalGroup`, `Verify` and `Release` deliberately do not wrap theirs. Their
+ports are documented to hand back a sentinel rather than raise -- `ProcessPort.reap`/
+`reap_deadline`/`peek` return `ProcessUnknown`, `release` and `signal_group` are
+no-ops, `group_alive`/`group_alive_deadline` return a bool (`infra/processes.py`'s
+own docstrings) -- so there is nothing here to translate. That is a claim about those
+ports' contracts, not an exemption: should any of them ever be measured raising, it
+is the same finding this module just fixed for `AwaitSupervisorDone`, and the fix is
+another wrapped arm, not a wider `except`.
 """
 
 import signal
@@ -45,6 +47,7 @@ from brig.domain.effects import (
     GroupState,
     Process,
     Reap,
+    Release,
     SignalGroup,
     SignalKind,
     Spawn,
@@ -134,14 +137,32 @@ def run[T](
             case SignalGroup(process=process, signal=signal_kind):
                 processes.signal_group(process.pgid, _SIGNALS[signal_kind])
                 sent = None
-            case Verify(process=process):
-                # Collect the leader's exit status first, non-blocking, so a process
-                # that already exited but was never reaped (a zombie) is freed before
-                # the group check runs -- otherwise it would answer alive forever.
-                # Only then is `group_alive` asked, over the whole group (`.pgid`),
-                # never just the leader's `.pid`.
-                processes.reap_nowait(process.pid)
-                sent = GroupState.ALIVE if processes.group_alive(process.pgid) else GroupState.GONE
+            case Verify(process=process, deadline=deadline):
+                if deadline is None:
+                    # Peek the leader's exit status first, without releasing it
+                    # (decision-0003): a process that already exited but is still
+                    # unreleased (a zombie) must be excluded from the group check
+                    # as "deliberately held", not read as alive, and must not
+                    # itself be released here -- `Release` is the only effect
+                    # that does that, once the whole ladder is done with this
+                    # pid. `held` is derived fresh from this call's own peek,
+                    # never carried on the effect: a zombie peeked on an earlier
+                    # `Verify` peeks the same way again here, since peeking never
+                    # consumes it.
+                    outcome = processes.peek(process.pid)
+                    held = frozenset({process.pid}) if isinstance(outcome, int) else frozenset()
+                    alive = processes.group_alive(process.pgid, held)
+                else:
+                    # The post-KILL rung's bounded grace window (TASK-0001.07):
+                    # the same peek-then-check as above, polled until gone or
+                    # `deadline` passes, rather than one immediate check right
+                    # after a blocking reap that no longer exists as a
+                    # synchronization barrier here.
+                    alive = processes.group_alive_deadline(process.pid, process.pgid, deadline)
+                sent = GroupState.ALIVE if alive else GroupState.GONE
+            case Release(process=process):
+                processes.release(process.pid)
+                sent = None
             case _ as unreachable:
                 assert_never(unreachable)
         try:

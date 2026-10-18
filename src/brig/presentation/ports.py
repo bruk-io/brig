@@ -95,12 +95,47 @@ class ProcessPort(Protocol):
         """Send `sig` to every process in the group `pgid`."""
         ...
 
-    def reap_nowait(self, pid: int) -> int | None:
-        """Collect `pid`'s exit status if it has already exited, without blocking."""
+    def peek(self, pid: int) -> int | None | ProcessUnknown:
+        """Observe whether `pid` has exited, without releasing its pid for reuse
+        (decision-0003).
+
+        Returns the exit code if `pid` has already exited; `None` if still
+        running; `ProcessUnknown` instead if `pid` is no longer this process's
+        child to wait for at all (`ECHILD`): something already released it.
+        """
         ...
 
-    def group_alive(self, pgid: int) -> bool:
-        """Report whether any process in the group `pgid` is still alive."""
+    def release(self, pid: int) -> None:
+        """Release `pid`'s exit status for real, once nothing will ever peek or
+        wait on it again.
+
+        A no-op where `pid` has not exited yet, or is no longer this process's
+        child to wait for at all: there is nothing left to release either way.
+        """
+        ...
+
+    def group_alive(self, pgid: int, held: frozenset[int]) -> bool:
+        """Report whether anything in the group `pgid`, other than a pid named in
+        `held`, is still alive.
+
+        `held` names a pid a caller already knows has exited and is being
+        deliberately kept unreleased (`peek`, above) -- it must not itself read
+        as "this group is still alive" (decision-0003). No default here (unlike
+        `infra.processes.group_alive`'s own): a driver always computes and passes
+        `held` explicitly, and a `Callable`-typed field (`_RealProcesses`, in
+        `presentation/api.py`) cannot express an optional parameter a Protocol
+        method can.
+        """
+        ...
+
+    def group_alive_deadline(self, pid: int, pgid: int, deadline: float) -> bool:
+        """Poll `group_alive` for the group `pgid`, excluding `pid` once it has
+        exited, until it reports gone or `time.monotonic()` passes `deadline`
+        (the kill ladder's post-KILL grace window, TASK-0001.07).
+
+        Returns `False` as soon as the group reads gone; `True` once `deadline`
+        passes with something still alive.
+        """
         ...
 
 

@@ -4,6 +4,15 @@ Plain data in, plain data out (decision-0001 rule 1): every function here takes 
 returns tuples, strings, ints and stdlib types, never a `brig` type. A driver in
 `presentation/drivers/` is the only caller that knows what this data means to the
 domain's effects in `domain/effects.py`.
+
+decision-0003's peek-before-release split: `peek` observes a pid's exit status
+without releasing it for reuse (`os.waitid`'s own `WNOWAIT`), and `release` performs
+the real release later, once nothing will ever peek or wait on that pid again --
+closing the raw pid-reuse hazard a plain, unconditional reap left open for a pid
+teardown's own ladder still needs to check again after observing it exited.
+`group_alive`'s own `held` parameter and `group_alive_deadline` are the group-level
+counterpart: a deliberately held, peeked-not-released zombie must not itself read as
+"this group is still alive."
 """
 
 import errno
@@ -15,9 +24,11 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-_REAP_POLL_INTERVAL_S = 0.01
-"""How often a deadline-bound wait re-checks `os.waitpid` -- short enough that a
-deadline is honoured close to when it passes, long enough not to spin the CPU.
+_POLL_INTERVAL_S = 0.01
+"""How often a deadline-bound wait re-checks its condition -- short enough that a
+deadline is honoured close to when it passes, long enough not to spin the CPU. Shared
+by `reap_deadline` (polls `os.waitpid`) and `group_alive_deadline` (polls `peek` and
+`group_alive`): the same tradeoff, not two independently tuned numbers.
 """
 
 _FD_SCAN_CAP = 4096
@@ -202,10 +213,10 @@ class SpawnedProcess:
 
 @dataclass(frozen=True)
 class ProcessUnknown:
-    """Sentinel `reap` and `reap_deadline` return in place of an exit code when `pid`
-    is no longer this process's child to wait for at all (`ECHILD`): something else --
-    another `reap`, `reap_nowait` or `reap_deadline` call that ran first, or an
-    embedder that reaps its own children -- already collected it, and its exit code
+    """Sentinel `reap`, `reap_deadline` and `peek` return in place of an exit code
+    when `pid` is no longer this process's child to wait for at all (`ECHILD`):
+    something else -- another `reap`/`reap_deadline`/`peek` call, a `release`, or an
+    embedder that reaps its own children -- already released it, and its exit code
     cannot be recovered now.
 
     Kept distinct from `reap_deadline`'s `None`, which means something else entirely:
@@ -406,11 +417,11 @@ def reap(pid: int) -> int | ProcessUnknown:
 
     Returns:
         `ProcessUnknown` instead, without blocking, if `pid` is no longer this
-        process's child to wait for at all (`ECHILD`). This can happen to a jail's
-        leader whose group outlives it: an earlier, non-blocking `reap_nowait` call
-        (teardown's `Verify` runs one ahead of every check) may already have
-        collected it before this call runs (TASK-0001.06 review) -- a race to report,
-        not a reason to let the raw `ChildProcessError` escape.
+        process's child to wait for at all (`ECHILD`). This can happen when an
+        earlier `release` call (teardown's own terminal step, decision-0003) or an
+        embedder's own reap already collected it before this call runs
+        (TASK-0001.06 review) -- a race to report, not a reason to let the raw
+        `ChildProcessError` escape.
     """
     try:
         _, status = os.waitpid(pid, 0)
@@ -449,7 +460,7 @@ def reap_deadline(pid: int, deadline: float) -> int | None | ProcessUnknown:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return None
-        time.sleep(min(_REAP_POLL_INTERVAL_S, remaining))
+        time.sleep(min(_POLL_INTERVAL_S, remaining))
 
 
 def signal_group(pgid: int, sig: signal.Signals) -> None:
@@ -477,50 +488,183 @@ def signal_group(pgid: int, sig: signal.Signals) -> None:
         pass
 
 
-def reap_nowait(pid: int) -> int | None:
-    """Collect `pid`'s exit status if it has already exited, without blocking.
+def _exitcode_from_siginfo(info: os.waitid_result) -> int:
+    """Convert a `os.waitid` siginfo result to `os.waitstatus_to_exitcode`'s own
+    convention: the exit code for a process that exited normally, the negative of
+    the signal number for one a signal killed.
 
-    Teardown's verify calls this ahead of `group_alive` so an exited-but-unreaped
-    process (a zombie, counted alive by any plain existence check) is collected and
-    freed before that check runs, rather than answering "alive" forever. Returns the
-    exit code `os.waitstatus_to_exitcode` reports for `pid` if it had already exited
-    and this call is what collected it; `None` if it is still running, or if `pid` is
-    no longer this process's child to wait for at all (`ECHILD`: something else --
-    `reap` itself, on an earlier verify -- already collected it).
+    `waitid`'s own `si_status`/`si_code` is a different shape from `waitpid`'s raw
+    status word, so `os.waitstatus_to_exitcode` -- built for the latter -- cannot be
+    handed the former directly; this is the one place that does the translation by
+    hand, for every caller below that uses `WEXITED` through `waitid` instead of a
+    plain `waitpid`.
+    """
+    if info.si_code == os.CLD_EXITED:
+        return info.si_status
+    return -info.si_status
+
+
+def peek(pid: int) -> int | None | ProcessUnknown:
+    """Observe whether `pid` has exited, without releasing its pid for reuse.
+
+    `os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)` (decision-0003):
+    `WNOWAIT` reports a zombie's exit status without consuming it -- a later `peek`,
+    or the real release (`release`, below), can still observe or collect it -- and
+    `WNOHANG` keeps this non-blocking, since the caller (teardown's `Verify`) must
+    not block on a jailed process that may never exit on its own.
+
+    Returns:
+        The exit code `_exitcode_from_siginfo` reports for `pid`, if it has already
+        exited. `None` if it is still running. `ProcessUnknown` instead -- never
+        `None` -- if `pid` is no longer this process's child to wait for at all
+        (`ECHILD`): something else already released it, so no later peek or release
+        will ever observe it either.
     """
     try:
-        reaped_pid, status = os.waitpid(pid, os.WNOHANG)
+        info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
     except ChildProcessError:
+        return ProcessUnknown()
+    if info is None:
         return None
-    if reaped_pid == 0:
-        return None
-    return os.waitstatus_to_exitcode(status)
+    return _exitcode_from_siginfo(info)
 
 
-def group_alive(pgid: int) -> bool:
-    """Report whether any process in the group `pgid` is still alive.
+def release(pid: int) -> None:
+    """Release `pid`'s exit status for real, so the OS is free to reuse its pid.
 
-    Signals the whole group with `0`, which sends nothing but still raises an
-    exception once no member answers to it -- `killpg(2)`'s own way to probe a group
-    without acting on it. Sound for any number of members, unlike probing one pid;
-    still answers `True` for a pid whose sole process is a zombie, which is why
-    `reap_nowait` runs first wherever this does.
+    The second half of decision-0003's peek-before-release split: a caller that has
+    already observed `pid` exited through `peek` (or otherwise knows nothing will
+    ever need to peek it again) calls this once teardown's own ladder is done with
+    it, so a pid is never left a zombie forever but also never released -- and so
+    reusable -- before every check that needed its identity stable has finished.
 
-    The OS answers that "nothing left to signal" case with `ProcessLookupError`
+    `os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG)`: no `WNOWAIT`, so a pending
+    zombie is actually collected, not merely observed; `WNOHANG` keeps this safe to
+    call even where `pid` has not actually exited yet (nothing to release yet, so
+    this is a no-op rather than a block) -- a caller that releases unconditionally
+    once its own ladder ends, win or lose, must never hang on a process that is
+    still genuinely running.
+
+    A no-op, silently, if `pid` is no longer this process's child to wait for at all
+    (`ECHILD`: something else already released it) -- release is idempotent, since
+    nothing further needs this call to report anything once nothing is left to
+    release (decision-0001 rules 1 and 9: infra hands back plain data only, never
+    raises).
+    """
+    try:
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG)
+    except ChildProcessError:
+        pass
+
+
+def _group_alive_proc_scan(pgid: int, held: frozenset[int]) -> bool:
+    """Linux's own per-member answer to `group_alive`, for when `held` is non-empty:
+    report whether anything in the group `pgid` *other than* a pid in `held` is
+    still alive.
+
+    `killpg(pgid, 0)` cannot make this distinction on Linux (decision-0003's own
+    measurement: it answers "exists" identically for a group that is nothing but
+    zombies and one with a genuinely alive member) -- enumerating `/proc` by hand is
+    the one portable way to ask "which pids report this pgid, and which of those are
+    not zombies," excluding the pid(s) a caller already knows are deliberately held.
+
+    Reads `/proc/<pid>/stat` for every numeric entry of `/proc`, splitting each line
+    on its *last* `)` -- `comm`, the field just before it, can itself contain parens,
+    so only the last one is guaranteed to be the real field separator -- and reads
+    state, ppid, pgrp as the first three whitespace-separated fields after that.
+    Swallows `FileNotFoundError`/`ProcessLookupError`/`PermissionError` for any one
+    entry: a process can exit mid-scan, or belong to another user whose `/proc`
+    entry this one cannot read fully, and neither should fail the whole scan.
+    """
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        candidate = int(name)
+        if candidate in held:
+            continue
+        try:
+            with open(f"/proc/{name}/stat") as handle:
+                stat_line = handle.read()
+        except FileNotFoundError, ProcessLookupError, PermissionError:
+            continue
+        _, _, rest = stat_line.rpartition(")")
+        fields = rest.split()
+        state, candidate_pgid = fields[0], fields[2]
+        if int(candidate_pgid) == pgid and state != "Z":
+            return True
+    return False
+
+
+def group_alive(pgid: int, held: frozenset[int] = frozenset()) -> bool:
+    """Report whether anything in the group `pgid`, other than a pid named in
+    `held`, is still alive.
+
+    Signals the whole group with `0` by default (`killpg(pgid, 0)`, which sends
+    nothing but still raises an exception once no member answers to it -- `killpg`'s
+    own way to probe a group without acting on it). Sound for any number of
+    members, unlike probing one pid; still answers `True` for a pid whose sole
+    process is a zombie, which is why `peek` runs first wherever this does, and
+    `held` names whichever pid that peek found already exited -- a deliberately
+    held zombie must not itself read as "alive" (decision-0003).
+
+    The OS answers `killpg`'s "nothing left to signal" case with `ProcessLookupError`
     (ESRCH) when the group has fully vanished, but, measured on this host (macOS,
     Darwin 27; TASK-0001.08), can instead answer `PermissionError` (EPERM): between a
     leader's exit and pid 1 reaping the group member it leaves behind, a probe of
-    that zombie gets a permission answer rather than ESRCH, for a `pgid` this process
-    spawned moments earlier and still owns -- not another process reusing the pgid.
-    The group is, for every purpose this probe exists to answer, gone either way, so
-    every `OSError` the probe can raise -- not only the two measured here -- answers
-    `False`, the same plain-data shape `ProcessLookupError` already did: this is
-    infra, which hands back plain data only and never raises (decision-0001 rules 1
-    and 9), so nothing this probe can hit may escape as a raised exception instead of
-    an answer.
+    that zombie gets a permission answer rather than ESRCH. **Both still mean "gone"
+    on macOS, including once a member is held** -- decision-0003's own mixed-case
+    measurement (a held zombie leader alongside a genuinely-alive backgrounded
+    sibling) found `killpg`'s EPERM narrower than first assumed: it appears only
+    once the *entire* group has nothing left but zombies, not whenever any one
+    member happens to be held. **Linux's `killpg` makes no such distinction at
+    all** -- it answers "exists" the same way for an all-zombie group and a
+    genuinely alive one, with nothing here to tell them apart -- so once `held` is
+    non-empty this function instead asks `_group_alive_proc_scan` there, falling
+    back to the `killpg` probe wherever `/proc` itself does not exist (any other
+    platform, including macOS, where `held` is accordingly never consulted; TASK-
+    0001.12's own lesson: ask by trying, never branch on `sys.platform`). Every
+    `OSError` the `killpg` probe can raise -- not only the two measured here --
+    answers `False`: this is infra, which hands back plain data only and never
+    raises (decision-0001 rules 1 and 9).
     """
+    if held:
+        try:
+            return _group_alive_proc_scan(pgid, held)
+        except FileNotFoundError:
+            pass
     try:
         os.killpg(pgid, 0)
     except OSError:
         return False
     return True
+
+
+def group_alive_deadline(pid: int, pgid: int, deadline: float) -> bool:
+    """Poll `group_alive` until it reports gone, or `time.monotonic()` passes
+    `deadline`.
+
+    The kill ladder's post-KILL rung needs this, not a single immediate
+    `group_alive` call (TASK-0001.07): `SignalKind.KILL` cannot be caught or
+    ignored, but the kernel finishing what it started is not instantaneous, and a
+    `Verify` run the instant after can still -- correctly, not as a bug -- see the
+    group alive for a few more moments. Bounded, not open-ended, the same way
+    `reap_deadline` bounds a wait that would otherwise block forever.
+
+    Peeks `pid` (the group's leader) ahead of every `group_alive` call, exactly as
+    `Verify`'s own immediate check does, so a leader that exits partway through this
+    poll is excluded from the very next iteration's answer rather than counted alive
+    forever as an unreaped zombie.
+
+    Returns:
+        `False` as soon as `group_alive` reports the group gone. `True` once
+        `deadline` passes with `group_alive` still reporting something alive.
+    """
+    while True:
+        outcome = peek(pid)
+        held = frozenset({pid}) if isinstance(outcome, int) else frozenset()
+        if not group_alive(pgid, held):
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+        time.sleep(min(_POLL_INTERVAL_S, remaining))

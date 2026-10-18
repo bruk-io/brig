@@ -44,6 +44,14 @@ def test_bwrap_walking_skeleton_runs_true_and_tears_down_clean() -> None:
     assert processes.reaped_deadline == []
     # Teardown's own ladder is unchanged: it still verifies and (if needed) signals
     # the jail's one process -- the supervisor's pid/pgid now, not the real
-    # command's.
+    # command's. `FakeProcesses.leader_exited` defaults to `False` here (nothing
+    # arranges the supervisor as a peeked, held zombie), so the one Verify's own
+    # peek excludes nothing (`held == frozenset()`) and its answer comes straight
+    # from `alive` -- still `False` by default, so the group reads gone at once.
+    assert processes.peek_attempts == [jail.process.pid]
     assert processes.checked == [jail.process.pgid]
+    assert processes.checked_held == [frozenset()]
     assert processes.signalled == []
+    # decision-0003/TASK-0013: the ladder's terminal step releases the supervisor's
+    # pid exactly once, even on this already-gone, never-signalled path.
+    assert processes.released == [jail.process.pid]

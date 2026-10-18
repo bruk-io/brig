@@ -17,10 +17,18 @@ path's counterparts to `Spawn` and `Reap`: once a supervisor is PID 1 inside the
 namespace, the host starts and waits on that one supervisor instead of spawning the
 real command directly and tracking its process group from outside. `operations.py`'s
 `create`/`start` yield these two for the normal path now (step 4); `Spawn`/`Reap` stay
-named here for `teardown.py`'s own unchanged use of `Reap`, and for whatever jail type
-or test still drives the direct-spawn shape by hand. Anything past that -- channels, the
-full teardown ladder -- is a later slice's addition to this module, not a reason to
-over-build it now.
+named here for whatever jail type or test still drives the direct-spawn shape by hand
+-- `teardown.py` no longer yields `Reap` itself (decision-0003/TASK-0013, below).
+
+decision-0003/TASK-0013: `Verify`'s own `deadline`, mirroring `Reap`'s, lets the kill
+ladder's post-KILL rung poll group-liveness for a bounded grace window (TASK-0001.07)
+instead of relying on an immediate check right after a blocking `Reap` of the leader --
+the barrier `Reap` provided there assumed a single-process jail and no longer holds for
+one leader outliving its group. `Release` is the new terminal step a ladder yields once
+it is done checking a pid for good, pairing with `infra/processes.py`'s own `peek`/
+`release` split: `Verify`'s own check (peeking, never releasing) must not be the thing
+that frees a pid for reuse, so something else -- this effect -- has to, exactly once,
+after the ladder's last word on it.
 """
 
 from dataclasses import dataclass
@@ -129,14 +137,20 @@ class Reap:
 
     A driver performs this by waiting on `process.pid` and sends back the exit
     code as an `int`, if it exits. Leave `deadline` unset where the wait is
-    already bounded some other way (the teardown ladder's post-KILL reap,
-    bounded by KILL itself); where nothing else bounds it, set `deadline` to a
-    `time.monotonic()` timestamp, and the driver sends back `None` instead if
+    already bounded some other way; where nothing else bounds it, set `deadline`
+    to a `time.monotonic()` timestamp, and the driver sends back `None` instead if
     the clock reaches it before the process exits -- the caller decides what a
     `None` means (an operation turns it into a brig error; this module only
     names the shape). Either way, the driver sends back `ExitCodeUnknown` instead if
     the process is no longer this program's child to wait for at all: nothing can
     recover its exit code now, regardless of whether `deadline` was set.
+
+    `teardown.py`'s own ladder no longer yields this (decision-0003/TASK-0013: its
+    post-KILL rung now polls `Verify`'s own `deadline` instead of blocking on the
+    leader's `Reap` as a synchronization barrier, which stopped being sound once the
+    leader could already be gone while the rest of its group was not). `Spawn`'s own
+    counterpart to this effect, for whatever jail type or test still drives the
+    direct-spawn shape by hand.
     """
 
     process: Process
@@ -161,8 +175,8 @@ class AwaitSupervisorDone:
     the supervisor named by `process` -- through `infra/supervisor/link.py`'s wire
     protocol, not a direct OS wait on the real command itself -- and sends back an
     `ExitOutcome`. Unlike `Reap`, where `deadline` is optional because some waits are
-    already bounded another way (the teardown ladder's post-KILL reap), nothing else
-    bounds this wait, so `deadline` is required here: every `AwaitSupervisorDone`
+    already bounded another way, nothing else bounds this wait, so `deadline` is
+    required here: every `AwaitSupervisorDone`
     names a `time.monotonic()` timestamp past which the driver gives up and sends back
     `None` instead of blocking forever on a supervisor that never reports done.
 
@@ -190,13 +204,43 @@ class Verify:
     """Ask whether any process of a group is still alive.
 
     A driver performs this by checking `process.pgid` and sends back a
-    `GroupState`.
+    `GroupState`. Leave `deadline` unset for an immediate, single check -- the
+    ladder's first two rungs, before and after `SignalKind.TERM`. Set it to a
+    `time.monotonic()` timestamp for a bounded poll instead, the same vocabulary
+    `Reap`'s own `deadline` already uses: the post-KILL rung's grace window
+    (TASK-0001.07), where `SignalKind.KILL` cannot be caught or ignored but the
+    kernel finishing what it started is not instantaneous, so an immediate check
+    right after can still -- correctly -- see the group alive for a few more
+    moments. Either way, a driver's own check peeks the group's leader first
+    (`infra/processes.py`'s `peek`) and excludes it from what "alive" means for
+    that one check once it has already exited, deliberately held rather than
+    released (decision-0003) -- this effect carries no field for that; it is how a
+    driver performs the check, not a fact `teardown.py`'s own ladder needs to track
+    from one `Verify` to the next.
+    """
+
+    process: Process
+    deadline: Deadline | None = None
+
+
+@dataclass(frozen=True)
+class Release:
+    """Release a process's pid for real, once a ladder is done checking it for
+    good -- win or lose, the last word on it either way.
+
+    A driver performs this by releasing `process.pid` (`infra/processes.py`'s
+    `release`) and sends back `None`. Pairs with `Verify`'s own peek-not-release
+    check (decision-0003): nothing else in the ladder ever frees this pid for
+    reuse, so something has to, exactly once, after the ladder's last `Verify` --
+    whichever `GroupState` it found.
     """
 
     process: Process
 
 
-type Effect = Spawn | StartSupervisedCommand | Reap | AwaitSupervisorDone | SignalGroup | Verify
+type Effect = (
+    Spawn | StartSupervisedCommand | Reap | AwaitSupervisorDone | SignalGroup | Verify | Release
+)
 """The closed set an operation or teardown generator may yield.
 
 Every ``match`` on a yielded effect -- in a driver, or in a unit test driving the

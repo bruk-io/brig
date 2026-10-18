@@ -32,39 +32,51 @@ class FakeProcesses:
     """A fake of the world `brig.presentation.ports.ProcessPort` asks infra for.
 
     Records every call in its own state -- never touches a real process. `spawn`
-    hands back a fabricated identity built from `next_pid`; `reap`, `reap_deadline` and
-    `reap_nowait` all report `exit_code` for whichever pid they are asked about, except
+    hands back a fabricated identity built from `next_pid`; `reap` and `reap_deadline`
+    both report `exit_code` for whichever pid they are asked about, except
     `reap_deadline`, which reports `None` instead while `expires` is `True` -- a test's
     way to arrange a deadline-bound wait that expires rather than collecting the
     process (TASK-0001.06). `group_alive` reports `alive`, so a test can arrange a jail
     whose process already exited on its own (the walking skeleton's `true`) by leaving
     it at the default `False`, or one teardown must signal by setting it `True`.
+    `group_alive_deadline` (decision-0003/TASK-0013) answers the same way as one more
+    `group_alive` call -- a fake never actually polls or sleeps.
 
-    `process_unknown`, while `True`, has `reap` and `reap_deadline` both report
-    `ProcessUnknown` instead of `exit_code` (or, for `reap_deadline`, `None`) -- a
-    test's way to arrange the process being no longer this program's child to wait
-    for at all (`ECHILD`: something else already collected it), the race TASK-0001.06's
+    `process_unknown`, while `True`, has `reap`, `reap_deadline` and `peek` all report
+    `ProcessUnknown` instead of `exit_code` (or, for `reap_deadline`/`peek`, `None`) --
+    a test's way to arrange the process being no longer this program's child to wait
+    for at all (`ECHILD`: something else already released it), the race TASK-0001.06's
     review found (`reap` leaking a raw `ChildProcessError`, `reap_deadline` reporting
-    it as an ordinary deadline expiry). `alive_checks` has `group_alive` report `True`
-    for that many calls before falling back to `alive` -- a test's way to arrange a
-    jail whose leader exits (and is collected) before the rest of its group does, the
-    same review's other finding: the ladder stays on `alive` through more `Verify`
-    calls than a leader-only group would need, then finally sees the group gone.
+    it as an ordinary deadline expiry). `leader_exited`, while `True` and
+    `process_unknown` is not, has `peek` report `exit_code` instead of `None` -- a
+    test's way to arrange the ladder's leader having already exited and sitting as a
+    deliberately held (peeked, not released) zombie throughout, which a driver then
+    excludes from every `group_alive`/`group_alive_deadline` check it makes
+    (decision-0003) -- a test's way to arrange a jail whose leader exits before the
+    rest of its group does, TASK-0001.06's other review finding. `alive_checks` has
+    `group_alive` report `True` for that many calls before falling back to `alive` --
+    together with `leader_exited`, a test's way to arrange the ladder staying on
+    `alive` through more `Verify` calls than a leader-only group would need, then
+    finally seeing the group gone.
     """
 
     exit_code: int = 0
     alive: bool = False
     expires: bool = False
     process_unknown: bool = False
+    leader_exited: bool = False
     alive_checks: int = 0
     next_pid: int = 1000
     spawned: list[tuple[str, ...]] = field(default_factory=list)
     spawned_inheritable_fds: list[tuple[int, ...]] = field(default_factory=list)
     reaped: list[int] = field(default_factory=list)
     reaped_deadline: list[tuple[int, float]] = field(default_factory=list)
-    reap_nowait_attempts: list[int] = field(default_factory=list)
+    peek_attempts: list[int] = field(default_factory=list)
+    released: list[int] = field(default_factory=list)
     signalled: list[tuple[int, signal.Signals]] = field(default_factory=list)
     checked: list[int] = field(default_factory=list)
+    checked_held: list[frozenset[int]] = field(default_factory=list)
+    checked_deadline: list[tuple[int, int, float]] = field(default_factory=list)
 
     def spawn(self, argv: tuple[str, ...], inheritable_fds: tuple[int, ...]) -> _SpawnedProcess:
         """Record `argv` and hand back a fabricated process identity.
@@ -100,18 +112,37 @@ class FakeProcesses:
         """Record the signal sent to `pgid`."""
         self.signalled.append((pgid, sig))
 
-    def reap_nowait(self, pid: int) -> int | None:
-        """Record `pid`; report `exit_code` collected, or `None` while still `alive`."""
-        self.reap_nowait_attempts.append(pid)
-        return None if self.alive else self.exit_code
+    def peek(self, pid: int) -> int | None | ProcessUnknown:
+        """Record `pid`; report `ProcessUnknown` while `process_unknown`, `exit_code`
+        while `leader_exited`, or `None` otherwise (still running).
+        """
+        self.peek_attempts.append(pid)
+        if self.process_unknown:
+            return ProcessUnknown()
+        return self.exit_code if self.leader_exited else None
 
-    def group_alive(self, pgid: int) -> bool:
-        """Record `pgid`; report `True` for `alive_checks` calls, then `alive`."""
+    def release(self, pid: int) -> None:
+        """Record `pid`."""
+        self.released.append(pid)
+
+    def group_alive(self, pgid: int, held: frozenset[int] = frozenset()) -> bool:
+        """Record `pgid` and `held`; report `True` for `alive_checks` calls, then
+        `alive`.
+        """
         self.checked.append(pgid)
+        self.checked_held.append(held)
         if self.alive_checks > 0:
             self.alive_checks -= 1
             return True
         return self.alive
+
+    def group_alive_deadline(self, pid: int, pgid: int, deadline: float) -> bool:
+        """Record `(pid, pgid, deadline)`; answer the same way one more `group_alive`
+        call would -- a fake never actually polls or sleeps.
+        """
+        self.checked_deadline.append((pid, pgid, deadline))
+        held = frozenset({pid}) if self.leader_exited and not self.process_unknown else frozenset()
+        return self.group_alive(pgid, held)
 
 
 @dataclass(frozen=True)

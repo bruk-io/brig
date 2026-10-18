@@ -8,8 +8,9 @@ lives in `presentation/drivers/bwrap.py`.
 TASK-0001.15 step 4: `create`/`start` yield `StartSupervisedCommand`/
 `AwaitSupervisorDone` now, in place of the direct `Spawn`/`Reap` shape the walking
 skeleton used -- the jail's one process is its supervisor (decision-0002). `destroy`
-is unchanged: teardown's `Verify`/`SignalGroup`/`Reap` ladder works the same whichever
-kind of process `Process` names.
+works the same whichever kind of process `Process` names: teardown's `Verify`/
+`SignalGroup`/`Release` ladder (decision-0003/TASK-0013) only ever reads `process`'s
+`pid`/`pgid`, never anything specific to how it was started.
 """
 
 from collections.abc import Generator
@@ -97,10 +98,12 @@ def start(process: Process, *, deadline: Deadline) -> Generator[Effect, Any, Exi
     return (yield from _await_supervisor_done(process, deadline))
 
 
-def destroy(process: Process) -> Generator[Effect, Any, GroupState]:
+def destroy(process: Process, *, deadline: Deadline) -> Generator[Effect, Any, GroupState]:
     """Tear the jail down, verified: no process of its group is left after.
 
     Delegates to `domain/teardown.py`'s ladder (verify, escalating signals, verify
-    after each) and returns whatever `GroupState` its final verify found.
+    after each) and returns whatever `GroupState` its final verify found. `deadline`,
+    a `time.monotonic()` timestamp, bounds the post-KILL rung's grace-window poll
+    (TASK-0001.07) -- domain does no I/O (rule 2), so the caller computes it.
     """
-    return (yield from _teardown.teardown(process))
+    return (yield from _teardown.teardown(process, deadline=deadline))
