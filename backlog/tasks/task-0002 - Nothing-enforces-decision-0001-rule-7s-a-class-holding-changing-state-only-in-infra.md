@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0006
+id: TASK-0002
 title: >-
   Nothing enforces decision-0001 rule 7's 'a class holding changing state only
   in infra/'
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-17 22:57'
 labels: []
