@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 12:55'
-updated_date: '2026-10-18 13:29'
+updated_date: '2026-10-18 13:31'
 labels:
   - brig
   - size-2
@@ -107,4 +107,14 @@ gates+done green with only this task's diff applied, then restored the stash
 untouched.
 
 Modified files: tests/e2e/test_tiocsti_battery.py, tests/unit/test_bwrap_compile.py
+
+Fixed the drift: added `--as-pid-1` to `_BWRAP_ARGV_PREFIX` (tests/e2e/test_tiocsti_battery.py) between `--new-session` and `--`, matching `_NAMESPACE_FLAGS` in src/brig/domain/jail_types/bwrap.py. Rewrote the constant's docstring to cite the real names (`_NAMESPACE_FLAGS`, `_compile_binds`) instead of the removed `_BWRAP_ARGV`, and to point at the new fidelity test below instead of claiming the drift goes uncaught.
+
+Built the fidelity assertion in tests/unit/test_bwrap_compile.py (not tests/integration/: decision-0001 rule 4's own pypeeker check, _unit_test_violations in pypeeker_rules/brig.py, restricts tests/unit to `brig.domain` imports only, while tests/integration is restricted to the public API + tests.integration.fakes -- it cannot import `brig.domain` at all, so a test needing compile_supervisor_launch directly belongs in tests/unit, not tests/integration, despite the plan's 'unit or integration' phrasing). test_e2e_tiocsti_battery_bwrap_argv_prefix_matches_compile_supervisor_launch imports _BWRAP_ARGV_PREFIX from tests/e2e/test_tiocsti_battery.py (a test-to-test import, not a `brig` import, so it isn't the thing rule 4's unit clause restricts) and asserts it equals compile_supervisor_launch's real output up to the supervisor path. Filed DRAFT-0013 on the open question this import brushes: rule 4's unit clause and rule 6 (no reaching into another module's _names) are both scoped to `brig`-package imports in their pypeeker implementations and don't reach test-to-test imports, so this import is unchecked rather than explicitly blessed -- not blocking, since the task's own plan authorized a unit-or-integration test here either way.
+
+Proved the check discriminates: temporarily stripped `--as-pid-1` back out of _BWRAP_ARGV_PREFIX, ran the new test, watched it fail (AssertionError: 'At index 7 diff: --as-pid-1 != --'), then restored the fix and reran green.
+
+Confirmed --as-pid-1 doesn't affect session/terminal semantics rather than asserting it: ran tests/e2e/test_tiocsti_battery.py for real on Linux in brig-probe-amd64:latest (privileged, bwrap present). All three non-skipped tests passed, including test_new_session_is_the_sole_closer_of_tiocsti_when_infra_detaches_no_session -- both differential arms now carry --as-pid-1 (it's in the real argv unconditionally) and differ only in --new-session, with the with-new-session arm denied and the without-new-session arm injecting, exactly as before --as-pid-1 existed. That's a direct measurement, not an inference, that --as-pid-1 doesn't touch the TIOCSTI/session path, so TASK-0001.11's attribution is unaffected.
+
+Verification note on just gates/done: a second, concurrent task (TASK-0006, run by teammate implement-supervisor-assembly) is mid-edit in this same shared working tree on src/brig/domain/jail_types/bwrap.py (adding a required state_dir parameter to compile_supervisor_launch) and a new, not-yet-gates-clean src/brig/infra/state_dir.py. That in-progress work currently makes just gates/done red for reasons unrelated to TASK-0009 (an over-exposed-module-symbol finding in their new module, and a TypeError in the two pre-existing compile_supervisor_launch tests from their new required kwarg). I verified this task's own two files in isolation: git stash push -u on every file touched by that other task, confirmed `just gates` (exit 0) and `just done` ('all steps passed') with only tests/e2e/test_tiocsti_battery.py and tests/unit/test_bwrap_compile.py modified, then git stash pop to restore their in-progress work unchanged. Flagged both agents (my message, their ack) that compile_supervisor_launch's state_dir change will need a matching --ro-bind <state_dir> <state_dir> triple added to _BWRAP_ARGV_PREFIX and state_dir=... added to the three call sites in tests/unit/test_bwrap_compile.py, and asked them not to loosen the new fidelity assertion to work around it.
 <!-- SECTION:NOTES:END -->
