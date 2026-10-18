@@ -3,7 +3,7 @@ id: TASK-0005
 title: >-
   infra.processes.spawn: a relocated source fd can land on one of fds's own
   target numbers and then be closed before exec
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 08:22'
@@ -211,4 +211,6 @@ Resolution for whoever owns the sequencing: TASK-0005's hunks should land as par
 `probe_fd = os.dup(0)` returns the lowest free fd, so every fd in `[3, next_fd)` is already open by construction; `os.fstat` succeeds on all of them and `filled` is always empty. The test is genuinely deterministic -- but because of the `os.dup(0)` probe plus POSIX lowest-free allocation across the two `os.pipe()` calls, not because the helper forces anything. AC#2 still holds (the discrimination is measured, above), but the module docstring and the helper's own docstring both describe work the helper cannot perform.
 
 No repro: the fix and its regression test (tests/e2e/test_spawn_fd_redirection_collision.py) were authored and committed together in one commit (a485ee1), alongside TASK-0001.15/.16/.17/TASK-0004, with which this file is also textually entangled -- there is no earlier commit where the test exists against still-buggy code to run record-check --repro against. The failure was nonetheless genuinely demonstrated, independently, twice: once by the implementing agent (reconstructed the pre-fix _resolve_fd_sources/_fd_actions in a scratch file, swapped it in, observed OSError: Bad file descriptor) and again by the reviewer (reconstructed the same pre-fix code via monkeypatch rather than trusting the first account, observed the identical OSError and both assertions failing). Both are recorded in this task's own notes above.
+
+Independent review confirmed all 3 ACs genuinely met: fcntl.F_DUPFD(source, max(targets)+1) guarantees relocation never lands on a target number (checked three-target and self-collision shapes by hand); the reviewer independently reproduced the pre-fix failure by reconstructing the old os.dup/_fd_actions code and monkeypatching it in (OSError: Bad file descriptor, matching the measured signature exactly), confirmed the new e2e test catches it and passes after the fix; docstring's false os.dup claim is corrected. record-check --tier full: all steps passed, nothing reformatted. TASK-0004's oracle (/bin/echo hello through run_jail, real Linux+bwrap) re-verified returning 0 with this fix in place. The fix landed in one combined commit (a485ee1) together with TASK-0001.15/.16/.17/TASK-0004, since it is textually inseparable from TASK-0004's own fds-redirection feature. Non-blocking finding filed as a new DRAFT-0014 (number reused after the prior DRAFT-0014 promoted to this task): the regression test's _fill_fd_holes_below helper is dead code -- the test is still genuinely discriminating via the os.dup(0) probe plus POSIX lowest-free allocation, but two docstrings overclaim what the helper itself does.
 <!-- SECTION:NOTES:END -->
