@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0014
+id: TASK-0011
 title: >-
   tests/e2e/test_spawn_fd_redirection_collision.py: the os.dup(0) probe and the
   finally-block bare except are both dead
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-18 14:48'
 labels: []
