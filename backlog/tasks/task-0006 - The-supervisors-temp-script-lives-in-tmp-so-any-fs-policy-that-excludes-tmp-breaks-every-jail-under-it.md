@@ -45,9 +45,9 @@ Invisible on macOS: the test is skipif(shutil.which('bwrap') is None), so it ski
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [x] #1 The supervisor's script is reachable from inside the jail regardless of the caller's fs policy (e.g. the supervisor's own path is bound into the launch unconditionally, or the script is passed by a mechanism that does not depend on the policy's binds)
-- [x] #2 tests/e2e/test_fs_policy_battery.py::test_a_path_outside_the_policy_is_unreadable_in_a_real_bwrap_jail passes on real Linux, exiting 2 (ENOENT for the planted secret) rather than raising JailExitUnknown
-- [x] #3 A policy that excludes /tmp is covered by a test asserting the jail still starts, so this coupling cannot regress silently
+- [ ] #1 The supervisor's script is reachable from inside the jail under every fs policy, or the combination is refused loudly (a dedicated exception) before bwrap is ever invoked -- never a bare JailExitUnknown/JailTeardownFailed (narrowed from "regardless of the caller's fs policy": TASK-0001.22 found and fixed the one real counterexample, a read-only ancestor bind of the state dir lacking its own leaf, by refusing it loudly rather than making it unconditionally reachable)
+- [ ] #2 tests/e2e/test_fs_policy_battery.py::test_a_path_outside_the_policy_is_unreadable_in_a_real_bwrap_jail passes on real Linux, exiting 2 (ENOENT for the planted secret) rather than raising JailExitUnknown
+- [ ] #3 A policy that excludes /tmp is covered by a test asserting the jail still starts, so this coupling cannot regress silently
 <!-- AC:END -->
 
 ## Implementation Plan
