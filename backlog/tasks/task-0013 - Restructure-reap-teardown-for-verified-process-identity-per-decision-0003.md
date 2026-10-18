@@ -14,6 +14,9 @@ references:
   - >-
     backlog/decisions/decision-0003 -
     Verified-process-identity-across-reap-and-teardown-peek-before-reap-no-pidfd-no-per-platform-split.md
+  - >-
+    backlog/tasks/task-0001.07 -
+    Give-the-kill-ladders-post-KILL-verify-a-bounded-grace-period-for-multi-process-groups.md
 modified_files:
   - src/brig/infra/processes.py
   - src/brig/domain/effects.py
@@ -138,4 +141,6 @@ this plan -- reuse these exact mechanisms, don't rediscover them)
 finish-moved: created without acceptance criteria (a tool-sequencing artifact -- task create then a follow-up edit added them), then given its real ACs in the very next edit, drawn directly from decision-0003's own Consequences section. No scope added beyond what the decision already named; this is the task's first real shape, not a later narrowing or widening.
 
 finish-moved: AC#2 narrowed from 'both platforms, mixed case unverified on either' to 'Linux only' after directly measuring the mixed case (held zombie leader + genuinely-alive backgrounded sibling) against the real macOS group_alive: it already answers True correctly, no redesign needed there. This is the decision-0003 amendment recorded the same day, carried into this task's own ACs rather than left stale.
+
+finish-moved: AC#4 widened to fold in TASK-0001.07's own scope (a bounded post-KILL grace window), since it needs the same new group-liveness primitive this task already redesigns group_alive to build -- doing both in one pass avoids two redesigns of the same function back to back. TASK-0001.07 itself notes this folding and will close alongside this task.
 <!-- SECTION:NOTES:END -->
