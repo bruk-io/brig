@@ -152,6 +152,15 @@ os._exit({real_exit_code})
 """
     command = (sys.executable, "-I", "-c", forging_script)
     supervisors = link.LiveSupervisors(_SUPERVISOR_ARGV)
+    # Captured before the early check, not after: that check's own deadline
+    # already consumes forge_sleep_s / 4 of the process's real lifetime before
+    # `start` would otherwise be set, so measuring from here is what makes the
+    # margin below mean what it says -- a `start` captured after the early
+    # check was measured giving an elapsed ceiling of forge_sleep_s * 3/4,
+    # already below the old margin before any CI scheduling variance entered
+    # into it (measured on GitHub Actions: 0.395s, under the old 0.4s floor,
+    # for exactly this reason, not genuine CI slowness).
+    start = time.monotonic()
     supervisor = supervisors.start(command, ())
     try:
         # Asked for less time than the real command needs to actually finish: if
@@ -159,7 +168,6 @@ os._exit({real_exit_code})
         early = supervisors.await_done(supervisor.pid, time.monotonic() + forge_sleep_s / 4)
         assert early is None, f"a forged done event was trusted early: {early!r}"
 
-        start = time.monotonic()
         outcome = supervisors.await_done(supervisor.pid, time.monotonic() + 10.0)
         elapsed = time.monotonic() - start
         assert outcome == real_exit_code, f"expected the real exit code, got {outcome!r}"
@@ -205,6 +213,15 @@ os._exit({real_exit_code})
 """
     command = (sys.executable, "-I", "-c", forging_script)
     supervisors = link.LiveSupervisors(_SUPERVISOR_ARGV)
+    # Captured before the early check, not after: that check's own deadline
+    # already consumes forge_sleep_s / 4 of the process's real lifetime before
+    # `start` would otherwise be set, so measuring from here is what makes the
+    # margin below mean what it says -- a `start` captured after the early
+    # check was measured giving an elapsed ceiling of forge_sleep_s * 3/4,
+    # already below the old margin before any CI scheduling variance entered
+    # into it (measured on GitHub Actions: 0.395s, under the old 0.4s floor,
+    # for exactly this reason, not genuine CI slowness).
+    start = time.monotonic()
     supervisor = supervisors.start(command, ())
     try:
         # Asked for less time than the real command needs to actually finish: if
@@ -212,7 +229,6 @@ os._exit({real_exit_code})
         early = supervisors.await_done(supervisor.pid, time.monotonic() + forge_sleep_s / 4)
         assert early is None, f"a forged done event was trusted early: {early!r}"
 
-        start = time.monotonic()
         outcome = supervisors.await_done(supervisor.pid, time.monotonic() + 10.0)
         elapsed = time.monotonic() - start
         assert outcome == real_exit_code, f"expected the real exit code, got {outcome!r}"
