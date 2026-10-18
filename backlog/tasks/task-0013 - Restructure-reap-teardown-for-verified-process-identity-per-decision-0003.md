@@ -1,11 +1,11 @@
 ---
 id: TASK-0013
 title: 'Restructure reap/teardown for verified process identity, per decision-0003'
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 19:06'
-updated_date: '2026-10-18 19:51'
+updated_date: '2026-10-18 20:06'
 labels:
   - size-8
   - finish-moved
@@ -252,4 +252,37 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+Reviewed by philosophy:reviewer (did not do the work). Verdict: closes. All six ACs hold on evidence the reviewer re-measured independently, not on the worker's report -- two of the worker's own figures did not reproduce and are replaced below by measured ones.
+
+Checks, run by the reviewer. macOS: record-check --tier full -> 'done: all steps passed' (lint, typecheck, gates, pypeeker rule tests, unit, integration x2, e2e, docs, arch-validate, arch-lint), nothing reformatted or fixed by the run (git status identical before and after); full suite 101 passed, 17 skipped. Real Linux + real bwrap, fresh privileged brig-probe-amd64:latest, repo copied in and uv sync'd: ruff check + ruff format --check clean, mypy strict clean (62 files), pypeeker check --strict exit 0, and 'pytest tests pypeeker_rules/tests' -> 115 passed, 3 skipped (the three pre-existing measured skips). The note's own '56 passed, 3 skipped' Linux figure is an undercount of less than half; the measured result is stronger, not weaker.
+
+AC#1 (peek/release split, terminal release, closed-union discipline): met in substance, with a real and verified deviation from its literal text. reap/reap_deadline keep always-release mechanics; the reviewer re-ran the audit the plan called for and confirms the claim: after this change no production code yields Reap at all (the driver's Reap arm has no domain caller left -- operations.start yields AwaitSupervisorDone, teardown yields none), and every remaining reap/reap_deadline caller is e2e cleanup collecting an exit code, never a check-then-act on the same pid. The one named function teardown actually used, reap_nowait, is deleted outright rather than made to peek -- stronger than the AC asked. The terminal step is a new Release effect; the Effect union's single assert_never match site (presentation/drivers/bwrap.py, grep-confirmed as the only one) handles it and mypy strict is clean, so exhaustiveness is proven, not asserted.
+
+Release placement, traced on every path: teardown() yields Release(process) before all three returns -- early-GONE, post-TERM-GONE, post-KILL -- so no path peeks a pid it never releases. Release is idempotent (WNOHANG waitid, ECHILD swallowed), a no-op on a still-running process, and is yielded exactly once per path, so neither double-release nor release-of-a-never-peeked-pid is reachable. The early-GONE path does peek (the driver's Verify arm peeks unconditionally before every check) and does release the same pid; tests/integration/test_walking_skeleton.py pins it.
+
+The one place a subtle bug could have reopened the hazard -- held derived locally in the driver -- is correct: 'held = frozenset({process.pid}) if isinstance(outcome, int) else frozenset()'. The trap avoided here is a truthiness test: peek returns exit code 0 for the walking skeleton's own 'true', and 'if outcome:' would have stopped excluding the zombie in exactly the most common case. isinstance(int) keeps 0 held, and both None (still running) and ProcessUnknown (ECHILD) correctly yield an empty held. Measured on Linux against the real code: a genuinely-running leader gives peek=None, held=set(), group_alive=True -- never wrongly excluded, alone or alongside an already-exited sibling.
+
+AC#2 (Linux /proc scan), re-measured by the reviewer in brig-probe-amd64:latest against the real group_alive, not a probe script. Held zombie leader alone (pgid 805): group_alive(pgid, {pid}) -> [False]x5, group_alive(pgid, frozenset()) -> [True]x5 (decision-0003's bug, reproduced). Held zombie leader + genuinely-alive backgrounded sibling, sh -c 'sleep 5 & exit 7' (pgid 806): [True]x5 both ways. Exactly the two cases the AC names.
+
+AC#3: group_alive's docstring is substantively corrected, not reworded -- it now states that Linux's killpg makes no distinction at all between an all-zombie group and a live one, that the held branch is what covers it there, and that the /proc path is detected by trying it rather than branching on sys.platform.
+
+AC#4 (TASK-0001.07 fold-in): the grace window closes a real race, confirmed by the reviewer's own A/B through the real destroy_jail -- but the recorded figure does not reproduce and should not be trusted by a future reader. Linux, brig-probe-amd64:latest, reproduction argv /bin/sh -c "trap '' TERM; sleep 30 & exit 0", 200 iterations each: with NO pre-sleep, 200/200 JailTeardownFailed at kill_grace_s=0.0 versus 0/200 at the default. With a 0.03s or 0.05s pre-sleep, 0/N either way -- the pre-sleep hides the race on Linux entirely. macOS, 0.05s pre-sleep: 145/150 at kill_grace_s=0.0 versus 0/150 at the default. So the claimed '100/200 against this exact reproduction in brig-probe-amd64' is not reproducible for the shape it names; the effect itself is larger and more decisive than claimed, in a shape the note does not name. Filed as DRAFT-0016, below, because the permanent test inherits the problem.
+
+AC#5 (test rewrites): the three rewritten tests assert the new sequence genuinely, not a loosened one. test_teardown.py pins the exact list [Verify, SignalGroup(TERM), Verify, SignalGroup(KILL), Verify(deadline=...), Release] and the already-gone path's [Verify, Release]. test_walking_skeleton.py adds peek_attempts, checked_held == [frozenset()] and released == [pid]. test_teardown_leader_reaped_early.py drives the full three-rung ladder with leader_exited=True and pins released, checked, checked_held and one deadline-bound check. test_processes_gateway.py was not rewritten as AC#5 named, for the AC#1 reason above (its reap assertions were never contradicted, since reap did not change) -- documented in that file's own docstring, with four new tests for what did change.
+
+AC#6 and the new regression test: test_destroy_jail_does_not_misread_a_long_held_zombie_as_alive genuinely reproduces decision-0003's measured bug through the real destroy_jail entry point. The reviewer reconstructed the pre-fix behaviour on Linux by driving the same test through a ProcessPort that ignores held: JailTeardownFailed after 5.01s, failing the test's own elapsed < 1.0 assertion; against the real port, 0.06s and clean. It fails for the right reason and passes for the right reason. (It would not have failed against the code before this task, because the old Verify released the zombie -- the bug only exists under the peek design it guards, which is what makes it the right permanent test.)
+
+Repro recording: not required. Both tasks are task-type, not bug-type; board-check close returns ok for both with no repro finding.
+
+Findings, by severity, and what happened to each.
+1. (Medium, drafted as DRAFT-0016) The permanent grace-window test is vacuous on Linux, the one platform CI runs: test_destroy_jail_survives_the_leader_exiting_before_its_group sleeps 0.05s and gives 0/150 at kill_grace_s=0.0 there, so it would pass with the fix removed. It pins the fix on macOS only (145/150 -> 0/150). The draft carries the measured 200/200-at-no-sleep so the fix is one line.
+2. (Low, drafted as DRAFT-0015) _group_alive_proc_scan's parse can raise IndexError (fields[0]/fields[2] on an empty or truncated stat read) or ValueError (int() on a line with no ')'), escaping group_alive through the driver's deliberately-unwrapped Verify arm and crossing the public API as a non-brig exception -- the shape .claude/rules/driver-exception-boundary.md records escaping twice before. Not blocking: no instance measured, and bwrap.py's own docstring sets the bar at 'measured raising'.
+3. (Low, notes only) destroy_jail computes the deadline at entry, not at the post-KILL rung, so the window is kill_grace_s from destroy_jail's start. Three docstrings say 'once KILL is sent, that rung polls for up to this long'. The overstatement is microseconds in practice but the contract text is wrong.
+4. (Low, notes only) Two evidence figures in the implementation notes are inaccurate, both understating the result: '56 passed, 3 skipped' on Linux (measured 115 passed, 3 skipped) and the 100/200 grace-window figure above. Recorded here so the board carries the measured numbers.
+5. (Informational, notes only) modified_files lists 12 files; git status carries 13 -- the decision-0003 amendment file is not listed. board-check close does not flag it.
+6. (Informational, notes only) If the driver raises mid-ladder, the generator is abandoned and a peeked pid is never released. An exceptional path only, and no narrower than what the ladder did before.
+7. (Informational, notes only) On Linux the held branch treats other zombies in the group as gone while the killpg branch treats them as alive. The inconsistency is deliberate in effect and is what makes teardown terminate correctly against a reparented zombie sibling; worth stating in the docstring if anyone touches it.
+
+Not committed by this review: the 13 working-tree files are still uncommitted. The reviewer's own guardrail denies commands that change git history, so the commit is the caller's to make.
 <!-- SECTION:NOTES:END -->
