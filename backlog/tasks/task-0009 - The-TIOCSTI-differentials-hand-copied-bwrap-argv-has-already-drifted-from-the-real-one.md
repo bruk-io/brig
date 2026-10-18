@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 12:55'
-updated_date: '2026-10-18 13:31'
+updated_date: '2026-10-18 13:32'
 labels:
   - brig
   - size-2
@@ -116,6 +116,4 @@ state_dir change will need a matching --ro-bind <state_dir> <state_dir> triple
 added to _BWRAP_ARGV_PREFIX and state_dir=... added to the three call sites in
 tests/unit/test_bwrap_compile.py, and asked that the new fidelity assertion not
 be loosened to work around it.
-
-Modified files: tests/e2e/test_tiocsti_battery.py, tests/unit/test_bwrap_compile.py
 <!-- SECTION:NOTES:END -->
