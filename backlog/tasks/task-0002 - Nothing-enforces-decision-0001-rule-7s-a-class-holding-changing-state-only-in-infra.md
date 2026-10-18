@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@bruk'
 created_date: '2026-10-17 22:57'
-updated_date: '2026-10-18 04:38'
+updated_date: '2026-10-18 04:45'
 labels:
   - brig
   - size-2
@@ -271,4 +271,6 @@ Findings:
 
 The full-tier check this review ran is recorded above. The working-tree diff attributable to
 this task remains confined to pypeeker_rules/brig.py and pypeeker_rules/tests/test_brig_rules.py.
+
+No repro: this bug is a coverage gap (no rule part existed for rule 7's stateful-class clause), not a regression with a prior passing state in this commit's history. The rule and its planted-violation test (`test_brig_class_forms_fires_on_a_stateful_class_outside_infra`) were authored and committed together as one change, so there is no earlier commit to run that test against that would demonstrate the gap without reverting this fix itself -- doing so would exercise nothing about this fix's correctness beyond what the committed test suite (22 tests, including the two attribute-chain regression tests for the review's polarity finding) already covers.
 <!-- SECTION:NOTES:END -->
