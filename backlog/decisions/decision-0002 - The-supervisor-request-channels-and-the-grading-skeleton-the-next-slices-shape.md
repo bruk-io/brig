@@ -52,10 +52,14 @@ suggests:
    envelope, and egress — not ahead of everything: filesystem policy, environment scrubbing, and
    the grading skeleton (below) have no dependency on it and can proceed in parallel. Minimal
    first version: `infra/supervisor/wire.py` (newline-delimited JSON over a pipe: one exec
-   request in, a stream of `started`/`exited`/`done` events out), `program.py` (forks the real
-   command, reaps everything reparented to it as PID 1, reports `done` once nothing remains),
-   `link.py` (the host's end, using the existing `infra.processes.spawn` to start it — stdlib
-   only, assembled with `wire.py` into the one file dropped as PID 1, per rule 17). New domain
+   request in, a stream of `started`/`exited`/`done` events out) and `program.py` (forks the
+   real command, reaps everything reparented to it as PID 1, reports `done` once nothing
+   remains) assemble together, stdlib only, into the one file dropped as PID 1 inside the
+   jail, per rule 17. `link.py` is the host's end, using the existing `infra.processes.spawn`
+   to start that file — it runs in the library's own process, on the host side of the
+   boundary, and is never part of that assembly (TASK-0001.13's Container view caught this
+   ambiguous the first time it was drawn: `wire.py`/`program.py` cross into the new
+   `supervisor` container; `link.py` stays in `library`). New domain
    effects (`StartSupervisedCommand`, `AwaitSupervisorDone`) replace most of today's direct
    `Spawn`/`Reap`/`Verify` shape for the normal path; `SignalGroup` stays, since the supervisor
    still needs telling to shut its child down on TERM/KILL.
