@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0016
+id: TASK-0017
 title: >-
   The post-KILL grace window's permanent regression test is vacuous on Linux,
   the one platform CI runs
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-18 20:05'
 labels: []
