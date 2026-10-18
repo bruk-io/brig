@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0015
+id: TASK-0012
 title: >-
   A create_bwrap_jail failure after the supervisor script is written leaks it
   forever
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-18 16:16'
 updated_date: '2026-10-18 16:20'
