@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 12:55'
-updated_date: '2026-10-18 14:46'
+updated_date: '2026-10-18 14:49'
 labels:
   - brig
   - size-2
@@ -182,4 +182,19 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+Review (independent reviewer, did not do the work): both acceptance criteria are genuinely met, but the task does NOT close -- close-task refuses it, and the refusal is real, not a formality.
+
+Verified:
+- AC#1 by observation rather than by the worker's account: ran both sides of the fidelity assertion directly. tests/unit/test_bwrap_compile.py::test_e2e_tiocsti_battery_bwrap_argv_prefix_matches_compile_supervisor_launch compares _bwrap_argv_prefix('/s') to compile_supervisor_launch's real output for WHOLE_HOST_READ_ONLY: equal as written, and unequal when --as-pid-1 is removed from the copy. The check bites, it is not merely present. No e2e test imports a domain module; the import runs the other way.
+- AC#2: _NAMESPACE_FLAGS (line 86) and _compile_binds (line 171) both exist in src/brig/domain/jail_types/bwrap.py; the dead _BWRAP_ARGV citation is gone.
+- record-check --tier full: all steps passed; the check reformatted nothing.
+- DRAFT-0013 exists on the board as the notes claim.
+
+What stands in the way of closing:
+1. (blocking) A bug closes with a committed repro, and this task's repro test cannot be committed on its own. tests/unit/test_bwrap_compile.py and tests/e2e/test_tiocsti_battery.py now also carry TASK-0006's state_dir= threading and TASK-0001.22's covering_ancestor_bind tests, and TASK-0009's own hunks depend on unshipped source: the state-dir triple exists only because of the uncommitted change to src/brig/domain/jail_types/bwrap.py, and the e2e module imports the untracked src/brig/infra/state_dir.py. Committing these two files alone yields a tree that fails at import. No hunk staging and no touching another task's files was done. This closes as soon as TASK-0006 (and TASK-0001.22) land their source, at which point the repro can be recorded against a real commit.
+
+Other findings (neither blocks):
+2. (medium) The fidelity check inverts rule 4's unit clause: tests/unit/test_bwrap_compile.py now pulls brig, brig.infra.* and brig.presentation.* into a unit test's import graph through tests.e2e.test_tiocsti_battery's own 'from brig import ...'. brig-test-layers sees only direct brig.* imports, so it passes. Said in the reviewer's own voice: this is a real rule-4 departure the plan authorized, not merely 'unchecked'. DRAFT-0013 is already its home; no new draft filed.
+3. (low) tests/e2e/test_tiocsti_battery.py now imports two brig.infra modules (processes and state_dir); rule 4 allows one for a gateway test, and the count clause is unenforced. Arrived with TASK-0006's state-dir work but sits in this task's file. Joins DRAFT-0013's area rather than earning its own task.
 <!-- SECTION:NOTES:END -->
