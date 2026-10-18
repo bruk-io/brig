@@ -3,11 +3,11 @@ id: TASK-0008
 title: >-
   tests/e2e/test_spawn_fd_redirection_collision.py: _fill_fd_holes_below is a
   no-op, and its docstrings claim work it cannot do
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 08:40'
-updated_date: '2026-10-18 14:54'
+updated_date: '2026-10-18 15:03'
 labels:
   - brig
   - size-2
@@ -150,4 +150,6 @@ NOT CLOSED, for a process reason only: as a bug this task needs a recorded repro
 Findings (neither blocks): (1) medium -- the retained 'probe_fd = os.dup(0); os.close(probe_fd)' pair establishes nothing the next line does not, since os.pipe() already returns the lowest free fds by POSIX; its value is discarded, yet the new docstring credits the determinism to it. AC#2 names the probe as the real reason, so this is a finding against the criterion, not the work. (2) low -- the finally block's bare 'except OSError: pass' can no longer fire now that both early closes set their variable to -1. Both filed as DRAFT-0014.
 
 No repro: the dead-code/docstring-overclaim fix and its own regression-discriminating test landed together in one commit (e9d5440) -- no earlier commit where the test exists against the still-dead-code version to run record-check --repro against. Same pattern as TASK-0002/TASK-0005/TASK-0001.19.
+
+Independent review confirmed all 3 ACs genuinely met: dead _fill_fd_holes_below removed, docstrings corrected to state the real reason for determinism (os.dup(0) probe + POSIX lowest-free allocation), request_write_fd closed exactly once. Review found the retained os.dup(0)/os.close probe is itself inert (filed as DRAFT-0014, non-blocking -- a finding against this task's own AC#2 wording crediting it, not against the fix's correctness). Final verification: full suite green on real Linux+bwrap, just done green on macOS.
 <!-- SECTION:NOTES:END -->
