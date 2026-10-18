@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 17:30'
-updated_date: '2026-10-18 20:44'
+updated_date: '2026-10-18 20:55'
 labels:
   - brig
   - size-2
@@ -26,8 +26,8 @@ src/brig/infra/processes.py's spawn() docstring says 'Raises: SpawnError: argv[0
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 spawn()'s docstring states Linux's actual posix_spawnp behaviour for an unresolvable argv[0] (no raise; child exits 127) rather than claiming SpawnError covers it
-- [ ] #2 A decision is recorded on whether brig detects the shell-fallback/exit-127 shape explicitly, or accepts it, with the reasoning stated
+- [x] #1 spawn()'s docstring states Linux's actual posix_spawnp behaviour for an unresolvable argv[0] (no raise; child exits 127) rather than claiming SpawnError covers it
+- [x] #2 A decision is recorded on whether brig detects the shell-fallback/exit-127 shape explicitly, or accepts it, with the reasoning stated
 <!-- AC:END -->
 
 ## Implementation Plan
