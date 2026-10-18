@@ -14,7 +14,7 @@ labels:
 dependencies: []
 modified_files:
   - src/brig/infra/processes.py
-  - tests/unit/test_processes.py
+  - tests/e2e/test_spawn_fd_redirection_collision.py
 type: bug
 ---
 
