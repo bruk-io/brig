@@ -3,11 +3,18 @@ id: TASK-0009
 title: >-
   The TIOCSTI differential's hand-copied bwrap argv has already drifted from the
   real one
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-10-18 12:55'
-labels: []
+updated_date: '2026-10-18 13:20'
+labels:
+  - brig
+  - size-2
 dependencies: []
+modified_files:
+  - tests/e2e/test_tiocsti_battery.py
+  - tests/unit/test_bwrap_compile.py
 type: bug
 ---
 
@@ -26,3 +33,30 @@ The fix is a fidelity assertion rather than an import (rule 4 stands): something
 - [ ] #1 The TIOCSTI differential's bwrap argv cannot silently diverge from the argv compile_supervisor_launch actually builds: a check fails when it does, without an e2e test importing a domain module
 - [ ] #2 The copy's docstring names constants that exist in domain/jail_types/bwrap.py today
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+### Order of work
+1. Fix the immediate drift: add `--as-pid-1` to `_BWRAP_ARGV_PREFIX` so it matches
+   `compile_supervisor_launch`'s real output again; fix the docstring citing the
+   no-longer-existing `_BWRAP_ARGV` constant (real names: `_NAMESPACE_FLAGS` +
+   `_compile_binds`).
+2. Build the fidelity assertion both DRAFT-0011 and this task's own AC#1 ask for,
+   without an e2e test importing a domain module (rule 4 stands): a unit or
+   integration-layer test (which MAY import domain) asserting the e2e literal is
+   equal to (or a subsequence of) `compile_supervisor_launch`'s actual compiled
+   output for the same policy -- so a future change to the real argv that isn't
+   mirrored in the e2e copy fails loudly, in a layer that's allowed to know both.
+
+### Proof
+- just gates, just done green.
+- Delete this task's own fix to `_BWRAP_ARGV_PREFIX` temporarily and confirm the
+  new fidelity check fails (proving it's discriminating, not just present), then
+  restore it.
+
+### Risks
+- Low: --as-pid-1 affects PID-namespace reaping, not session/terminal semantics, so
+  TASK-0001.11's own differential conclusion is unaffected by this fix -- confirm
+  that remains true, don't just assert it.
+<!-- SECTION:PLAN:END -->
