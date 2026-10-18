@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0015
+id: TASK-0016
 title: >-
   infra.processes._group_alive_proc_scan can raise IndexError/ValueError out of
   group_alive, past the driver's deliberately-unwrapped Verify arm
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-18 20:04'
 labels: []
