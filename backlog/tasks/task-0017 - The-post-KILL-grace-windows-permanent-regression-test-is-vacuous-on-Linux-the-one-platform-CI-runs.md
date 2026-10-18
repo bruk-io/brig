@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 20:05'
-updated_date: '2026-10-18 22:26'
+updated_date: '2026-10-18 22:30'
 labels:
   - brig
   - size-1
@@ -33,8 +33,8 @@ CI runs Linux, so the regression this test exists to catch would reappear there 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A permanent e2e test fails on Linux when destroy_jail's post-KILL grace window is disabled (kill_grace_s=0.0), measured in brig-probe-amd64:latest
-- [ ] #2 The same test still passes, on both macOS and Linux, against the landed grace window
+- [x] #1 A permanent e2e test fails on Linux when destroy_jail's post-KILL grace window is disabled (kill_grace_s=0.0), measured in brig-probe-amd64:latest
+- [x] #2 The same test still passes, on both macOS and Linux, against the landed grace window
 <!-- AC:END -->
 
 ## Implementation Plan
