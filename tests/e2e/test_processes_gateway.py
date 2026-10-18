@@ -20,6 +20,26 @@ than a domain import -- every reader downstream of `Jail.process` (the driver, t
 teardown ladder) only ever reads its `.pid`/`.pgid`, which `SpawnedProcess` already
 carries, so nothing about the real teardown path changes; only the type checker
 needs telling.
+
+TASK-0001.21: `Jail.supervisors` lost its module-level default once every jail got
+its own fresh `LiveSupervisors` instead of one shared singleton, so this test now
+builds a real one of its own, `brig.infra.supervisor.link.LiveSupervisors` -- a
+second `brig.infra` module, still within rule 4's allowance (the e2e layer bars
+only `brig.domain`/`brig.presentation`, not a count of `brig.infra` modules).
+`LiveSupervisors(())` is not a fake standing in for anything (rule 5 confines
+doubles to `tests/integration/`): this test never calls `run_jail`, so `start`
+(the only method that ever reads the empty `supervisor_argv`) is never called
+either, and `destroy_jail`'s own `close(pid)` on a pid nothing started is a
+documented real no-op (`LiveSupervisors.close`'s own docstring) -- the genuine
+production path for a jail destroyed before anything was ever started through it,
+not a simulation of one. `cast`, the same way `Jail.process` already needed one:
+`LiveSupervisors.await_done` returns this module's own `SupervisorDoneUnknown`,
+not `presentation.ports`'s mirror of it (`ports.py`'s own docstring explains why
+the two are deliberately not the same type), so `SupervisorPort`'s structural
+shape is satisfied in substance, by the real production class itself, but not
+in a way mypy can see without crossing into `presentation` -- exactly what this
+layer may not import -- to fetch the one adapter (`presentation/api.py`'s
+`_real_supervisor_port`) that translates between them.
 """
 
 import os
@@ -29,6 +49,7 @@ from typing import Any, cast
 
 from brig import Jail, JailTeardownFailed, destroy_jail
 from brig.infra.processes import ProcessUnknown, reap, reap_deadline, spawn
+from brig.infra.supervisor.link import LiveSupervisors
 
 _STDIO_FDS = (0, 1, 2)
 """The allow-list these reap/reap_deadline tests pass `spawn`: standard streams only,
@@ -109,7 +130,7 @@ def test_destroy_jail_survives_the_leader_exiting_before_its_group() -> None:
     for _ in range(_LEADER_EXITS_BEFORE_GROUP_ITERATIONS):
         spawned = spawn(_LEADER_EXITS_BEFORE_GROUP_ARGV, _STDIO_FDS)
         time.sleep(0.05)
-        jail = Jail(process=cast(Any, spawned))
+        jail = Jail(process=cast(Any, spawned), supervisors=cast(Any, LiveSupervisors(())))
         try:
             destroy_jail(jail)
         except JailTeardownFailed:

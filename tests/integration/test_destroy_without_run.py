@@ -28,6 +28,11 @@ def test_destroy_jail_closes_the_supervisor_even_when_run_jail_never_ran() -> No
     supervisors = FakeSupervisors()
 
     jail = create_bwrap_jail(("sleep", "9999"), processes=processes, supervisors=supervisors)
+    # An explicit `supervisors` short-circuits `_supervisors_for` (TASK-0001.21):
+    # no supervisor script was ever written for this jail, so there is none for
+    # `destroy_jail` to delete -- `tests/e2e/test_fs_policy_battery.py`'s own
+    # real-bwrap batteries are what exercise that deletion against an actual file.
+    assert jail.supervisor_script is None
     destroy_jail(jail, processes=processes, supervisors=supervisors)
 
     # run_jail was never called, so await_done was never invoked -- close is the

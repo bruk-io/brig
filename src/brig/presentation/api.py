@@ -4,8 +4,12 @@ and destroy it, wiring `domain/operations.py` through `presentation/drivers/bwra
 The only module that names `brig.infra.processes`'s own functions, so it can bind them
 into the port's default implementation; a caller wanting a fake passes its own
 `processes` instead. TASK-0001.15 step 4: the same is now true of
-`brig.infra.supervisor.link`'s -- this module binds its one shared `LiveSupervisors`
-instance into `SupervisorPort`'s default implementation, the same way.
+`brig.infra.supervisor.link`'s -- this module binds a `LiveSupervisors` instance into
+`SupervisorPort`'s default implementation, the same way. TASK-0001.21: that instance
+is no longer shared across every jail a process creates -- `_supervisors_for` builds
+a fresh one, with its own freshly-written supervisor script, per `create_bwrap_jail`
+call, so `destroy_jail` can delete exactly one jail's own file without breaking any
+other jail still running.
 """
 
 import functools
@@ -14,7 +18,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from brig.domain import operations
@@ -77,9 +81,11 @@ embedder forever.
 def _resolved_state_dir() -> str:
     """Brig's own runtime-state directory (`infra/state_dir.py`, TASK-0006):
     resolved from `BRIG_HOME`/`~/.brig` and created if it does not exist yet,
-    once per process and cached for the rest of this process's life, the same
-    way `_supervisor_path` below is -- both do real I/O (a `mkdir`, here) that
-    must never run at import time.
+    once per process and cached for the rest of this process's life -- unlike
+    `_supervisor_path` below (TASK-0001.21: every jail needs its own fresh
+    file, so that one is no longer cached), this directory itself is the same
+    for every jail a process creates, so resolving and creating it once is
+    enough. Real I/O (a `mkdir`, here) that must never run at import time.
 
     A plain string, not a `Path`: this is what crosses into domain
     (`compile_supervisor_launch`'s own `state_dir` parameter, rule 2 -- domain
@@ -143,20 +149,24 @@ def _check_state_dir_reachable(policy: FsPolicy, state_dir: str) -> None:
         raise StateDirectoryUnreachable(state_dir, ancestor)
 
 
-@functools.cache
 def _supervisor_path() -> tuple[str, ...]:
     """Where this host's own assembled supervisor file actually is: rule 17's
     one file (`infra.supervisor.assemble.assembled_source()` -- `wire.py` +
     `program.py`, stdlib only, refusing to run under an interpreter older
-    than 3.15), written once per process to a fresh file inside brig's own
-    state directory (`_resolved_state_dir`, TASK-0006) and cached for the
-    rest of this process's life.
+    than 3.15), written fresh to a new file inside brig's own state directory
+    (`_resolved_state_dir`, TASK-0006) on every call.
 
-    `functools.cache` makes this function's own body -- the write -- run at
-    most once, the first real call, never at import time: writing a file is
-    real I/O, and `pyproject.toml`'s own `[tool.pypeeker.import-time-side-
-    effects]` allow-list has no entry for this module, so doing this eagerly
-    at module scope would trip that rule, not just style.
+    TASK-0001.21: no longer `functools.cache`d -- every jail needs its own
+    file, so that `destroy_jail` can delete exactly the one file it no longer
+    needs without also deleting a still-live jail's own (`_supervisors_for`'s
+    own docstring has the reasoning). Never called at module scope: writing a
+    file is real I/O, and `pyproject.toml`'s own `[tool.pypeeker.import-time-
+    side-effects]` allow-list has no entry for this module, so doing this
+    eagerly at import time would trip that rule, not just style. Called
+    exactly once per `create_bwrap_jail` call that needs it (`_supervisors_for`,
+    the one caller) -- a second call in the same jail's creation would write a
+    second, decoy file and leak the first one forever once `destroy_jail`
+    deletes the wrong path instead.
 
     Reachable inside a bwrap jail under most of the caller's own `policy`
     shapes (TASK-0006): `compile_supervisor_launch` binds `_resolved_state_dir()`
@@ -207,23 +217,6 @@ def _supervisor_path() -> tuple[str, ...]:
     return (sys.executable, "-I", handle.name)
 
 
-@functools.cache
-def _supervisor_argv() -> tuple[str, ...]:
-    """`_supervisor_path()`, wrapped in bwrap's own namespace-isolation flags and the
-    default policy's binds (`domain/jail_types/bwrap.py`'s `compile_supervisor_launch`,
-    TASK-0001.16) -- the argv that starts the supervisor as a bwrap jail's own PID 1
-    under `WHOLE_HOST_READ_ONLY`, the policy every jail gets unless `create_bwrap_jail`
-    is given a different one. Computed once, here (and cached, the same way
-    `_supervisor_path` is, since both do no work worth repeating once done), for
-    exactly that one policy; a jail created with a different `policy` gets its own
-    launch line instead, built fresh by `_supervisors_for` below rather than varying
-    this.
-    """
-    return bwrap.compile_supervisor_launch(
-        _supervisor_path(), state_dir=_resolved_state_dir(), policy=WHOLE_HOST_READ_ONLY
-    )
-
-
 @dataclass(frozen=True)
 class _RealProcesses:
     """`brig.infra.processes`'s own functions, as the `ProcessPort` an embedder gets by
@@ -262,10 +255,9 @@ def _real_supervisor_port(live: link.LiveSupervisors) -> SupervisorPort:
     both -- the same move `_reap`/`_reap_deadline` make above for `ProcessPort`
     (rule 13: no infra type crosses a port).
 
-    A function, not a one-off inline adapter, because TASK-0001.16 needs it twice:
-    once for the module's one shared `LiveSupervisors` instance below
-    (`_live_supervisors`/`_supervisors`), and once more, per call, in
-    `_supervisors_for`, for a jail whose own `policy` means a dedicated instance.
+    A function, not a one-off inline adapter, because `_supervisors_for` calls it
+    once per `create_bwrap_jail` call (TASK-0001.21: every jail gets its own fresh
+    `LiveSupervisors` now, never a module-level shared instance).
     """
 
     def await_done(pid: int, deadline: float) -> int | None | SupervisorDoneUnknown:
@@ -277,67 +269,40 @@ def _real_supervisor_port(live: link.LiveSupervisors) -> SupervisorPort:
     return _RealSupervisors(start=live.start, await_done=await_done, close=live.close)
 
 
-@functools.cache
-def _live_supervisors() -> link.LiveSupervisors:
-    """The one shared `LiveSupervisors` instance a jail created under the default
-    policy (`WHOLE_HOST_READ_ONLY`) has its `create`/`start`/`destroy` driver calls
-    wired to -- it has to be the same instance across all three, since it is what
-    remembers which open `Supervisor` a `Process`'s pid still names between them
-    (`infra.supervisor.link.LiveSupervisors`'s own docstring). TASK-0001.16: a jail
-    created with a different `policy` gets its own dedicated instance from
-    `_supervisors_for` instead, since its own launch line for the supervisor's file
-    differs from this one's.
-
-    Lazy and cached (`functools.cache`) for the same reason `_supervisor_path`/
-    `_supervisor_argv` are: it is built from `_supervisor_argv()`, which writes the
-    assembled file's real path the first time anything actually needs it, never at
-    import time.
-    """
-    return link.LiveSupervisors(_supervisor_argv())
-
-
-@functools.cache
-def _supervisors() -> SupervisorPort:
-    """The real `SupervisorPort` every bwrap jail gets by default, when its own
-    `create_bwrap_jail` call names no `policy`/`supervisors` of its own.
-
-    Lazy and cached for the same reason `_live_supervisors` is.
-    """
-    return _real_supervisor_port(_live_supervisors())
-
-
-def _supervisors_for(policy: FsPolicy) -> SupervisorPort:
+def _supervisors_for(policy: FsPolicy) -> tuple[SupervisorPort, Path]:
     """The `SupervisorPort` `create_bwrap_jail` uses for `policy`, when its own
-    caller names no explicit `supervisors` port of its own (TASK-0001.16): the
-    module's one shared instance (`_supervisors()`) for `WHOLE_HOST_READ_ONLY`, the
-    same instance every jail got before this parameter existed, or a dedicated
-    `LiveSupervisors` -- built fresh here, cheap, since it does no I/O of its own
-    until `start` is actually called -- for any other policy, since its own
-    launch line for the supervisor's file depends on exactly which paths that
-    policy names. A jail's own `LiveSupervisors` has to be its own instance
-    either way once two jails' own policies differ (`link.LiveSupervisors`'s own
-    docstring: whichever instance opened a jail's events pipe is the only one
-    that can still read or close it) -- `Jail.supervisors` is what carries this
-    one back to `run_jail`/`destroy_jail` for the same jail later.
+    caller names no explicit `supervisors` port of its own, and the exact path of
+    the fresh supervisor script file written for it, so the jail that gets this
+    port back can later delete that one file and no other (TASK-0001.21).
 
-    `_check_state_dir_reachable` (TASK-0001.22) runs first, for either branch,
-    rather than only the non-default one: `WHOLE_HOST_READ_ONLY`'s own single
-    read-only bind at `/` is itself a read-only ancestor bind of `state_dir`, and
-    this is the one place that stays true for it too, even though it never fails
-    in practice (`_resolved_state_dir()` already created the leaf before this
-    runs, so `/`'s own source always contains it). That check raises
+    A fresh `LiveSupervisors`, every call -- never a module-level shared instance,
+    regardless of `policy`: each jail's own instance is cheap to build (it does no
+    I/O of its own until `start` is actually called) and has to be its own
+    instance anyway once two jails' own policies differ (`link.LiveSupervisors`'s
+    own docstring: whichever instance opened a jail's events pipe is the only one
+    that can still read or close it) -- `Jail.supervisors` is what carries this one
+    back to `run_jail`/`destroy_jail` for the same jail later.
+
+    `_supervisor_path()` is called exactly once here, not twice: calling it again
+    would write a second, decoy file and leak the one actually wired into
+    `supervisor_argv` forever, since `destroy_jail` only ever deletes the path this
+    function hands back, never searches the state directory for anything else.
+
+    `_check_state_dir_reachable` (TASK-0001.22) runs before that write, raising
     `StateDirectoryUnreachable` should `policy` name a read-only ancestor bind of
     brig's own state directory whose source does not contain its leaf
-    (`_check_state_dir_reachable`'s own docstring).
+    (`_check_state_dir_reachable`'s own docstring) -- `WHOLE_HOST_READ_ONLY`'s own
+    single read-only bind at `/` is itself such an ancestor bind, though it never
+    actually fails this check in practice (`_resolved_state_dir()` already created
+    the leaf before this runs, so `/`'s own source always contains it).
     """
     state_dir = _resolved_state_dir()
     _check_state_dir_reachable(policy, state_dir)
-    if policy == WHOLE_HOST_READ_ONLY:
-        return _supervisors()
+    supervisor_path = _supervisor_path()
     supervisor_argv = bwrap.compile_supervisor_launch(
-        _supervisor_path(), state_dir=state_dir, policy=policy
+        supervisor_path, state_dir=state_dir, policy=policy
     )
-    return _real_supervisor_port(link.LiveSupervisors(supervisor_argv))
+    return _real_supervisor_port(link.LiveSupervisors(supervisor_argv)), Path(supervisor_path[-1])
 
 
 @dataclass(frozen=True)
@@ -346,20 +311,26 @@ class Jail:
 
     `process` is the supervisor's own identity (decision-0002). `supervisors` is
     the one `SupervisorPort` this jail's own supervisor was started through --
-    `run_jail`/`destroy_jail` default to it, rather than the module's own shared
-    instance, because TASK-0001.16's `policy` parameter means two jails' own
-    supervisor launch lines can differ, and whichever `LiveSupervisors` opened a
-    jail's events pipe is the only one that can still read or close it
-    (`infra.supervisor.link.LiveSupervisors`'s own invariant). Defaults to the
-    module's own shared instance (`_supervisors()`) so a `Jail` built directly, for
-    a gateway test that never calls `create_bwrap_jail` at all
-    (`tests/e2e/test_processes_gateway.py`), keeps working exactly as before --
-    `default_factory`, not a plain default, since `_supervisors()` is lazy now and
-    must not be forced merely by this class being defined at import time.
+    `run_jail`/`destroy_jail` default to it, since TASK-0001.16's `policy`
+    parameter means two jails' own supervisor launch lines can differ, and
+    whichever `LiveSupervisors` opened a jail's events pipe is the only one that
+    can still read or close it (`infra.supervisor.link.LiveSupervisors`'s own
+    invariant). No default of its own any more (TASK-0001.21: there is no module-
+    level shared instance left to fall back to) -- a `Jail` built directly, for a
+    gateway test that never calls `create_bwrap_jail` at all
+    (`tests/e2e/test_processes_gateway.py`), now has to name its own.
+
+    `supervisor_script` is the path of the fresh supervisor script file
+    `_supervisors_for` wrote for this jail, for `destroy_jail` to delete once
+    teardown confirms nothing can still need it (TASK-0001.21) -- `None` for a
+    `Jail` built with an explicit `supervisors` of its own (`create_bwrap_jail`
+    never wrote a file for it in the first place) or built directly, outside
+    `create_bwrap_jail`, the same as the gateway test above.
     """
 
     process: Process
-    supervisors: SupervisorPort = field(default_factory=_supervisors)
+    supervisors: SupervisorPort
+    supervisor_script: Path | None = None
 
 
 def create_bwrap_jail(
@@ -389,10 +360,14 @@ def create_bwrap_jail(
     `infra/supervisor/link.py`) ever reads `env` or `os.environ` again to get
     there.
 
-    `supervisors`, left unset, is resolved from `policy` (`_supervisors_for`); an
-    explicit `supervisors` (a fake, in a test) is used as given instead, and
-    `policy` then plays no part, the same way a fake stands in for the whole
-    world regardless of what domain state asked for it.
+    `supervisors`, left unset, is resolved from `policy` (`_supervisors_for`),
+    which also writes this jail's own fresh supervisor script file and hands
+    back its path, carried on the returned `Jail` as `supervisor_script` for
+    `destroy_jail` to delete later (TASK-0001.21). An explicit `supervisors` (a
+    fake, in a test) is used as given instead, and `policy` then plays no part,
+    the same way a fake stands in for the whole world regardless of what domain
+    state asked for it -- no file was written for it, so `supervisor_script` is
+    `None` on the `Jail` this returns.
 
     `presentation/drivers/bwrap.py`'s `run` raises `JailSpawnFailed` should the
     supervisor's own start fail. Resolving brig's own state directory
@@ -403,10 +378,16 @@ def create_bwrap_jail(
     Nothing else in this function's own body raises, so nothing else is in this
     docstring.
     """
-    resolved_supervisors = supervisors if supervisors is not None else _supervisors_for(policy)
+    if supervisors is not None:
+        resolved_supervisors: SupervisorPort = supervisors
+        supervisor_script: Path | None = None
+    else:
+        resolved_supervisors, supervisor_script = _supervisors_for(policy)
     plan = bwrap.compile_run(command, env=env)
     process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
-    return Jail(process=process, supervisors=resolved_supervisors)
+    return Jail(
+        process=process, supervisors=resolved_supervisors, supervisor_script=supervisor_script
+    )
 
 
 def run_jail(
@@ -468,6 +449,19 @@ def destroy_jail(
     `run_jail` resolves it (TASK-0001.16) -- the only port that still has `jail`'s
     own events pipe open to close, once its own `policy` differs from the default.
 
+    Once teardown has confirmed `GroupState.GONE` -- proof nothing from `jail` will
+    ever read its own supervisor script again -- deletes `jail.supervisor_script`,
+    if it names one (TASK-0001.21: `None` for a `Jail` built with its own explicit
+    `supervisors`, or built directly outside `create_bwrap_jail`, neither of which
+    had a file written for them). Never before that confirmation: deleting earlier
+    would risk the jail's own supervisor still needing to read it. `missing_ok=True`
+    makes a repeated `destroy_jail` call on an already-torn-down `jail` safe; any
+    other `OSError` the deletion itself raises (a permissions change, a read-only
+    state directory) is swallowed rather than escaping a teardown that has already
+    verified the thing that actually matters -- the jail's own process group is
+    gone -- the same way `Supervisor.close` swallows a close failure during
+    teardown (`infra/supervisor/link.py`'s own docstring).
+
     Raises:
         JailTeardownFailed: the kill ladder's last verify still found the group alive.
     """
@@ -476,3 +470,8 @@ def destroy_jail(
     resolved_supervisors.close(jail.process.pid)
     if state is not GroupState.GONE:
         raise JailTeardownFailed(jail.process)
+    if jail.supervisor_script is not None:
+        try:
+            jail.supervisor_script.unlink(missing_ok=True)
+        except OSError:
+            pass
