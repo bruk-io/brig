@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 16:16'
-updated_date: '2026-10-18 17:27'
+updated_date: '2026-10-18 17:31'
 labels:
   - brig
   - size-2
@@ -205,4 +205,6 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+No repro: the fix (src/brig/presentation/api.py) and both regression tests were authored together in one change; there is no earlier commit where the tests exist against still-buggy code for record-check --repro to run against. Discriminating power was nonetheless verified independently by the reviewer rather than taken on report: (a) the teardown shape -- pre-fix the deletion sat behind 'if state is not GroupState.GONE: raise', so the new integration test's 'assert not script.exists()' could not have passed; it also asserts the exception itself via pytest.raises + exc_info.value.process, so it cannot pass by masking it; (b) the create-time shape -- measured directly that _supervisors_for(WHOLE_HOST_READ_ONLY) writes its real file to the state dir BEFORE run() is ever called (one new file observed on disk), so pre-fix the new e2e test's set-equality assertion on the state dir would have seen a leftover file.
 <!-- SECTION:NOTES:END -->
