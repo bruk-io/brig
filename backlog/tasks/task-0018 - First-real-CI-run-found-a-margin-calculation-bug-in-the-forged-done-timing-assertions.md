@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 23:30'
-updated_date: '2026-10-18 23:39'
+updated_date: '2026-10-18 23:45'
 labels:
   - size-1
   - finish-moved
@@ -161,4 +161,6 @@ Owner: add the `finish-moved` label with its note, commit the test file, confirm
 re-push, tick AC#3, then run close-task. Status left In Progress.
 
 finish-moved: created with only a description, then given its real ACs in the very next edit (drawn from the already-completed fix and verification) -- this is the task's first real shape, not a later scope change.
+
+No repro: caught by a one-shot CI run (39176499195) against then-uncommitted code, so there is no earlier commit to run record-check --repro against. The CI log itself (assert 0.39505254200000195 >= 0.4) is the repro of record; the two fixed tests are the guard going forward.
 <!-- SECTION:NOTES:END -->
