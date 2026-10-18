@@ -120,9 +120,12 @@ banned-name = "agent"
 # as import time), whether /proc/self/fd exists on this host to decide if the race
 # it plants is even reachable here -- a measured fact about the host, not an
 # assumption keyed on sys.platform. A bare stdlib probe in the skipif condition
-# itself, not a project helper, so there is exactly one import-time call to allow.
+# itself, not a project helper. Scoped to the one test module by its module path
+# (this rule's `allow` matches on call name OR calling module, not both at once,
+# so a bare "os.path.isdir" would have permitted that call anywhere, including
+# src/brig/ -- narrower to allow the whole module than to allow the call everywhere).
 [tool.pypeeker.import-time-side-effects]
-allow = ["os.path.isdir"]
+allow = ["e2e.test_spawn_close_action_race"]
 
 # over-exposed-module-symbol asks "is this public symbol used outside its own
 # module", which is the wrong question for tests/: pytest collects a test function
