@@ -3,11 +3,11 @@ id: TASK-0017
 title: >-
   The post-KILL grace window's permanent regression test is vacuous on Linux,
   the one platform CI runs
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 20:05'
-updated_date: '2026-10-18 22:30'
+updated_date: '2026-10-18 22:31'
 labels:
   - brig
   - size-1
@@ -140,4 +140,14 @@ AC#1: that command failed with "39 iteration(s) raised JailTeardownFailed" out o
 AC#2: against the real default, both leader-exits-before-group tests pass on Linux (2 passed, brig-probe-amd64:latest) and the full macOS "uv run just done" exited 0 with the merged state of TASK-0016 and TASK-0017 together.
 
 Reviewer's measurement that does NOT match this task's own premise, recorded here rather than silently dropped: the task describes the ORIGINAL pre-sleep test as vacuous on Linux (0/150 at kill_grace_s=0.0). Re-measured twice in brig-probe-amd64:latest by the method above, it failed 150/150 at kill_grace_s=0.0 -- it is not vacuous on this host. This does not affect either criterion (the new test is decisive regardless, and both pass against the default), but it does contradict the docstrings this task rewrote. Filed as a draft. Note the reviewer's host runs the amd64 image emulated on Darwin 27, which the original measurement may not have; the figure is reported with its method so a future reader can reconcile the two.
+
+Closed by review. Both criteria hold, measured by the reviewer in the named image rather than taken on report.
+
+AC#1: in brig-probe-amd64:latest (privileged, --platform linux/amd64), with destroy_jails kill_grace_s forced to 0.0 at runtime and the test otherwise unmodified, the new test_destroy_jail_survives_the_leader_exiting_before_its_group_without_a_pre_sleep failed with "39 iteration(s) raised JailTeardownFailed" out of 40. Decisive on the platform CI runs. The exact command is in the No repro note above. AC#2: against the real default both leader-exits-before-group tests pass on Linux (2 passed, same image) and the full macOS uv run just done exited 0 with the merged state of this task and TASK-0016 together.
+
+Keeping both test shapes rather than replacing one is the right call and the reviewers own macOS measurements back it: with kill_grace_s=0.0 the pre-sleep test failed 150/150 while the no-pre-sleep variant failed only 2/40. Dropping the pre-sleep would indeed have traded a strong macOS pin for a weak one.
+
+Finding, filed as DRAFT-0009, not blocking either criterion: this tasks central premise does not reproduce. The description, and the docstrings this task rewrote, state that the ORIGINAL pre-sleep test is vacuous on Linux -- 0/150 JailTeardownFailed at kill_grace_s=0.0, identical to the default -- and that is the stated reason the second test exists. Re-measured twice in brig-probe-amd64:latest by the method in the No repro note, that test failed 150/150, not 0/150. It is the hardest-firing discriminator measured on either platform, the opposite of what its docstring now tells a reader. Nothing about the criteria turns on this: the new test is decisive on Linux regardless, and both pass against the landed grace window. But a maintainer trimming e2e runtime on the docstrings say-so would delete the wrong test, which is why it earns a task rather than a note. Two smaller drifts in the same docstrings went into the draft with it: macOS 149/150 where the description says 145/150 and the reviewer measured 150/150, and macOS noise given as ~2% to ~23% where the implementer reported 2-34% and the reviewer measured 2/40 -- both directionally right, so only the Linux claim is contradicted. The reviewers host runs that image emulated on Darwin 27, which the original measurement may not have; the draft says so and asks for figures that carry their host and method rather than for one number swapped for another.
+
+Outstanding, and the one thing this review could not do: tests/e2e/test_processes_gateway.py is still uncommitted, along with TASK-0016s src/brig/infra/processes.py. The reviewer is denied git commit by design. Both changes are review-passed and commit-ready as they stand; they need committing by the session that owns the tree.
 <!-- SECTION:NOTES:END -->
