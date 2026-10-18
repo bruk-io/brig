@@ -3,11 +3,11 @@ id: TASK-0018
 title: >-
   First real CI run found a margin-calculation bug in the forged-done timing
   assertions
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 23:30'
-updated_date: '2026-10-18 23:45'
+updated_date: '2026-10-18 23:46'
 labels:
   - size-1
   - finish-moved
@@ -163,4 +163,6 @@ re-push, tick AC#3, then run close-task. Status left In Progress.
 finish-moved: created with only a description, then given its real ACs in the very next edit (drawn from the already-completed fix and verification) -- this is the task's first real shape, not a later scope change.
 
 No repro: caught by a one-shot CI run (39176499195) against then-uncommitted code, so there is no earlier commit to run record-check --repro against. The CI log itself (assert 0.39505254200000195 >= 0.4) is the repro of record; the two fixed tests are the guard going forward.
+
+Independent review confirmed the fix is correct (CI's own failure traceback landed on the elapsed-margin assertion, after the real-exit-code assertion already passed -- the security property held, only the auxiliary timing check's own math was wrong) and stable (5/5 on macOS, 5/5 on real Linux+bwrap). AC#3 confirmed directly: pushed the fix (e3b32f1) to bruk-io/brig, watched run 39177233977 to completion -- green, 2m14s, no failures.
 <!-- SECTION:NOTES:END -->
