@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0012
+id: TASK-0015
 title: >-
   WHOLE_HOST_READ_ONLY exposes the ambient host /proc to every jail, not only
   the supervisor relationship this review checked
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-18 07:18'
 labels:
