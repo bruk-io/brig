@@ -3,11 +3,11 @@ id: TASK-0006
 title: >-
   The supervisor's temp script lives in /tmp, so any fs policy that excludes
   /tmp breaks every jail under it
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 13:05'
-updated_date: '2026-10-18 14:55'
+updated_date: '2026-10-18 15:03'
 labels:
   - brig
   - size-3
@@ -263,4 +263,6 @@ Finding (minor, no draft -- belongs with TASK-0001.22): `_check_state_dir_reacha
 No repro: coverage-gap bug (the supervisor's own file was never reachable under a /tmp-excluding policy), not a regression with a prior passing state to point at -- the fix (infra/state_dir.py, the unconditional bind) and its tests landed together in one commit (e9d5440), no earlier commit to run a failing repro against without reverting the fix itself. Same pattern as TASK-0002/TASK-0005/TASK-0001.19 earlier this session.
 
 finish-moved: AC#1's wording narrowed from "regardless of the caller's fs policy" (implying unconditional reachability) to "reachable, or refused loudly before bwrap is invoked" -- the literal original wording was measured false against one real policy shape (a read-only ancestor bind of the state dir lacking its own leaf: EROFS -> JailExitUnknown), found during this same review pass and fixed as its own task, TASK-0001.22, which chose to refuse that combination loudly rather than make it reachable. The finish line moved to match what was actually built and verified, not what was originally hoped for.
+
+Independent review confirmed all 3 ACs genuinely met (verified on real Linux+bwrap, including the fix/revert attributability check), blocked only on the repro/commit mechanics now resolved: the supervisor's own file is reachable under the supervised shapes and refused loudly under the one shape TASK-0001.22 tracks and fixed. AC#1's wording was narrowed (finish-moved, see notes above) to match what was actually built after the original wording was measured false. Final consolidated verification: full suite 106 passed/2 skipped on real Linux+bwrap (brig-probe-amd64:latest), just done green on macOS, nothing reformatted.
 <!-- SECTION:NOTES:END -->
