@@ -18,10 +18,6 @@ references:
     backlog/decisions/decision-0002 -
     The-supervisor-request-channels-and-the-grading-skeleton-the-next-slices-shape.md
 modified_files:
-  - src/brig/infra/supervisor/wire.py
-  - src/brig/infra/supervisor/program.py
-  - src/brig/infra/supervisor/link.py
-  - src/brig/infra/processes.py
   - tests/e2e/test_supervisor_program_gateway.py
   - tests/e2e/test_supervisor_link_gateway.py
 ---
