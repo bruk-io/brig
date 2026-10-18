@@ -259,4 +259,26 @@ drafts filed.
   raises_for_a_name_only_envs_own_path_would_resolve one: a naive
   implementation finds the probe in bin_dir, does not raise, and pytest.raises
   fails. This pair would have caught the plan's own error.
+
+- **Checks.** record-check --tier full is green on macOS (lint, typecheck,
+  gates, tests, docs, architecture validate and lint). It reformatted and fixed
+  nothing: the working tree was unchanged afterwards. The e2e layer on macOS:
+  47 passed, 17 skipped.
+- **Linux re-run, fresh container.** Full suite in a clean copy of the tree
+  (not the mounted macOS virtualenv), privileged ubuntu:24.04/amd64, real bwrap
+  0.9.0: **95 passed, 3 skipped, 0 failed** -- nothing from TASK-0013's
+  restructuring regressed. Targeted: spawn(('definitely-not-a-real-command-xyz',),
+  (0,1,2)) raises SpawnError errno 2 on Linux. The exit-127 shape is genuinely
+  converted there.
+- **The call-site audit holds, for a stronger reason than the one recorded.**
+  There is no live Spawn(...) construction anywhere in src/brig -- only the
+  match arm at presentation/drivers/bwrap.py:90. The live path is
+  StartSupervisedCommand into infra/supervisor/link.py:314, whose
+  supervisor_argv[0] is 'bwrap' (domain/jail_types/bwrap.py:278), with
+  sys.executable (already absolute) for the rest (presentation/api.py:236).
+  spawn()'s argv[0] is therefore ALWAYS a host binary, never the embedder's
+  confined command, so a host-PATH pre-check cannot produce a false SpawnError
+  for something that previously resolved inside the jail's mount namespace.
+  That is the load-bearing safety argument and it belongs in the notes; the
+  recorded env-passing audit is true but weaker.
 <!-- SECTION:NOTES:END -->
