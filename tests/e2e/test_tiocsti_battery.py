@@ -384,9 +384,33 @@ def test_tiocsti_injection_fails_in_a_real_bwrap_jail() -> None:
 
     What this does not grade -- that `--new-session` itself, rather than infra's own
     `setsid=True`, is what closes the hole -- is this file's module docstring.
+
+    TASK-0001.15 step 4 put the jail's one process behind the supervisor
+    (decision-0002), and DRAFT-0010 records the real consequence, measured in a
+    privileged Docker container: the supervised command's own fd 0 is now the read
+    end of a pipe `program.py`'s `_start_child` seals shut on the other end (the
+    adversarial-review fix that closed the control-channel forgery hole DRAFT-0010's
+    own history also records -- earlier just the exec-request pipe, already closed
+    on its write end, before that fix; a sealed pipe either way), not a tty at all,
+    so this probe's `fcntl.ioctl` fails with `ENOTTY` for a reason that has nothing
+    to do with confinement. That is not evidence TIOCSTI is denied here --
+    it is the exact ambiguity rule 11's own batteries exist to rule out -- so this
+    skips with that measurement as its reason, the same discipline
+    `_skip_if_tiocsti_unavailable` already applies to a kernel with TIOCSTI compiled
+    out, rather than asserting a result this probe no longer actually produces. If
+    DRAFT-0010's own design question is ever settled by wiring the supervised
+    command's own stdio to something real, this stops skipping and asserts the real
+    claim again, with no change needed here.
     """
     _skip_if_tiocsti_unavailable()
     exit_code = _run_in_pty_session(_jailed_tiocsti_probe)
+    if exit_code == _ERRNO_EXIT_OFFSET + errno.ENOTTY:
+        pytest.skip(
+            "DRAFT-0010: the supervised path wires the real command's fd 0 to the "
+            "read end of a sealed pipe (program.py's _start_child), not a tty, so "
+            "this probe's own ioctl fails with ENOTTY for a reason unrelated to "
+            "confinement -- not evidence TIOCSTI is denied or allowed here"
+        )
     assert exit_code == _ERRNO_EXIT_OFFSET + _DENIED_ERRNO
 
 

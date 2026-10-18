@@ -7,6 +7,7 @@ domain's effects in `domain/effects.py`.
 """
 
 import errno
+import fcntl
 import os
 import resource
 import signal
@@ -63,7 +64,9 @@ def _open_inheritable_fds() -> frozenset[int]:
     return frozenset(inheritable)
 
 
-def _close_actions(inheritable_fds: tuple[int, ...]) -> list[tuple[int, int]]:
+def _close_actions(
+    inheritable_fds: tuple[int, ...], *, protect: frozenset[int] = frozenset()
+) -> list[tuple[int, int]]:
     """Build one `os.POSIX_SPAWN_CLOSE` file action per open, inheritable fd that
     `inheritable_fds` does not name.
 
@@ -72,11 +75,100 @@ def _close_actions(inheritable_fds: tuple[int, ...]) -> list[tuple[int, int]]:
     (`_open_inheritable_fds`) and states the close explicitly for each one outside
     the allow-list -- never for `inheritable_fds` itself, which grants the jailed
     process permission to keep a fd, not an instruction to force it open.
+
+    `protect` is `_fd_actions`'s own resolved source fd numbers (`spawn`'s `fds`,
+    after `_resolve_fd_sources`), kept out of this enumeration on top of
+    `inheritable_fds` for the same reason: a `dup2` file action later in the same
+    list needs its source fd to still be open when it runs. In practice `os.pipe`'s
+    and `os.dup`'s own fds are never inheritable (PEP 446's default), so
+    `_open_inheritable_fds` would not find them regardless -- `protect` states that
+    explicitly rather than leaning on an unstated default surviving unnoticed.
     """
-    allowed = set(inheritable_fds)
+    allowed = set(inheritable_fds) | protect
     return [
         (os.POSIX_SPAWN_CLOSE, fd) for fd in sorted(_open_inheritable_fds()) if fd not in allowed
     ]
+
+
+def _resolve_fd_sources(fds: Mapping[int, int]) -> tuple[dict[int, int], tuple[int, ...]]:
+    """Rewrite `fds` (new process's fd -> this process's own fd) so that no source
+    value collides with any target value, and report which extra fds of this
+    process's own the rewrite opened to do it.
+
+    `os.posix_spawn`'s `DUP2` file action is specified to do *nothing at all* --
+    not even clear the close-on-exec flag a freshly-opened pipe fd carries by
+    default (PEP 446) -- when its source and target are the same number
+    (`dup2(fd, fd)`). A source that already sits at its own target by sheer
+    allocation order is the common case here, not a rare one: an otherwise
+    unencumbered process's very first `os.pipe()` call returns the next fd past
+    whatever is already open, which is exactly `3` the moment this process has
+    nothing else open past its own standard streams -- the same number
+    `infra/supervisor/wire.py`'s own `REQUEST_FD` names. Processing several pairs
+    in a fixed order has the same hazard one level up: a source that happens to
+    sit at some *other* pair's target would be silently overwritten before its
+    own `DUP2` ever reads it.
+
+    Every source fd `fds` names that collides with any target fd `fds` names --
+    its own included -- is relocated onto a number past every target, and the
+    original is left exactly as it was: closing it here, before the spawn that
+    still needs the duplicate even runs, would be premature. The caller closes
+    every fd this function reports in its own second return value, once that
+    spawn attempt (every retry included) is done with it.
+
+    A bare `os.dup` cannot do this relocating: it always returns this process's
+    *lowest* free fd, and a target number is free -- hence a candidate --
+    whenever this process happens to have a hole there, which is the common
+    case, not a rare one (an unencumbered process's first `os.pipe()` lands at
+    `3`, a number `fds` itself may name as a target). `fcntl.F_DUPFD` instead
+    takes a floor: the lowest free fd *at or above* a number this function
+    chooses, so asking for one past `max(targets)` guarantees the result falls
+    outside the full target set regardless of which numbers below that floor
+    happen to be free.
+    """
+    targets = frozenset(fds)
+    floor = max(targets) + 1
+    resolved: dict[int, int] = {}
+    relocated: list[int] = []
+    for target, source in fds.items():
+        if source in targets:
+            new_source = fcntl.fcntl(source, fcntl.F_DUPFD, floor)
+            relocated.append(new_source)
+            resolved[target] = new_source
+        else:
+            resolved[target] = source
+    return resolved, tuple(relocated)
+
+
+def _fd_actions(resolved_fds: Mapping[int, int]) -> list[tuple[int, ...]]:
+    """Build the file actions that give the new process the fds `resolved_fds`
+    names (new process's fd -> this process's own fd, already resolved so no
+    source collides with any target -- `_resolve_fd_sources`), in place of
+    whichever of those numbers it would otherwise have inherited unchanged.
+
+    One `os.POSIX_SPAWN_DUP2` per pair, then one `os.POSIX_SPAWN_CLOSE` per
+    source fd's own number in the new process -- every `DUP2` runs before any
+    `CLOSE`, so a source fd that also names some other pair's own target is
+    still open and unchanged when its own `DUP2` reads it. Like every other file
+    action `spawn` builds, each runs inside `posix_spawnp`'s own C-library step,
+    before `argv[0]` execs: never Python bytecode running after a fork, so this
+    costs nothing of the fork-safety `spawn`'s own docstring already explains.
+    An empty `resolved_fds` builds no action at all, and every stream is
+    inherited from this process exactly as it always was.
+
+    No `CLOSE` ever names a number some `DUP2` just wrote a target onto: a
+    source equal to one of `resolved_fds`'s own target numbers is excluded from
+    the `CLOSE` list rather than closed, since that number's `DUP2` result --
+    not the old source fd it displaced -- is the one this new process keeps.
+    `_resolve_fd_sources` is the only caller and never hands this a source equal
+    to a target, but that invariant is enforced once, here, rather than relied
+    on silently at every call site.
+    """
+    actions: list[tuple[int, ...]] = [
+        (os.POSIX_SPAWN_DUP2, source, target) for target, source in resolved_fds.items()
+    ]
+    close_fds = set(resolved_fds.values()) - set(resolved_fds)
+    actions += [(os.POSIX_SPAWN_CLOSE, fd) for fd in sorted(close_fds)]
+    return actions
 
 
 @dataclass(frozen=True)
@@ -141,7 +233,7 @@ class SpawnError(Exception):
 def _spawn_leading_a_new_group(
     argv: tuple[str, ...],
     spawn_env: dict[str, str],
-    file_actions: list[tuple[int, int]],
+    file_actions: list[tuple[int, ...]],
 ) -> tuple[int, bool]:
     """Start `argv` with `os.posix_spawnp` as the leader of a new process group, and
     report its pid together with whether its session was detached too.
@@ -185,6 +277,7 @@ def spawn(
     inheritable_fds: tuple[int, ...],
     *,
     env: Mapping[str, str] | None = None,
+    fds: Mapping[int, int] | None = None,
 ) -> SpawnedProcess:
     """Start `argv` as a new process, the leader of a process group of its own, and of a
     session of its own where this interpreter can ask for one.
@@ -231,6 +324,21 @@ def spawn(
     it" (decision-0001) must not have. A jail type that needs one adds it later, behind
     whatever safe mechanism its platform actually offers.
 
+    `fds`, left `None` by default, redirects any of the new process's own fd numbers
+    to a fd of this process's own instead of its ordinary inherited stream
+    (`_resolve_fd_sources`/`_fd_actions`): one `os.POSIX_SPAWN_DUP2` apiece, performed
+    inside `posix_spawnp`'s own C-library step like every other file action here,
+    never by touching this process's own fds around the call -- the same "no
+    process-wide side effect" reasoning this docstring's `cwd` paragraph already
+    gives applies exactly as much to the embedder's own stdio. Keyed by the new
+    process's own fd number rather than fixed to `0`/`1`: `infra/supervisor/link.py`
+    uses this to connect the supervisor's own wire protocol to fds `3`/`4`
+    (`infra/supervisor/wire.py`'s `REQUEST_FD`/`EVENTS_FD`), deliberately *not* `0`/
+    `1` any more (DRAFT-0010) -- which leaves the new process's own `0`/`1`/`2` free
+    to inherit from this process exactly as `argv` would without `fds` at all, so a
+    supervised command started past it inherits them in turn, unchanged, the same
+    way it would have with no supervisor in between.
+
     If a close action names a fd that another thread of a multi-threaded embedder
     closes first, in the window between this function's own scan and the moment the
     OS actually performs that action, the OS fails the *whole* spawn with `EBADF`,
@@ -258,21 +366,34 @@ def spawn(
             which.
     """
     spawn_env = dict(env) if env is not None else dict(os.environ)
+    resolved_fds, relocated = _resolve_fd_sources(fds) if fds else ({}, ())
+    protect = frozenset(resolved_fds.values())
+    fd_actions = _fd_actions(resolved_fds)
     try:
-        pid, session_detached = _spawn_leading_a_new_group(
-            argv, spawn_env, _close_actions(inheritable_fds)
-        )
-    except OSError as exc:
-        if exc.errno != errno.EBADF:
-            raise SpawnError(argv, errno=exc.errno if exc.errno is not None else 0) from exc
         try:
             pid, session_detached = _spawn_leading_a_new_group(
-                argv, spawn_env, _close_actions(inheritable_fds)
+                argv, spawn_env, _close_actions(inheritable_fds, protect=protect) + fd_actions
             )
-        except OSError as retry_exc:
-            raise SpawnError(
-                argv, errno=retry_exc.errno if retry_exc.errno is not None else 0
-            ) from retry_exc
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise SpawnError(argv, errno=exc.errno if exc.errno is not None else 0) from exc
+            try:
+                pid, session_detached = _spawn_leading_a_new_group(
+                    argv,
+                    spawn_env,
+                    _close_actions(inheritable_fds, protect=protect) + fd_actions,
+                )
+            except OSError as retry_exc:
+                raise SpawnError(
+                    argv, errno=retry_exc.errno if retry_exc.errno is not None else 0
+                ) from retry_exc
+    finally:
+        # `_resolve_fd_sources`'s own extra fds, opened only to dodge a collision
+        # between some source and some target -- this process's one copy of each,
+        # closed only now that every spawn attempt above (the retry included) is
+        # done reading from it, success or failure either way.
+        for fd in relocated:
+            os.close(fd)
     return SpawnedProcess(pid=pid, pgid=pid, session_detached=session_detached)
 
 

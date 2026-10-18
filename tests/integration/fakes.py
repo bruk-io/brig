@@ -16,7 +16,7 @@ owns rather than infra's concrete dataclass, so this fake's own same-shaped
 import signal
 from dataclasses import dataclass, field
 
-from brig import ProcessUnknown
+from brig import ProcessUnknown, SupervisorDoneUnknown
 
 
 @dataclass(frozen=True)
@@ -112,3 +112,55 @@ class FakeProcesses:
             self.alive_checks -= 1
             return True
         return self.alive
+
+
+@dataclass(frozen=True)
+class _SupervisorIdentity:
+    """What `FakeSupervisors.start` hands back: a fabricated supervisor identity --
+    the single process the host now tracks in place of the group `_SpawnedProcess`
+    stood in for (decision-0002)."""
+
+    pid: int
+    pgid: int
+
+
+@dataclass
+class FakeSupervisors:
+    """A fake of the world `brig.presentation.ports.SupervisorPort` asks infra for
+    (TASK-0001.15 step 4): the supervised path's counterpart to `FakeProcesses`.
+
+    Records every call in its own state -- never starts a real supervisor. `start`
+    hands back a fabricated identity built from `next_pid`; `await_done` reports
+    `exit_code`, `None` while `expires` is `True` (a test's way to arrange a
+    deadline-bound wait that times out rather than resolving), or
+    `SupervisorDoneUnknown` while `done_unknown` is `True` (a test's way to arrange
+    the supervisor's report being gone for good).
+    """
+
+    exit_code: int = 0
+    expires: bool = False
+    done_unknown: bool = False
+    next_pid: int = 2000
+    started: list[tuple[tuple[str, ...], tuple[tuple[str, str], ...]]] = field(default_factory=list)
+    awaited: list[tuple[int, float]] = field(default_factory=list)
+    closed: list[int] = field(default_factory=list)
+
+    def start(self, argv: tuple[str, ...], env: tuple[tuple[str, str], ...]) -> _SupervisorIdentity:
+        """Record `(argv, env)` and hand back a fabricated supervisor identity."""
+        self.started.append((argv, env))
+        pid = self.next_pid
+        self.next_pid += 1
+        return _SupervisorIdentity(pid=pid, pgid=pid)
+
+    def await_done(self, pid: int, deadline: float) -> int | None | SupervisorDoneUnknown:
+        """Record `(pid, deadline)`; report `exit_code`, `None` while `expires`, or
+        `SupervisorDoneUnknown` while `done_unknown`.
+        """
+        self.awaited.append((pid, deadline))
+        if self.done_unknown:
+            return SupervisorDoneUnknown()
+        return None if self.expires else self.exit_code
+
+    def close(self, pid: int) -> None:
+        """Record `pid`."""
+        self.closed.append(pid)

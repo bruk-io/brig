@@ -4,65 +4,97 @@ Each operation decides what should happen next and yields an `Effect` from
 `domain/effects.py` for a driver to perform, resuming with whatever the driver sends
 back. Nothing here does I/O (rule 2); the driver that performs these effects for bwrap
 lives in `presentation/drivers/bwrap.py`.
+
+TASK-0001.15 step 4: `create`/`start` yield `StartSupervisedCommand`/
+`AwaitSupervisorDone` now, in place of the direct `Spawn`/`Reap` shape the walking
+skeleton used -- the jail's one process is its supervisor (decision-0002). `destroy`
+is unchanged: teardown's `Verify`/`SignalGroup`/`Reap` ladder works the same whichever
+kind of process `Process` names.
 """
 
 from collections.abc import Generator
 from typing import Any
 
 from brig.domain import teardown as _teardown
-from brig.domain.effects import Deadline, Effect, ExitCodeUnknown, GroupState, Process, Reap, Spawn
+from brig.domain.effects import (
+    AwaitSupervisorDone,
+    Deadline,
+    Effect,
+    ExitCodeUnknown,
+    ExitOutcome,
+    GroupState,
+    Process,
+    StartSupervisedCommand,
+)
 from brig.domain.plan import Plan
+from brig.domain.policy.env import DENY_ALL, EnvPolicy, scrub_env
 
 
-def _spawn(
-    argv: tuple[str, ...], inheritable_fds: tuple[int, ...]
+def _start_supervised(
+    argv: tuple[str, ...], env: tuple[tuple[str, str], ...]
 ) -> Generator[Effect, Any, Process]:
-    """Yield a Spawn effect and narrow the driver's reply to a Process."""
-    sent = yield Spawn(argv, inheritable_fds)
+    """Yield a StartSupervisedCommand effect and narrow the driver's reply to a
+    Process: the supervisor's own identity, the one process the host now tracks in
+    place of the group a direct `Spawn` left it tracking (decision-0002).
+    """
+    sent = yield StartSupervisedCommand(argv, env)
     assert isinstance(sent, Process)
     return sent
 
 
-def _reap(
-    process: Process, deadline: Deadline | None = None
-) -> Generator[Effect, Any, int | None | ExitCodeUnknown]:
-    """Yield a Reap effect and narrow the driver's reply to an exit code, None, or
-    ExitCodeUnknown.
-
-    `sent` is `None` only where `deadline` was given and the driver's wait reached it
-    first; `ExitCodeUnknown` if the process is no longer this program's child to wait
-    for at all, regardless of whether `deadline` was given (`effects.Reap`'s own
-    docstring) -- the caller decides what either means.
+def _await_supervisor_done(
+    process: Process, deadline: Deadline
+) -> Generator[Effect, Any, ExitOutcome]:
+    """Yield an AwaitSupervisorDone effect and narrow the driver's reply to an exit
+    code, None, or ExitCodeUnknown -- the same three-way split `Reap` already made
+    for the direct-spawn path (`effects.AwaitSupervisorDone`'s own docstring); the
+    caller decides what either of the latter two means.
     """
-    sent = yield Reap(process, deadline)
+    sent = yield AwaitSupervisorDone(process, deadline)
     assert sent is None or isinstance(sent, int) or isinstance(sent, ExitCodeUnknown)
     return sent
 
 
-def create(plan: Plan) -> Generator[Effect, Any, Process]:
-    """Start a jail's one process running `plan.argv` in a new process group.
+def create(plan: Plan, policy: EnvPolicy = DENY_ALL) -> Generator[Effect, Any, Process]:
+    """Start the jail's supervisor as its one PID 1 process, with `plan.argv` as the
+    real command it runs as its own child (decision-0002), in whatever of
+    `plan.env` `policy`'s allow-list lets through.
 
-    A driver performs the yielded `Spawn` effect and sends back the `Process` it
-    created. For a jail type whose one process *is* the jail (bwrap), creating the
-    jail and starting its process are the same effect; a jail type with more to set up
-    adds the effects for that here, ahead of this one.
+    `plan.env` is `compile_run`'s own candidate environment (`domain/plan.py`'s own
+    docstring) -- not yet scrubbed, since no jail type's compile reads `policy`
+    (rule 2: compile does no I/O either, and a jail type is a slice, rule 3, with
+    no reason to know this policy). `create` is TASK-0001.17's one caller of
+    `scrub_env` (`domain/policy/env.py`): it filters `plan.env` down to exactly
+    `policy.allowed` before the `StartSupervisedCommand` effect is even built, so
+    the effect's own data is already scrubbed and nothing performing it -- a
+    driver, or `infra/supervisor/link.py` underneath one -- ever reads `os.environ`
+    itself to get there. `policy` defaults to `DENY_ALL`: a caller naming none of
+    its own keeps the no-environment-at-all behaviour `Plan.env`'s own docstring
+    already called a known, honestly-stated gap, rather than silently granting
+    every name `plan.env` happens to carry.
+
+    A driver performs the yielded `StartSupervisedCommand` effect and sends back the
+    supervisor's own `Process` -- the single process this program now tracks, in
+    place of the group a direct `Spawn` of the real command left it tracking.
     """
-    return (yield from _spawn(plan.argv, plan.inheritable_fds))
+    scrubbed = scrub_env(dict(plan.env), policy)
+    return (yield from _start_supervised(plan.argv, tuple(scrubbed.items())))
 
 
-def start(
-    process: Process, *, deadline: Deadline | None = None
-) -> Generator[Effect, Any, int | None | ExitCodeUnknown]:
-    """Wait for the jail's process to exit and yield its exit code.
+def start(process: Process, *, deadline: Deadline) -> Generator[Effect, Any, ExitOutcome]:
+    """Wait for the supervisor to report the supervised command done, and yield its
+    exit code.
 
-    A driver performs the yielded `Reap` effect and sends back the exit code. Leave
-    `deadline` unset to wait with no bound of its own; set it to a `time.monotonic()`
-    timestamp to give up and return `None` instead once the driver's wait reaches it,
-    rather than blocking forever on a process that never exits on its own. Either way,
-    returns `ExitCodeUnknown` instead if the process is no longer this program's child
-    to wait for at all -- the caller decides what brig error either outcome becomes.
+    A driver performs the yielded `AwaitSupervisorDone` effect and sends back the
+    exit code. `deadline`, a `time.monotonic()` timestamp, is required here --
+    unlike the direct-spawn path's `Reap`, nothing else bounds this wait
+    (`effects.AwaitSupervisorDone`'s own docstring) -- and the driver sends back
+    `None` instead once its own wait reaches it, rather than blocking forever on a
+    supervisor that never reports done. Either way, returns `ExitCodeUnknown`
+    instead if the supervisor's report for this process can never be recovered now
+    -- the caller decides what brig error either outcome becomes.
     """
-    return (yield from _reap(process, deadline))
+    return (yield from _await_supervisor_done(process, deadline))
 
 
 def destroy(process: Process) -> Generator[Effect, Any, GroupState]:

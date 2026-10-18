@@ -124,8 +124,15 @@ banned-name = "agent"
 # (this rule's `allow` matches on call name OR calling module, not both at once,
 # so a bare "os.path.isdir" would have permitted that call anywhere, including
 # src/brig/ -- narrower to allow the whole module than to allow the call everywhere).
+#
+# TASK-0001.15 step 2: infra/supervisor/program.py's `if __name__ == "__main__":
+# _main()` is the standard script-entrypoint guard -- it only calls `_main` when
+# this file runs as the dropped PID-1 script, never when something imports it as
+# a module -- but this check has no notion of that guard and flags the call
+# unconditionally. Allowed rather than restructured away: the guard is exactly
+# the shape a stdlib-only dropped script needs to have one real entry point.
 [tool.pypeeker.import-time-side-effects]
-allow = ["e2e.test_spawn_close_action_race"]
+allow = ["e2e.test_spawn_close_action_race", "brig.infra.supervisor.program"]
 
 # over-exposed-module-symbol asks "is this public symbol used outside its own
 # module", which is the wrong question for tests/: pytest collects a test function
@@ -137,3 +144,10 @@ allow = ["e2e.test_spawn_close_action_race"]
 # library's own code.
 [tool.pypeeker.over-exposed-module-symbol]
 allow = ["unit.*", "integration.*", "e2e.*"]
+
+# decision-0001 rule 14 names the supervisor's own wire as the one write path
+# besides infra/log.py: infra/supervisor/program.py emits its started/exited/done
+# events straight to stdout, by design (TASK-0001.15 step 2) -- this is that wire,
+# not a module that slipped past rule 14's intent.
+[tool.pypeeker.brig-one-writer]
+allow = ["brig.infra.supervisor.program"]

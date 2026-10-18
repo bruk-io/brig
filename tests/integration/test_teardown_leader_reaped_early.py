@@ -22,7 +22,7 @@ finishes what `KILL` started. That is a real, separately confirmed race (see
 
 import signal
 
-from tests.integration.fakes import FakeProcesses
+from tests.integration.fakes import FakeProcesses, FakeSupervisors
 
 from brig import create_bwrap_jail, destroy_jail
 
@@ -32,9 +32,10 @@ def test_destroy_jail_tolerates_leader_reaped_before_the_rest_of_its_group() -> 
     the time the kill ladder's last `Reap` goes looking for it.
     """
     processes = FakeProcesses(alive_checks=2, process_unknown=True)
-    jail = create_bwrap_jail(("sleep", "9999"), processes=processes)
+    supervisors = FakeSupervisors()
+    jail = create_bwrap_jail(("sleep", "9999"), processes=processes, supervisors=supervisors)
 
-    destroy_jail(jail, processes=processes)
+    destroy_jail(jail, processes=processes, supervisors=supervisors)
 
     assert processes.signalled == [
         (jail.process.pgid, signal.SIGTERM),

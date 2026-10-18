@@ -102,3 +102,60 @@ class ProcessPort(Protocol):
     def group_alive(self, pgid: int) -> bool:
         """Report whether any process in the group `pgid` is still alive."""
         ...
+
+
+@dataclass(frozen=True)
+class SupervisorDoneUnknown:
+    """The value a `SupervisorPort`'s `await_done` returns in place of an exit code
+    when the supervisor's report for this process can never be recovered now: the
+    events pipe closed with no `done` event ever having arrived, or reading or
+    decoding it failed outright. Mirrors `infra.supervisor.link`'s own sentinel of
+    the same name the way `ProcessUnknown` above already mirrors
+    `infra.processes`'s (this module's own docstring), rather than importing it; a
+    real `SupervisorPort` (`presentation/api.py`'s wiring) translates infra's
+    version into this one.
+
+    Distinct from `None`, which `await_done` returns instead when `deadline` passes
+    first with the supervisor simply not done yet: a later `await_done` call can
+    still succeed there, unlike this one.
+    """
+
+
+class SupervisorPort(Protocol):
+    """What a jail type's driver needs from infra to start and wait on the
+    supervised path's one process: the jail's supervisor itself, in place of
+    `ProcessPort` for the normal create/run journey (decision-0002). Matches
+    `infra.supervisor.link.LiveSupervisors`'s own shape, though not quite
+    verbatim, for the same reason `ProcessPort`'s own docstring gives.
+    """
+
+    def start(self, argv: tuple[str, ...], env: tuple[tuple[str, str], ...]) -> _ProcessIdentity:
+        """Start the jail's supervisor -- however this port's own implementation
+        launches it -- with `argv`/`env` as the one command it runs as its own
+        child, and return the supervisor's own process identity: the single
+        process the host now tracks in place of the group a direct `Spawn` of the
+        real command would have left it tracking.
+        """
+        ...
+
+    def await_done(self, pid: int, deadline: float) -> int | None | SupervisorDoneUnknown:
+        """Wait for the supervisor identified by `pid` (`start`'s own identity) to
+        report its one supervised command done, giving up once `deadline` passes.
+
+        Returns the supervised command's exit code once the supervisor reports it
+        done; `None` if `deadline` arrives first with it not yet done -- a later
+        `await_done` call can still succeed; `SupervisorDoneUnknown` instead if
+        that can never be recovered now.
+        """
+        ...
+
+    def close(self, pid: int) -> None:
+        """Release whatever this port is still holding open for the supervisor
+        identified by `pid`, once nothing will ask about it again.
+
+        A no-op where nothing is held open for `pid` any more -- `await_done`
+        already released it on a terminal outcome, or nothing was ever started for
+        it. Call this one regardless from teardown, for the jail destroyed before
+        anything ever awaited it.
+        """
+        ...
