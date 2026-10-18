@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 23:30'
-updated_date: '2026-10-18 23:36'
+updated_date: '2026-10-18 23:39'
 labels:
   - size-1
   - finish-moved
@@ -32,7 +32,7 @@ Fixed: start is now captured before the early-check call (i.e., at the actual pr
 <!-- AC:BEGIN -->
 - [x] #1 Both forged-done tests measure elapsed time from the actual process-spawn point, not from after the early-check's own deadline has already consumed part of the window
 - [x] #2 Both tests pass stably (5+ consecutive runs) on macOS and real Linux+bwrap
-- [ ] #3 CI (GitHub Actions) passes on a re-push
+- [x] #3 CI (GitHub Actions) passes on a re-push
 <!-- AC:END -->
 
 ## Implementation Notes
