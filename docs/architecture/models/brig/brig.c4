@@ -1,0 +1,9 @@
+// Software system: Brig. Declared top-level (no extend).
+// Containers live in sibling files via `extend brig { <name> = container ... }`;
+// components one level deeper under models/brig/<container>/ via
+// `extend brig.<container> { <name> = component ... }`.
+model {
+  brig = softwareSystem 'Brig' {
+    description 'A standalone sandbox library: jails a program\'s processes and grades how well each part of the jail is enforced.'
+  }
+}

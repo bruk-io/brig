@@ -1,0 +1,16 @@
+// LANDSCAPE LAYER — the only place cross-system wiring lives.
+// Holds: people (actors), external systems, and CROSS-SYSTEM relationships.
+// Software systems themselves are declared under models/<system>/ and bubble
+// up to top level automatically — do NOT redeclare them here.
+//
+// FEDERATION RULE (enforced by c4lint's black-box check): cross-system edges
+// connect systems as BLACK BOXES (system -> system). Never target another
+// system's container/component — it breaks orthodox C4 and a future split into
+// per-system projects.
+model {
+  embedder = externalSystem 'Embedder' {
+    description 'A program that links brig to run its own processes inside a jail.'
+  }
+
+  embedder -> brig 'creates, supervises, and tears down jails through'
+}

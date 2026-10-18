@@ -1,0 +1,10 @@
+// ESTATE-WIDE views (root of views/ = spans multiple systems).
+// System-scoped views live in views/<system>/. Keep root views at the
+// system/landscape zoom level only — never container/component detail across
+// systems (won't survive federation).
+views {
+  view index {
+    title 'System Landscape'
+    include *
+  }
+}

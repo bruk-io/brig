@@ -1,0 +1,22 @@
+site_name: brig
+docs_dir: docs
+
+theme:
+  name: material
+
+nav:
+  - Home: index.md
+  - Glossary: glossary.md
+  - SPEC: spec/index.md
+  - Architecture: architecture/index.md
+  - Reference: reference.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+  - likec4

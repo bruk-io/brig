@@ -1,0 +1,7 @@
+// System Context — Brig (scoped to this one system).
+views {
+  view brigContext of brig {
+    title 'System Context — Brig'
+    include brig, embedder
+  }
+}

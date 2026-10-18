@@ -1,0 +1,8 @@
+// Intra-system relationships for Brig (container<->container,
+// component<->component). Explicit endpoints only — no it/this, no sourceless
+// `-> x`. Inter-process edges carry a nested `technology`.
+model {
+  // extend brig {
+  //   webApp -> apiApp 'makes API calls to' { technology 'JSON/HTTPS' }
+  // }
+}
