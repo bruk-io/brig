@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 23:30'
-updated_date: '2026-10-18 23:33'
+updated_date: '2026-10-18 23:35'
 labels:
   - size-1
 dependencies: []
@@ -102,4 +102,60 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+## Review (philosophy:reviewer, 2026-10-18)
+
+Verdict: NOT CLOSED. The fix is correct and I would close it on its merits, but three
+board-level facts stand in the way, and none of them are mine to change.
+
+### The fix itself: verified, correct, test-only
+
+- Diff (uncommitted, `tests/e2e/test_supervisor_link_gateway.py`) moves `start = time.monotonic()`
+  above `supervisors.start(command, ())` in both affected tests and adds an explanatory comment.
+  Nothing else changes: same assertions, same structure, same `await_done` deadlines (both still
+  compute a fresh `time.monotonic()`, so the early check's own window is unaltered). No production
+  code is touched.
+- The CI log (run 39176499195) confirms the reading: the traceback points at line 166, the
+  `elapsed` assertion, which sits *after* `assert outcome == real_exit_code`. The security property
+  -- a forged done event is never trusted -- held in both failures. Only the auxiliary timing
+  sanity check failed.
+- Math: with `start` at the spawn point, `elapsed` now covers spawn + interpreter startup +
+  `sleep(0.5)`, comfortably over the 0.4s floor, with no structural ceiling below it. Under the old
+  placement the ceiling was `forge_sleep_s * 3/4` (0.375s) plus interpreter startup -- 0.395s on CI,
+  0.4-something locally, which is exactly why it passed by luck. The check is genuinely auxiliary
+  now: a trusted forged event would be caught first by `assert early is None`.
+- Stability: 5/5 green on macOS, 5/5 green in a fresh privileged ubuntu:24.04/amd64 container with
+  real bwrap (brig-probe-amd64:latest). `--collect-only` confirms the filter selected exactly the
+  two changed functions.
+- Full-tier check: pass (recorded above). `just gates` and `just typecheck` (mypy strict, 62 files):
+  pass. The check reformatted and fixed nothing -- `git status` after it still shows only the one
+  test file.
+
+AC#1 and AC#2 are met on this evidence. AC#3 is not met and cannot be met from here.
+
+### Findings
+
+1. (blocking, process) AC#1 and AC#2 were already ticked in HEAD before review. Ticks are the
+   reviewer's only change to the finish line; the worker ticking its own criteria inverts that. The
+   state happens to be correct -- I verified both independently -- so nothing needs untreading, but
+   the ticks carried no evidence at the time they were made.
+2. (blocking, board) `board-check close` reports the criteria changed since acceptance in a1af15f
+   (all three were added after), so the task needs the `finish-moved` label and a note saying what
+   changed and why, committed by whoever moved them. A reviewer may not add that label.
+3. (blocking) AC#3, "CI (GitHub Actions) passes on a re-push", is unmet and unverifiable within a
+   review: it requires an actual push to the remote, which is the session owner's action. Pending,
+   correctly left unticked.
+4. No repro: this was caught by a one-shot CI run against uncommitted-at-the-time code, not by a
+   committed failing test, so there is no earlier commit for `record-check --repro` to point at. The
+   CI log for run 39176499195 (assert 0.39505254200000195 >= 0.4) is the repro of record, and the
+   two tests themselves are the regression guard going forward.
+5. The fix is still uncommitted. A reviewer does not commit the work it reviews.
+
+None of the findings warrant a draft task: #1 and #2 are process corrections on this task, #3 is
+pending by design, #4 is the documented escape hatch, #5 is the owner's next step.
+
+### To close
+
+Owner: add the `finish-moved` label with its note, commit the test file, confirm CI green on the
+re-push, tick AC#3, then run close-task. Status left In Progress.
 <!-- SECTION:NOTES:END -->
