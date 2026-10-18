@@ -26,4 +26,6 @@ Second shape, found reviewing TASK-0001.21's own close: destroy_jail deletes the
 <!-- AC:BEGIN -->
 - [ ] #1 A create_bwrap_jail call whose own run() raises before returning a Jail does not leave its freshly-written supervisor script behind
 - [ ] #2 A test reproduces this exact shape (a failing supervisor spawn, e.g. via a fake/fixture that fails after the script write) and asserts the file is gone
+- [ ] #3 A destroy_jail call that raises JailTeardownFailed (the kill ladder's last verify still found the group alive) does not leave the jail's own supervisor script behind either, or a decision record says why that shape stays accepted
+- [ ] #4 A test reproduces the JailTeardownFailed shape and asserts on the chosen outcome
 <!-- AC:END -->
