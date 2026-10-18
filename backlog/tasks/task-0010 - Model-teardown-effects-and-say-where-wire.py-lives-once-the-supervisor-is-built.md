@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0009
+id: TASK-0010
 title: >-
   Model teardown -> effects, and say where wire.py lives once the supervisor is
   built
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-18 03:11'
 updated_date: '2026-10-18 04:34'
