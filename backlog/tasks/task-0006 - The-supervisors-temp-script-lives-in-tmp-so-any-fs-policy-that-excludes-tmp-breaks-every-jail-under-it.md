@@ -3,11 +3,20 @@ id: TASK-0006
 title: >-
   The supervisor's temp script lives in /tmp, so any fs policy that excludes
   /tmp breaks every jail under it
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-10-18 13:05'
-labels: []
+updated_date: '2026-10-18 13:20'
+labels:
+  - brig
+  - size-3
 dependencies: []
+modified_files:
+  - src/brig/infra/state_dir.py
+  - src/brig/presentation/api.py
+  - src/brig/domain/jail_types/bwrap.py
+  - tests/e2e/test_fs_policy_battery.py
 type: bug
 ---
 
@@ -37,3 +46,53 @@ Invisible on macOS: the test is skipif(shutil.which('bwrap') is None), so it ski
 - [ ] #2 tests/e2e/test_fs_policy_battery.py::test_a_path_outside_the_policy_is_unreadable_in_a_real_bwrap_jail passes on real Linux, exiting 2 (ENOENT for the planted secret) rather than raising JailExitUnknown
 - [ ] #3 A policy that excludes /tmp is covered by a test asserting the jail still starts, so this coupling cannot regress silently
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+### Design (settled with the owner)
+A dedicated home-dir folder for brig's own runtime artifacts, not /tmp: default
+`~/.brig`, overridable in full via `BRIG_HOME` (when set, taken exactly as given,
+no further default-resolution logic). The supervisor's assembled script moves there.
+That directory is bound into every bwrap launch unconditionally -- it is brig's own
+structural requirement, not part of the caller's FsPolicy, the same way
+`_NAMESPACE_FLAGS`/`_INHERITABLE_FDS` are structural rather than policy-controlled.
+
+### Order of work
+1. New `src/brig/infra/state_dir.py`: `resolve(env: Mapping[str, str] = os.environ) ->
+   Path` (pure: `BRIG_HOME` if set, else `Path.home() / ".brig"`) and `ensure(path:
+   Path) -> Path` (the one I/O call, `mkdir(parents=True, exist_ok=True)`) -- kept
+   separate per functional-core/imperative-shell.
+2. `src/brig/presentation/api.py`'s `_supervisor_path()`: write the assembled
+   supervisor file inside `state_dir.ensure(state_dir.resolve())` (via
+   `tempfile.NamedTemporaryFile`'s `dir=` parameter, keeping its collision-safe
+   random suffix) instead of the default tempdir (`/tmp`).
+3. `src/brig/domain/jail_types/bwrap.py`'s `compile_supervisor_launch`: take the
+   resolved state directory as a new plain-string parameter (domain does no I/O to
+   locate it, rule 2 -- presentation resolves it and hands it in, the same pattern
+   `supervisor_path` already uses) and add one unconditional `--ro-bind
+   <state_dir> <state_dir>`, placed after the policy's own binds so it cannot be
+   shadowed by one of them, before `_NAMESPACE_FLAGS`.
+4. Update every caller (`_supervisor_argv`, `_supervisors_for`) to pass the resolved
+   directory through.
+5. Tests: `state_dir.resolve()` honors `BRIG_HOME` when set and defaults to
+   `~/.brig` otherwise (unit-level, pure, synthetic env mappings, no real I/O);
+   `tests/e2e/test_fs_policy_battery.py::test_a_path_outside_the_policy_is_unreadable_in_a_real_bwrap_jail`
+   passes on real Linux, exiting 2 rather than raising `JailExitUnknown`; a new e2e
+   test asserting a policy that excludes /tmp (the exact shape that broke this) still
+   lets the jail start, so this coupling cannot regress silently.
+
+### Proof
+- just gates, just typecheck, just done green.
+- Real Linux + bwrap (brig-probe-amd64:latest): the fs-policy battery's previously
+  failing test now passes; the new /tmp-excluded-policy test passes.
+
+### Risks
+- The unconditional bind must land in the compiled argv in a position bwrap actually
+  honors over a conflicting policy bind (bwrap applies binds in argv order; later
+  wins on overlapping paths) -- verify this empirically against real bwrap, not just
+  by reading the flag order.
+- `BRIG_HOME` is a brig-internal operational setting, never routed through
+  `EnvPolicy` scrubbing (that governs what the *jailed command* sees, not brig's own
+  host-side config) -- make sure nothing conflates the two.
+<!-- SECTION:PLAN:END -->
