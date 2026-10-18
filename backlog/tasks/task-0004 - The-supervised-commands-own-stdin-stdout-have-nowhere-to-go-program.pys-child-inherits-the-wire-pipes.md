@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 04:34'
-updated_date: '2026-10-18 07:59'
+updated_date: '2026-10-18 08:02'
 labels:
   - brig
   - size-3
@@ -266,6 +266,32 @@ open; `_main` closes this process's own copy only after `_start_child` has retur
      `Evidence(control_observed=True, violation_blocked=True)` -> `Grade.ENFORCED` (was
      `UNENFORCED` on this same host before this draft's fix).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+### Review follow-up (same session)
+
+A review pass flagged that the forged-\`done\` regression test no longer exercises the
+invariant it names: once fd 1 became the embedder's real stdout again, writing a forged
+event there passes whether or not \`_start_child\`'s \`POSIX_SPAWN_CLOSE\` actions for
+\`wire.REQUEST_FD\`/\`wire.EVENTS_FD\` are even present. Added
+\`test_a_supervised_commands_direct_write_to_the_events_fd_cannot_reach_it\` to
+\`test_supervisor_link_gateway.py\`, writing the forged event to \`wire.EVENTS_FD\` by
+number instead of through fd 1. Checked for discrimination, not only that it passes
+(the same discipline \`test_supervisor_reaps_orphans.py\` was already held to): with the
+two \`POSIX_SPAWN_CLOSE\` actions temporarily removed from \`_start_child\`, this new test
+fails (\`assert 0 is None\` -- the forged exit code 0 is trusted early); restored, it
+passes. \`_start_child\`'s own docstring now states the load-bearing ordering this
+depends on explicitly (\`_REQUEST_FD\` must still be open when this function runs, which
+holds only because \`_main\` closes it after, not before, calling this function) --
+previously only \`_read_exec_request\`'s docstring said so, and that paragraph had gone
+stale (it claimed \`_read_exec_request\` already closed its own copy, which stopped
+being true once \`closefd=False\` was introduced earlier in this same task).
+
+Re-verified after: \`just done\` green on macOS (21 e2e passed, up from 20); real Linux +
+real bwrap (same Docker setup) -- 80 passed, 2 skipped, up from 79.
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 
