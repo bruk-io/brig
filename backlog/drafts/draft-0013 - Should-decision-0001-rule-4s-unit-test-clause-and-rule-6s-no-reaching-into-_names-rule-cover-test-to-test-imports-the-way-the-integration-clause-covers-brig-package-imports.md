@@ -7,6 +7,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-10-18 13:30'
+updated_date: '2026-10-18 20:43'
 labels:
   - brig
   - size-1
@@ -25,3 +26,9 @@ Open question: should rule 4's unit clause (and/or rule 6) be extended to cover 
 
 Not blocking: TASK-0009's own committed plan explicitly authorized a unit-or-integration-layer test here, so the import stands either way this is resolved.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Dropped, not pursued: a genuine but low-priority open question about whether decision-0001 rule 4's unit-test clause should cover test-to-test imports the way the integration clause covers brig-package imports. Self-assessed non-blocking when filed (TASK-0009's own committed plan already authorized the one import that prompted this, so nothing currently on the board depends on resolving it). Owner's call: drop rather than investigate further.
+<!-- SECTION:NOTES:END -->
