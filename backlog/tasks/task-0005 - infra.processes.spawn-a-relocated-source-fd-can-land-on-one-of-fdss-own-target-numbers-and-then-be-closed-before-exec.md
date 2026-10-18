@@ -40,9 +40,9 @@ No test covers the collision path at all: deleting the whole relocation branch l
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A source fd relocated out of a collision never lands on any of `fds`'s own target numbers (e.g. dup repeatedly until outside the target set, or fcntl.F_DUPFD past max(targets)), and no CLOSE action names a number a DUP2 action wrote a target onto
-- [ ] #2 A test forces the fd-allocation state that reproduces this (a free hole at a target number below every other free fd) and fails against today's code, so the collision path has regression coverage that discriminates
-- [ ] #3 `_resolve_fd_sources`'s docstring no longer claims target numbers cannot be returned by os.dup
+- [x] #1 A source fd relocated out of a collision never lands on any of `fds`'s own target numbers (e.g. dup repeatedly until outside the target set, or fcntl.F_DUPFD past max(targets)), and no CLOSE action names a number a DUP2 action wrote a target onto
+- [x] #2 A test forces the fd-allocation state that reproduces this (a free hole at a target number below every other free fd) and fails against today's code, so the collision path has regression coverage that discriminates
+- [x] #3 `_resolve_fd_sources`'s docstring no longer claims target numbers cannot be returned by os.dup
 <!-- AC:END -->
 
 ## Implementation Plan
