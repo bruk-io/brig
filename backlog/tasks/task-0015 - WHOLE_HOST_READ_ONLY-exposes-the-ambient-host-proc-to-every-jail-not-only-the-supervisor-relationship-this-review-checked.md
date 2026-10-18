@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 07:18'
-updated_date: '2026-10-18 21:27'
+updated_date: '2026-10-18 21:34'
 labels:
   - brig
   - size-3
@@ -20,6 +20,7 @@ modified_files:
   - src/brig/domain/jail_types/bwrap.py
   - tests/unit/test_bwrap_compile.py
   - tests/e2e/test_fs_policy_battery.py
+  - tests/e2e/test_tiocsti_battery.py
 ---
 
 ## Description
@@ -133,3 +134,9 @@ pass actually checked and closed.
   confirmed true (the supervisor's own reap loop is a pure syscall), re-verify rather
   than re-assume now that the actual change is landing.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Added `tests/e2e/test_tiocsti_battery.py` to modified files beyond the plan's own list: its `_bwrap_argv_prefix` is a hand-maintained mirror of `compile_supervisor_launch`'s compiled argv (TASK-0009's own precedent), cross-checked byte-exact against the real output in `tests/unit/test_bwrap_compile.py`. Leaving it stale would have made that cross-check test fail, and it is also the live argv the TIOCSTI differential probes spawn bwrap with directly, not merely a stale docstring risk. Updated both its returned tuple and its docstring (which enumerates what it mirrors) for the new `_VIRTUAL_FS_FLAGS`.
+<!-- SECTION:NOTES:END -->
