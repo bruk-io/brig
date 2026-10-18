@@ -4,7 +4,7 @@ title: 'Design question: destroy_jail called before run_jail reaps a live proces
 status: Draft
 assignee: []
 created_date: '2026-10-17 21:17'
-updated_date: '2026-10-17 21:54'
+updated_date: '2026-10-18 21:20'
 labels:
   - brig
 dependencies: []
@@ -79,3 +79,9 @@ teardown (pidfd, or verify-before-reap)".
 Carried forward: the pid-reuse race (see DRAFT-0003) is the one piece of this that
 remains genuinely open.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Archiving: both halves resolved. The original gap (destroy_jail before run_jail leaving a zombie) was fixed in TASK-0001.03, confirmed in this draft's own text. The one carried-forward item, the pid-reuse race (DRAFT-0003), is now also closed -- decision-0003, accepted, implemented as TASK-0013 (committed a4eddbc). Nothing left open here.
+<!-- SECTION:NOTES:END -->
