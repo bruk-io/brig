@@ -3,11 +3,11 @@ id: TASK-0009
 title: >-
   The TIOCSTI differential's hand-copied bwrap argv has already drifted from the
   real one
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 12:55'
-updated_date: '2026-10-18 14:54'
+updated_date: '2026-10-18 15:03'
 labels:
   - brig
   - size-2
@@ -199,4 +199,6 @@ Other findings (neither blocks):
 3. (low) tests/e2e/test_tiocsti_battery.py now imports two brig.infra modules (processes and state_dir); rule 4 allows one for a gateway test, and the count clause is unenforced. Arrived with TASK-0006's state-dir work but sits in this task's file. Joins DRAFT-0013's area rather than earning its own task.
 
 No repro: the argv-drift fix and the fidelity test that catches it landed together in one commit (e9d5440), entangled with TASK-0006's compile_supervisor_launch signature change (the fidelity test needed that signature to exist at all) -- no earlier commit of just this fix to run record-check --repro against. Same pattern as TASK-0002/TASK-0005/TASK-0001.19.
+
+Independent review confirmed both ACs genuinely met: the fidelity test discriminates (fails when --as-pid-1 is dropped from the copy), the stale _BWRAP_ARGV docstring citation is fixed. Review flagged the fix's import shape (tests/unit/test_bwrap_compile.py pulling brig.* transitively via tests.e2e.test_tiocsti_battery) as a real rule-4 departure, already tracked on the existing DRAFT-0013 rather than a new draft -- not undercutting either AC. Final verification: full suite green on real Linux+bwrap including the fidelity test, just done green on macOS.
 <!-- SECTION:NOTES:END -->
