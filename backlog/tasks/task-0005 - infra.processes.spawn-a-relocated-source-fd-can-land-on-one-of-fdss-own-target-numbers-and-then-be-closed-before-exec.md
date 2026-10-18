@@ -3,11 +3,18 @@ id: TASK-0005
 title: >-
   infra.processes.spawn: a relocated source fd can land on one of fds's own
   target numbers and then be closed before exec
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-10-18 08:22'
-labels: []
+updated_date: '2026-10-18 08:23'
+labels:
+  - brig
+  - size-2
 dependencies: []
+modified_files:
+  - src/brig/infra/processes.py
+  - tests/unit/test_processes.py
 type: bug
 ---
 
@@ -37,3 +44,34 @@ No test covers the collision path at all: deleting the whole relocation branch l
 - [ ] #2 A test forces the fd-allocation state that reproduces this (a free hole at a target number below every other free fd) and fails against today's code, so the collision path has regression coverage that discriminates
 - [ ] #3 `_resolve_fd_sources`'s docstring no longer claims target numbers cannot be returned by os.dup
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+### Order of work
+1. Fix `_resolve_fd_sources` in src/brig/infra/processes.py: a relocated source fd must
+   never land on any of `fds`'s own target numbers. Relocate with repeated `os.dup` (or
+   `fcntl.F_DUPFD`/`os.dup2`-based allocation) until the result is outside the full
+   target set, not just "not a target it already walked past" -- the bug was assuming
+   os.dup can't return a target number, which is false whenever this process has a
+   hole there.
+2. Fix `_fd_actions` so no CLOSE action names a number a DUP2 action wrote a target
+   onto -- order/dedupe the generated actions so a relocated-then-closed source and a
+   final target never collide.
+3. Add a test that forces the exact fd-allocation state DRAFT-0014/TASK-0004's review
+   measured (a free hole at a target number below every other free fd) and fails
+   against the old code -- not just a happy-path collision test.
+4. Fix the docstring's false claim that os.dup cannot return one of fds's own targets.
+
+### Proof
+- The new test fails on the pre-fix code (confirm by stashing the fix locally) and
+  passes after.
+- just gates, just done green.
+- Re-run TASK-0004's own end-to-end oracle (a supervised /bin/echo hello through
+  create_bwrap_jail/run_jail, real Linux + bwrap in the brig-probe-amd64 container)
+  still returns 0 after this fix, since this function sits underneath that path.
+
+### Risks
+- fd numbers are process-global, mutable state; a fix that works on macOS's fd layout
+  but not Linux's (or vice versa) would hide the same bug again -- verify on both.
+<!-- SECTION:PLAN:END -->
