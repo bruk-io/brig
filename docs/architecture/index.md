@@ -60,3 +60,28 @@ brigLibraryComponents
 Source: [`views/brig/components.c4`](views/brig/components.c4),
 [`models/brig/library.c4`](models/brig/library.c4) (one component per file under
 `models/brig/library/`).
+
+## Jail types
+
+The same components as above, grouped by jail type instead of by layer: bwrap
+(built), Seatbelt (`#planned`, decision-0001's order puts it next), and oci
+(`#paused` -- keeps its place in the layout, no order of work yet). Zero edges
+between any two clusters is decision-0001 rule 3's own claim made visible ("a
+jail type is a slice... no module of one type imports another's"), not
+illustrative. Rule 3 names exactly two files per type (`domain/jail_types/<type>.py`,
+`presentation/drivers/<type>.py`), so this view holds every type to that same
+two-component shape; oci's own `infra/docker.py` is modeled (tagged `#paused`)
+but deliberately left out of this view, the same way bwrap's own
+`infra/processes.py` is -- a jail type's infra primitive is real and correlated
+with that type, but it is not part of rule 3's slice claim.
+
+```likec4-view
+brigJailTypes
+```
+
+Source: [`views/brig/jail-types.c4`](views/brig/jail-types.c4),
+[`models/brig/library/seatbelt-jail-type.c4`](models/brig/library/seatbelt-jail-type.c4),
+[`models/brig/library/seatbelt-driver.c4`](models/brig/library/seatbelt-driver.c4),
+[`models/brig/library/oci-jail-type.c4`](models/brig/library/oci-jail-type.c4),
+[`models/brig/library/oci-driver.c4`](models/brig/library/oci-driver.c4),
+[`models/brig/library/docker.c4`](models/brig/library/docker.c4) (modeled, not shown above).

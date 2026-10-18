@@ -1,0 +1,13 @@
+// Component: domain/jail_types/oci.py -- paused indefinitely (decision-0001).
+// Keeps its place in the layout; built later. Until then nothing may assume
+// a process has a host pid or that a jail has a supervisor program, since
+// `docker exec` stands in for one.
+model {
+  extend brig.library {
+    ociJailType = component 'Oci Jail Type' {
+      #paused
+      technology 'Python 3.15'
+      description 'oci\'s slice of the domain: would compile a jail request into a Plan for a container run by `docker exec`. Paused indefinitely (decision-0001) -- it keeps its place in the layout but has no order of work yet. No I/O itself.'
+    }
+  }
+}

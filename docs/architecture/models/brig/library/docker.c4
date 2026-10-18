@@ -1,0 +1,18 @@
+// Component: infra/docker.py -- paused indefinitely (decision-0001).
+// oci-specific plumbing: `docker exec` stands in for a host pid and a
+// supervisor program while oci is paused. Not part of rule 3's slice
+// (that names only domain/jail_types and presentation/drivers) -- it is
+// the paused paragraph's own bundle. bwrap already has its own infra
+// primitive too (`processes`, modeled separately); Seatbelt likely will
+// once built. Deliberately left out of views/brig/jail-types.c4, which
+// shows only rule 3's two-file shape per type -- see that view's own
+// comment for why.
+model {
+  extend brig.library {
+    docker = component 'Docker' {
+      #paused
+      technology 'Python 3.15, stdlib only'
+      description 'Would run and signal a container via `docker exec`, standing in for a host pid and a supervisor program. Plain data in and out -- never a brig type -- so only oci\'s driver knows what the data means. Paused indefinitely (decision-0001) -- it keeps its place in the layout but has no order of work yet.'
+    }
+  }
+}

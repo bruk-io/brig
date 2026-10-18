@@ -102,4 +102,9 @@ specification {
   tag external
   tag deprecated
   tag planned
+  // Deferred indefinitely -- a different claim than #planned ("designed,
+  // built next"). decision-0001 draws this distinction explicitly between
+  // Seatbelt (#planned) and oci (#paused): oci keeps its place in the
+  // layout but has no order of work yet.
+  tag paused
 }

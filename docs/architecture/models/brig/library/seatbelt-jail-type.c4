@@ -1,0 +1,11 @@
+// Component: domain/jail_types/seatbelt.py -- planned, not built
+// (decision-0001: bwrap first, Seatbelt next).
+model {
+  extend brig.library {
+    seatbeltJailType = component 'Seatbelt Jail Type' {
+      #planned
+      technology 'Python 3.15'
+      description 'Seatbelt\'s slice of the domain: compiles a jail request into a Plan whose profile is rendered from a t-string template (rule 16), refusing a plain str by type, ahead of the command it runs under macOS\'s sandbox-exec as the jail\'s one process. No I/O itself.'
+    }
+  }
+}

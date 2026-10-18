@@ -1,0 +1,11 @@
+// Component: presentation/drivers/oci.py -- paused indefinitely
+// (decision-0001). Keeps its place in the layout; built later.
+model {
+  extend brig.library {
+    ociDriver = component 'Oci Driver' {
+      #paused
+      technology 'Python 3.15'
+      description 'oci\'s driver: would perform the effects an operation or teardown generator yields, translating each one into an infra/docker call and back. Paused indefinitely (decision-0001) -- it keeps its place in the layout but has no order of work yet.'
+    }
+  }
+}

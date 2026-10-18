@@ -1,0 +1,36 @@
+// Jail types -- Brig Library, grouped by jail type rather than by layer
+// (contrast with components.c4's layer grouping -- same elements, a
+// different concern, hence a separate view rather than a fourth group
+// folded into that one).
+//
+// decision-0001 rule 3: a jail type is a slice -- domain/jail_types/<type>.py
+// and presentation/drivers/<type>.py are one jail type's, and no module of
+// one type imports another's. Rule 3 names exactly those two files, nothing
+// from infra -- so this view is strictly the two-component shape per type,
+// three clusters, zero edges between them: the rule's own visual proof, not
+// a mix of rule 3 with the separate "paused" paragraph's file bundle.
+//
+// infra/docker.py (oci), infra/processes.py (bwrap, already modeled
+// elsewhere), and a likely infra/sandbox_exec.py for Seatbelt once built are
+// each a jail type's own plain-data plumbing -- real, and correlated with a
+// jail type, but not part of rule 3's slice claim, so none of them belong in
+// this specific view. Putting docker alone in oci's cluster here would have
+// made oci look like the exception when bwrap already has the same shape of
+// uncounted infra component; leaving all three out keeps the three clusters
+// actually comparable.
+views {
+  view brigJailTypes of brig.library {
+    title 'Jail Types -- Brig Library (bwrap, Seatbelt, oci side by side)'
+    include bwrapJailType, bwrapDriver, seatbeltJailType, seatbeltDriver, ociJailType, ociDriver
+
+    group 'bwrap' {
+      include bwrapJailType, bwrapDriver
+    }
+    group 'seatbelt' {
+      include seatbeltJailType, seatbeltDriver
+    }
+    group 'oci' {
+      include ociJailType, ociDriver
+    }
+  }
+}
