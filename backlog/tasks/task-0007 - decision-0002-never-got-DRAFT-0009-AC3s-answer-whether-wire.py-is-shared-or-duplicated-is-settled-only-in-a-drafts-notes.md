@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0013
+id: TASK-0007
 title: >-
   decision-0002 never got DRAFT-0009 AC#3's answer: whether wire.py is shared or
   duplicated is settled only in a draft's notes
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-18 08:08'
 labels: []
