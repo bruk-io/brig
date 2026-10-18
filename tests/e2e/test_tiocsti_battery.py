@@ -6,7 +6,7 @@ without its session detached from that terminal, use TIOCSTI to inject keystroke
 owner of that terminal will execute next -- an escape that bypasses every other
 boundary the jail states.
 
-This file has three batteries, each guarded by a kernel-availability check that is
+This file has four batteries, each guarded by a kernel-availability check that is
 itself the positive control (rule 11): if TIOCSTI is not compiled in on this kernel
 (``CONFIG_LEGACY_TIOCSTI=n``) or disabled at runtime (``dev.tty.legacy_tiocsti=0``),
 every injection attempt below fails with ``EIO`` regardless of confinement, and a
@@ -40,24 +40,34 @@ lands only on this freshly made pty, never on the operator's own terminal.
 - ``test_tiocsti_injection_fails_in_a_real_bwrap_jail``: the same probe run as a real
   bwrap jail's one process, through the public API. Guarded to skip cleanly where
   bwrap is not installed (macOS); runs for real in CI on Linux.
+- ``test_new_session_is_the_sole_closer_of_tiocsti_when_infra_detaches_no_session``:
+  TASK-0001.11's differential, grading the attribution itself rather than only the
+  end-to-end property. Runs the probe through brig's real bwrap argv and, built
+  locally here (never by changing production code -- see
+  ``_BWRAP_ARGV_WITHOUT_NEW_SESSION``'s own docstring), the same argv with
+  ``--new-session`` removed, both directly through ``brig.infra.processes.spawn``.
 
-What this file cannot grade: AC#2 asks that bwrap's `--new-session` close this hole
-"and not infra's setsid". This task's review measured `brig.infra.processes.spawn`
-setting `setsid=True` unconditionally, before bwrap's own argv is ever parsed, and
-concluded no black-box probe could ever attribute the closure to one layer over the
-other -- the weaker of the two always ran first and already sufficed.
+AC#2 asks that bwrap's `--new-session` close this hole "and not infra's setsid". This
+task's review originally measured `brig.infra.processes.spawn` setting `setsid=True`
+unconditionally, before bwrap's own argv is ever parsed, and concluded no black-box
+probe could ever attribute the closure to one layer over the other -- the weaker of
+the two always ran first and already sufficed.
 
 TASK-0001.12 narrowed that: `setsid=True` is compiled out of uv's managed CPython, the
 build this project's own CI uses, so there `spawn` gets a new process group only, the
 controlling terminal stays shared, and `--new-session` is the one thing closing the
 hole. The attribution is therefore not uniformly ungradable -- it depends on a property
-infra now reports, `SpawnedProcess.session_detached`. This file still does not grade it:
-the bwrap battery below asserts the hole is closed for a real jail without saying by
-which layer, which is the right assertion either way, and the gateway battery grades
-infra's own claim only where infra makes one. `domain/jail_types/bwrap.py`'s own
-docstring carries the full attribution. Grading it directly -- so a jail type's own
-flag, not infra's plumbing, is what a change could regress -- is tracked separately:
-see TASK-0001.11.
+infra now reports, `SpawnedProcess.session_detached`. Where that is `False` (this
+project's own CI toolchain), the fourth battery above grades the attribution directly:
+it runs brig's real argv and the same argv with only `--new-session` stripped, and
+requires the first denied and the second to inject, so a change that weakened or
+dropped the flag would show up as this test injecting, not merely as the end-to-end
+battery continuing to pass for a different reason. Where `session_detached` is `True`
+(macOS), the attribution remains exactly as ungradable as TASK-0001.05's review
+described -- infra's own session detachment already closes the hole first and that
+battery skips, with the measurement as its reason, rather than asserting on a result
+that would prove nothing. `domain/jail_types/bwrap.py`'s own docstring carries the full
+attribution in prose either way.
 """
 
 import errno
@@ -116,6 +126,60 @@ denial instead -- measured directly against `brig.infra.processes.spawn` while w
 this battery. Only the gateway battery below needs this platform split: the real-jail
 battery only ever runs on Linux, since bwrap is Linux-only.
 """
+
+
+_BWRAP_ARGV_PREFIX: tuple[str, ...] = (
+    "bwrap",
+    "--ro-bind",
+    "/",
+    "/",
+    "--unshare-all",
+    "--die-with-parent",
+    "--new-session",
+    "--",
+)
+"""Mirrors `domain/jail_types/bwrap.py`'s own `_BWRAP_ARGV`, kept as a local copy
+rather than an import: decision-0001 rule 4 lets an e2e test import the public API,
+or one `brig.infra` module for a gateway test, never a `domain` module directly, and
+this differential needs a variant `compile_run` itself deliberately never produces
+(the same argv with `--new-session` stripped), which only exists by building it here,
+locally, rather than by changing production code. There is also no public entry point
+that would hand back a compiled `Plan`'s argv instead: `create_bwrap_jail` compiles
+and starts the process in the same call and returns neither (checked --
+`presentation/api.py` and `brig/__init__.py` name nothing that returns a `Plan`), so
+this is the only way to get at these flags from `tests/e2e/` at all, not a shortcut
+taken over an available public one.
+
+The cost of the copy is real and not hidden: if `_BWRAP_ARGV` ever changes, this
+constant has to change with it by hand, and nothing in this suite catches that drift
+mechanically -- it is a maintenance obligation on whoever next edits
+`domain/jail_types/bwrap.py`, not a gap any other test here closes.
+"""
+
+_BWRAP_ARGV_WITHOUT_NEW_SESSION: tuple[str, ...] = tuple(
+    flag for flag in _BWRAP_ARGV_PREFIX if flag != "--new-session"
+)
+"""The same prefix with `--new-session` removed -- derived from the one literal above
+by filtering, rather than retyped as a second literal, so the two can only ever differ
+by that one flag. That is the entire point of a differential: TASK-0001.12 measured
+this by hand (positive control injects; the real argv is denied; this argv injects
+again) and this is that same negative half, committed for real.
+"""
+
+
+def _bwrap_differential_probe(argv_prefix: tuple[str, ...]) -> Callable[[], int]:
+    """Build the child `_run_in_pty_session` runs for one half of the TASK-0001.11
+    differential: spawn the TIOCSTI probe directly behind `argv_prefix` through
+    `brig.infra.processes.spawn` -- the same call `_spawned_tiocsti_probe` uses, and
+    the same one every jail type's own driver uses underneath the public API --
+    inheriting fd 0 (this process's own pty slave) and nothing else.
+    """
+
+    def probe() -> int:
+        process = spawn((*argv_prefix, sys.executable, "-c", _TIOCSTI_PROBE), (0, 1, 2))
+        return _reap_exit_code(process.pid)
+
+    return probe
 
 
 def _drain_until_closed(fd: int) -> None:
@@ -243,6 +307,30 @@ def _skip_if_infra_cannot_detach_a_session() -> None:
         )
 
 
+def _skip_unless_new_sessions_closure_is_attributable() -> None:
+    """Spawn one trivial process through `brig.infra.processes.spawn` and skip the
+    calling test -- with that measurement as the reason -- unless `session_detached`
+    comes back `False`.
+
+    The inverse guard of `_skip_if_infra_cannot_detach_a_session`: where infra already
+    detaches a session, that alone already closes TIOCSTI before bwrap's own argv is
+    ever parsed (TASK-0001.05's review measured exactly this), so both halves of the
+    TASK-0001.11 differential would come back denied for infra's own reason and the
+    test would prove nothing about `--new-session` specifically. Reaped immediately,
+    so this leaves no child behind, the same as its counterpart.
+    """
+    process = spawn(("true",), (0, 1, 2))
+    detached = process.session_detached
+    reap(process.pid)
+    if detached:
+        pytest.skip(
+            "this interpreter's spawn detaches a session (session_detached=True), so "
+            "infra's own setsid already closes TIOCSTI before bwrap's argv is parsed "
+            "and --new-session's own contribution cannot be isolated here -- see "
+            "TASK-0001.12's attribution measurement"
+        )
+
+
 def _skip_if_tiocsti_unavailable() -> None:
     """Run the unconfined probe once, and skip the calling test -- with that
     measurement as the reason -- if it reports TIOCSTI is not available on this
@@ -300,3 +388,34 @@ def test_tiocsti_injection_fails_in_a_real_bwrap_jail() -> None:
     _skip_if_tiocsti_unavailable()
     exit_code = _run_in_pty_session(_jailed_tiocsti_probe)
     assert exit_code == _ERRNO_EXIT_OFFSET + _DENIED_ERRNO
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bwrap is not available; test skips on macOS, runs in CI on Linux",
+)
+def test_new_session_is_the_sole_closer_of_tiocsti_when_infra_detaches_no_session() -> None:
+    """TASK-0001.11: the differential TASK-0001.12 measured by hand, committed as a
+    real, repeatable test. Runs brig's real bwrap argv (with `--new-session`) and the
+    same argv with only that flag removed, both directly through
+    `brig.infra.processes.spawn` -- the same call `presentation/drivers/bwrap.py`'s
+    own `run` performs underneath the public API -- under `session_detached=False`:
+    the toolchain this project's own CI runs. The first must be denied and the second
+    must inject; that is what makes `--new-session` attributable as the hole's sole
+    closer there, rather than merely present alongside a session detachment infra
+    cannot actually provide on this toolchain (TASK-0001.12).
+
+    Skips wherever the differential cannot mean anything: no bwrap installed, this
+    interpreter's own `spawn` already detaches a session and so already closes the
+    hole before bwrap's argv is ever parsed, or TIOCSTI is unavailable on this kernel.
+    """
+    _skip_unless_new_sessions_closure_is_attributable()
+    _skip_if_tiocsti_unavailable()
+
+    with_new_session = _run_in_pty_session(_bwrap_differential_probe(_BWRAP_ARGV_PREFIX))
+    assert with_new_session == _ERRNO_EXIT_OFFSET + _DENIED_ERRNO
+
+    without_new_session = _run_in_pty_session(
+        _bwrap_differential_probe(_BWRAP_ARGV_WITHOUT_NEW_SESSION)
+    )
+    assert without_new_session == 0
