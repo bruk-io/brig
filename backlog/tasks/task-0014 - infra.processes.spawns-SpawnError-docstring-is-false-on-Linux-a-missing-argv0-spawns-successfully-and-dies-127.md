@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 17:30'
-updated_date: '2026-10-18 21:04'
+updated_date: '2026-10-18 21:05'
 labels:
   - brig
   - size-2
@@ -281,4 +281,47 @@ drafts filed.
   for something that previously resolved inside the jail's mount namespace.
   That is the load-bearing safety argument and it belongs in the notes; the
   recorded env-passing audit is true but weaker.
+
+### BLOCKING -- new measured-false claims about Linux, in the docstrings AC#1 governs
+
+Measured in brig-probe-amd64:latest:
+os.posix_spawnp('/definitely/not/a/real/path/x', ['x'], dict(os.environ))
+gives **NORAISE pid 7, status 32512**. A missing *direct path* also does not
+raise on Linux; it spawns a child that exits 127, exactly like the bare-name
+case this task was filed for.
+
+1. src/brig/infra/processes.py, spawn()'s docstring: 'so a direct path is
+   unaffected by this pre-check either way' -- false for the missing case on
+   Linux. The outcome changed from NORAISE plus exit-127 to SpawnError.
+2. tests/e2e/test_processes_gateway.py,
+   test_spawn_direct_path_bypasses_path_search_whether_it_exists_or_not's
+   docstring: 'a missing one still raises SpawnError, exactly as before this
+   pre-check existed (that case was already real OS-level behavior, not changed
+   here)' -- flatly contradicted. That test passes on Linux *because of* the
+   pre-check, not because the OS raises.
+
+The behaviour itself is strictly an improvement. The defect is that the fix
+silently narrowed the gap further than it documents. Closing a
+docstring-accuracy bug on a docstring carrying a fresh false-on-Linux claim
+about the same function is self-undermining, and the repo's own standard is
+measured facts. Both docstrings should state instead: on Linux, neither a
+PATH-searched nor a direct unresolvable argv[0] raised before, and the
+pre-check now covers both.
+
+### MEDIUM -- the audited file still states the disproven mechanism
+
+src/brig/infra/supervisor/link.py was named as audited, but two of its own
+docstrings still assert the mechanism this task measured false:
+- around line 42: supervisor_argv[0] described as 'bwrap, resolved by
+  posix_spawnp through PATH', in the sentence explaining what _SUPERVISOR_ENV
+  is for;
+- around line 99 (_SUPERVISOR_ENV's own docstring): 'PATH is the one thing a
+  bare posix_spawnp("bwrap", ...) call genuinely needs'.
+
+Both attribute posix_spawnp's resolution of 'bwrap' to the PATH carried in the
+env argument. Measured false above: that search uses the caller's os.environ.
+_SUPERVISOR_ENV['PATH'] may still be justified on other grounds (it is the
+child's own environment, and bwrap execs further things), but the stated reason
+is wrong -- wrong in exactly the way this task exists to correct, in a file the
+report claims to have audited for this question.
 <!-- SECTION:NOTES:END -->
