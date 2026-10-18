@@ -1,0 +1,136 @@
+[project]
+name = "brig"
+version = "0.0.1"
+description = "A standalone sandbox library: it jails a program's processes and grades how well each part of the jail is enforced."
+readme = "README.md"
+requires-python = ">=3.15"
+license = "MIT"
+authors = [{ name = "Bruk Habtu", email = "bruk.habtu@gmail.com" }]
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "rust-just==1.59.0",
+    "pypeeker @ git+https://github.com/brukhabtu/pypeeker@main",
+    "mkdocs>=1.6",
+    "mypy>=1.14",
+    "pytest>=8.3",
+    "mkdocs-material>=9.7.7",
+    "mkdocstrings-python==2.0.9",
+    "mkdocs-likec4==1.2.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/brig"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests", "scripts", "pypeeker_rules"]
+# scripts/c4lint.py is vendored verbatim from the c4-architecture knowhere
+# plugin; re-synced by copying the upstream file over this one, so it is not
+# linted or reformatted to our own style.
+extend-exclude = ["scripts/c4lint.py"]
+
+[tool.ruff.lint]
+preview = true
+select = ["E", "F", "I", "UP", "DOC501", "DOC502"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+strict = true
+files = ["src", "tests", "scripts", "pypeeker_rules"]
+exclude = ["^scripts/c4lint\\.py$"]
+# tests/ has no __init__.py (pytest's own convention, pythonpath=["."]), so without
+# this mypy guesses two different module names for the same file -- "fakes" from
+# walking up to the nearest directory with no marker, and "tests.integration.fakes"
+# from a dotted import elsewhere -- and refuses to proceed. explicit_package_bases
+# makes "." the one root every file's dotted name is computed from instead.
+explicit_package_bases = true
+mypy_path = ["src", "."]
+
+[[tool.mypy.overrides]]
+module = ["pypeeker.*"]
+ignore_missing_imports = true
+
+# pypeeker ships no py.typed marker, so its own @opaque/@register_dsl_rule
+# decorators are themselves untyped; strict's disallow_untyped_decorators has
+# no way to know that's an upstream gap rather than ours. Scoped to the one
+# module that touches pypeeker's decorators.
+[[tool.mypy.overrides]]
+module = ["pypeeker_rules.brig"]
+disallow_untyped_decorators = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.pypeeker]
+src = ["src", "tests"]
+plugins = ["pypeeker_rules.brig"]
+rules = [
+    "barrel-only",
+    "under-exposed-access",
+    "over-exposed-module-symbol",
+    "import-time-side-effects",
+    "no-import-cycles",
+    "no-impure-functions",
+    "brig-layers",
+    "brig-pure-domain",
+    "brig-slices",
+    "brig-test-layers",
+    "brig-no-patching",
+    "brig-class-forms",
+    "brig-vocabulary",
+    "brig-one-writer",
+]
+
+[tool.pypeeker.brig-layers]
+root = "src/brig"
+strict = true
+
+[tool.pypeeker.brig-layers.allow]
+domain = []
+infra = []
+presentation = ["domain", "infra"]
+
+[tool.pypeeker.brig-pure-domain]
+root = "src/brig/domain"
+banned-imports = [
+    "os", "subprocess", "socket", "signal", "select", "time", "threading",
+    "shutil", "resource", "tempfile", "logging",
+]
+
+# The heuristic half of decision-0001 rule 2 (brig-pure-domain's deterministic
+# import ban is the custom DSL rule above). A no-op until real domain
+# functions land on this empty skeleton; its include-pattern match is
+# therefore unverified beyond this config being accepted.
+[tool.pypeeker.no-impure-functions]
+include = ["brig.domain*"]
+
+[tool.pypeeker.brig-vocabulary]
+root = "src/brig"
+banned-name = "agent"
+
+# TASK-0001.09's e2e battery needs to know, at collection time (which pypeeker sees
+# as import time), whether /proc/self/fd exists on this host to decide if the race
+# it plants is even reachable here -- a measured fact about the host, not an
+# assumption keyed on sys.platform. A bare stdlib probe in the skipif condition
+# itself, not a project helper, so there is exactly one import-time call to allow.
+[tool.pypeeker.import-time-side-effects]
+allow = ["os.path.isdir"]
+
+# over-exposed-module-symbol asks "is this public symbol used outside its own
+# module", which is the wrong question for tests/: pytest collects a test function
+# by its public name and nothing else in the repository ever calls it, by
+# construction, for every test this project writes -- not a design smell to fix
+# by renaming (that would stop pytest collecting it). Scoped to the three test
+# layers' own module prefixes (decision-0001's `tests/unit`, `tests/integration`,
+# `tests/e2e`), never to `brig.*`, so the rule still holds in full over the
+# library's own code.
+[tool.pypeeker.over-exposed-module-symbol]
+allow = ["unit.*", "integration.*", "e2e.*"]

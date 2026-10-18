@@ -1,0 +1,4 @@
+{
+  "fast": "uv run just check",
+  "full": "uv run just done"
+}

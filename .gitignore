@@ -1,0 +1,10 @@
+.venv/
+.pypeeker/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+site/
+node_modules/
+.DS_Store

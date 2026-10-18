@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  done:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      # Ubuntu 24.04 (what ubuntu-latest resolves to today) ships
+      # /usr/lib/sysctl.d/10-apparmor.conf, which denies unprivileged user
+      # namespace creation by default via AppArmor's
+      # kernel.apparmor_restrict_unprivileged_userns sysctl. No AppArmor
+      # profile ships for /usr/bin/bwrap (unlike flatpak/podman/lxc), and
+      # bubblewrap's own packaged sysctl sets a different, Debian-only knob
+      # (kernel.unprivileged_userns_clone) that does not relax this one --
+      # so installing bubblewrap above does not fix it. GitHub's
+      # runner-images maintainers have said they do not plan to change this
+      # (actions/runner-images#10015; a PR to set it at image-build time,
+      # #11489, was closed unmerged), so bwrap's --unshare-all would
+      # otherwise fail here. The write itself fails on a kernel without
+      # this Ubuntu patch (e.g. a future ubuntu-latest, or a non-Ubuntu
+      # runner), hence `|| true`; re-verify this step when ubuntu-latest
+      # moves off 24.04, rather than assuming it still applies.
+      - name: Permit unprivileged user namespaces (Ubuntu 24.04 AppArmor)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Confirm Docker is available
+        run: docker version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.15"
+
+      - run: uv sync
+
+      - run: uv run just done
