@@ -16,6 +16,13 @@ references:
   - >-
     backlog/decisions/decision-0002 -
     The-supervisor-request-channels-and-the-grading-skeleton-the-next-slices-shape.md
+modified_files:
+  - src/brig/infra/supervisor/wire.py
+  - src/brig/infra/supervisor/program.py
+  - src/brig/infra/supervisor/link.py
+  - src/brig/infra/processes.py
+  - tests/e2e/test_supervisor_program_gateway.py
+  - tests/e2e/test_supervisor_link_gateway.py
 ---
 
 ## Description
@@ -172,3 +179,89 @@ inconsistency the eventual design should resolve rather than preserve by acciden
 - [x] #4 Measured against real bwrap in a privileged Linux container: /bin/echo hello through run_jail returns 0 (not 1); test_tiocsti_battery.py's TIOCSTI-injection test stops skipping and passes; test_claims_wiring.py's tiocsti_closure claim grades ENFORCED again, not UNENFORCED
 - [x] #5 just done green on macOS; lint/typecheck/gates and the full pytest suite green against real bwrap on Linux (Docker, privileged ubuntu:24.04)
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+### Resolution
+
+Of the two candidates this draft's own history named, picked the first: give `program.py`
+its own fixed fds for the wire protocol (`wire.py`'s new `REQUEST_FD`/`EVENTS_FD`, 3/4),
+leaving fd 0/1/2 free for the supervised command to inherit from whatever the jail type's
+driver arranged -- exactly where they would have come from with no supervisor in between.
+Rejected routing the real command's stdout through the wire protocol as a new event kind:
+that is the log envelope decision-0002 already deferred to "after the supervisor lands",
+not a fit for this draft's narrower question, and it would mean multiplexing/buffering a
+binary stream through newline-delimited JSON for no reason once the simpler fix is available.
+
+Gated on one measurement before writing any code (per review): does an inherited, explicitly
+`set_inheritable` fd 4 survive `bwrap`'s own exec into a real jail under `--unshare-all`/
+`--as-pid-1`? Measured yes, in a privileged `ubuntu:24.04` container -- fd passing is
+independent of every namespace `bwrap` isolates.
+
+### Changes
+
+- `infra/supervisor/wire.py`: new public `REQUEST_FD = 3`/`EVENTS_FD = 4`, the fixed
+  convention both ends agree on ahead of time (the same reasoning `_INHERITABLE_FDS`
+  already uses for 0/1/2).
+- `infra/supervisor/program.py`: reads the one exec request from `_REQUEST_FD` (duplicated
+  by value, same convention as the message shapes), emits every event to `_EVENTS_FD`
+  via a plain `os.write` (no second buffering layer). `_start_child` no longer seals fd 0/1
+  with discard pipes -- it gives the real command no file action for 0/1/2 at all (plain
+  inherit) and explicitly `POSIX_SPAWN_CLOSE`s `_REQUEST_FD`/`_EVENTS_FD` instead, which is
+  the actual authentication-hole guard now (closing the *new* channel's numbers, since
+  those -- not 0/1/2 -- are what the supervisor process itself still has open and
+  inheritable at that point).
+- `infra/processes.py`: generalized `spawn`'s `stdin_fd`/`stdout_fd` (fixed to the new
+  process's fd 0/1) into a single `fds: Mapping[int, int]` (target -> this process's own
+  source), since `link.py` now needs 3/4, not 0/1. Added `_resolve_fd_sources`: every
+  source that collides with any target -- including its own, since `dup2(fd, fd)` is a
+  documented no-op that does not clear a pipe fd's close-on-exec flag -- is relocated via
+  `os.dup` first. Measured this is the *common* case at fd 3/4, not a rare one: an
+  unencumbered process's first `os.pipe()` call returns the next fd past its standard
+  streams, which is exactly 3.
+- `infra/supervisor/link.py`: `_start` now passes `fds={wire.REQUEST_FD: ..., wire.EVENTS_FD:
+  ...}` and `inheritable_fds=(0, 1, 2)` (was `()`) for the supervisor's own spawn -- the
+  second change is what actually restores the supervised command's real stdio: it is what
+  lets the supervisor itself keep the embedder's real fd 0/1/2 instead of having them closed
+  before the supervised command ever starts.
+- Test blast radius: `tests/e2e/test_supervisor_program_gateway.py` and
+  `test_supervisor_link_gateway.py` moved off `Popen(stdin=PIPE, stdout=PIPE)` onto explicit
+  `os.posix_spawn` with the same fd-collision-safe placement, since the wire protocol no
+  longer lives on a subprocess's ordinary stdin/stdout; `_FAKE_SUPERVISOR_SCRIPT` now writes
+  to `wire.EVENTS_FD` directly. The forged-`done` test's docstring was rewritten honestly:
+  the mechanism changed (the forging write now lands on the test's own real stdout, never
+  reaching the events channel at all, rather than raising `EPIPE` against a sealed pipe).
+
+### A real bug this surfaced, fixed as part of this draft (not a separate filing)
+
+Measured, not assumed: `os.posix_spawn`'s `POSIX_SPAWN_CLOSE` file action on a fd that is not
+open at all fails the *whole* spawn with `EBADF` (confirmed directly:
+`os.posix_spawnp('true', ['true'], os.environ, file_actions=[(os.POSIX_SPAWN_CLOSE, 37)])`
+raises `OSError: [Errno 9] Bad file descriptor`) -- not silently ignored, contrary to a plain
+reading of the POSIX spec text. `_read_exec_request` originally closed its own `_REQUEST_FD`
+immediately after reading (`with os.fdopen(...)`), before `_start_child`'s own `file_actions`
+tried to close that same number for the real command -- failing every supervised command's
+spawn outright (`OSError: Bad file descriptor` for `sh`, the real interpreter, everything).
+Fixed: `_read_exec_request` opens `_REQUEST_FD` with `closefd=False` and leaves the fd itself
+open; `_main` closes this process's own copy only after `_start_child` has returned.
+
+### Proof
+
+- `just done` green in full on macOS (lint, typecheck, gates, pypeeker rule tests, unit,
+  integration x2, e2e -- 20 passed/11 skipped with measured bwrap-unavailable reasons --
+  docs, arch-validate, arch-lint).
+- Real Linux + real bwrap, `docker run --platform linux/amd64 --privileged ubuntu:24.04`
+  (the `brig-probe-amd64` image already built for this repo in this session), repo copied
+  in, `uv sync`: `pytest tests/ pypeeker_rules/tests -rs` -> 79 passed, 2 skipped (both with
+  measured reasons already on record, unrelated to this draft). `just lint`/`typecheck`/
+  `gates` all clean there too (ruff installed via `uv tool install ruff`, the same gap
+  TASK-0001.20 already tracks).
+- The draft's own three-part oracle, measured directly against real bwrap in that container:
+  1. `create_bwrap_jail(('/bin/echo', 'hello'))` through `run_jail` returns `0` (was `1`).
+  2. `tests/e2e/test_tiocsti_battery.py::test_tiocsti_injection_fails_in_a_real_bwrap_jail`
+     passes outright -- no longer the measured `ENOTTY` skip.
+  3. `test_claims_wiring.py`'s `tiocsti_closure` claim, measured directly:
+     `Evidence(control_observed=True, violation_blocked=True)` -> `Grade.ENFORCED` (was
+     `UNENFORCED` on this same host before this draft's fix).
+<!-- SECTION:PLAN:END -->
