@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 14:48'
-updated_date: '2026-10-18 17:09'
+updated_date: '2026-10-18 17:12'
 labels:
   - brig
   - size-1
@@ -132,4 +132,51 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+## Review (reviewer agent, not the implementer)
+
+Verdict: NOT closed. AC#1 and AC#3 are met; AC#2 is not. Left In Progress, uncommitted.
+
+AC#2 unmet -- the replacement docstring makes a new untrue claim, the same class
+TASK-0008/TASK-0011 were filed to remove. Lines 19-22 now read: "`os.pipe()` always
+returns this process's two lowest free fds, in order, so the two calls below land on
+four consecutive numbers regardless of where they start." The premise is true; the
+conclusion does not follow. Pipe #2 takes the two lowest free fds *above* pipe #1's
+pair, which need not be adjacent to them whenever anything holds an fd open in
+between. Measured counterexample in this very repo's interpreter: holding one fd open
+between the two calls gives pipe1=(3,4), pipe2=(6,7) -- not consecutive -- and the test
+still passes in that state. So the sentence is both false and not the reason the test
+works.
+
+The test needs only the shorter derivation: pipe #1 returns the two lowest free fds, so
+every fd up to and including `request_write_fd` is open after it; closing
+`request_write_fd` therefore makes that number this process's lowest free fd; pre-fix
+`os.dup` returns the lowest free fd, lands on `target_events`, and the blanket CLOSE
+undoes its DUP2. Pipe #2's numbers never enter the argument. Fix: drop the "four
+consecutive numbers regardless of where they start" clause and end the derivation at
+`request_write_fd` being the lowest free fd once closed. No draft filed -- this is a
+one-sentence correction inside this task's own scope, not a separate defect.
+
+AC#1 met: the `probe_fd = os.dup(0)` / `os.close(probe_fd)` pair is gone and nothing
+downstream referenced its value.
+
+AC#3 met, verified rather than taken on report: every fd reaching the `finally` is
+either -1 (skipped) or genuinely open, so the unguarded `os.close(fd)` has no EBADF
+path. `request_write_fd` and `events_write_fd` are each set to -1 immediately after
+their early close; `request_read_fd` and `events_read_fd` are never closed before the
+`finally`, because `spawn` closes only `_resolve_fd_sources`'s own relocated
+duplicates (processes.py:391) and the posix_spawn file actions act on the child's fd
+table, not this process's.
+
+Independently redone, all green and not re-run needed next time:
+- Discrimination: reconstructed the pre-TASK-0005-fix shape (bare `os.dup` in
+  `_resolve_fd_sources`, blanket `set(resolved_fds.values())` CLOSE in `_fd_actions`)
+  and ran the test function against it -- failed for the right reason (probe OSError
+  [Errno 9] Bad file descriptor, exit code 1, AssertionError "probe did not exit
+  cleanly"). Against the real functions it passes.
+- `just gates` exit 0, `just done` exit 0, `record-check --tier full` all steps passed.
+
+`No repro:` hatch: applies on the same grounds as TASK-0008 (dead-code/docstring
+overclaim, fix and discriminating test in one commit, no earlier failing-state commit)
+-- but moot until AC#2 is fixed.
 <!-- SECTION:NOTES:END -->
