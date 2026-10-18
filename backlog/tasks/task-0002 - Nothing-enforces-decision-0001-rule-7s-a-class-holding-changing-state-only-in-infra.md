@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@bruk'
 created_date: '2026-10-17 22:57'
-updated_date: '2026-10-18 04:28'
+updated_date: '2026-10-18 04:33'
 labels:
   - brig
   - size-2
@@ -106,4 +106,41 @@ on `src/brig/presentation/drivers/bwrap.py:73` (`assert_never` over
 here (last written by f43c40f), and the concurrently-running TASK-0001.15 supervisor work
 has widened `type Effect` in its uncommitted `src/brig/domain/effects.py` with exactly
 those two variants. Nothing under pypeeker_rules/ can reach mypy's verdict on src/brig/.
+
+### Second finding, raised by this same review: the docstrings' re-export claim was false
+
+While checking the "narrow, accepted gap" claim the fix's new docstrings make rather than
+taking it on trust, two things came out.
+
+(a) The gap really is narrow *in this codebase*: `grep -rnE '^class [A-Za-z_][A-Za-z0-9_]*\('
+src/brig/` shows every class header under src/brig declares only direct, same-file-resolvable
+bases (Exception, StrEnum, Protocol, TypedDict) and not one attribute chain, so nothing today
+lands in the new `ambiguous` bucket. `just gates` is clean by conformance, not by
+suppression.
+
+(b) But the docstrings described a *re-export through another project module* as the same
+conservative false negative as an attribute chain, and that is wrong. Such a base is a real
+same-file IMPORT whose `imported_from` names the re-exporting module, so it lands in
+`disallowed` and FIRES. Verified: `from brig.domain.shim import Protocol` /
+`class Port(Protocol)` fires 'inherits from a base that is not Exception, Enum/StrEnum or
+Protocol' while inheriting from exactly Protocol -- a false positive, the direction this rule
+must never take. It cannot be fixed single-file (`brig.domain.shim.Protocol` and
+`brig.domain.base.Mixin` are the same fact, and the latter must fire -- confirmed, it does,
+through both the inheritance and the stateful part). Filed as **TASK-0001.19**; the five
+docstring passages and the rule message that stated the false claim are corrected here to say
+what the binder actually does. No behaviour change.
+
+Also confirmed in passing: a base aliased at import (`from typing import Protocol as P`)
+stays exempt, and `class Msg(TypedDict, closed=True)` -- wire.py's real header shape --
+stays clean.
+
+Re-run after the docstring corrections: `just test-pypeeker-rules` 22/22, `ruff check` +
+`ruff format --check` clean over pypeeker_rules/. `just done` now reports three failing
+steps, all of them in the concurrently-running TASK-0001.15 supervisor work's own in-flight
+files and none under pypeeker_rules/: `lint` (DOC502 on src/brig/infra/supervisor/link.py:78),
+`typecheck` (src/brig/presentation/drivers/bwrap.py:73, `assert_never` over the two new
+effect variants that task added to `type Effect`), and `gates` (three
+`over-exposed-module-symbol` findings on src/brig/infra/supervisor/link.py). That last one
+passed clean an hour earlier in this same review, before link.py's consumers moved under it --
+the churn is theirs. No `brig-class-forms` finding in any run.
 <!-- SECTION:NOTES:END -->
