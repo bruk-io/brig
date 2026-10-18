@@ -6,6 +6,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-10-17 22:02'
+updated_date: '2026-10-18 02:21'
 labels:
   - brig
   - teardown
@@ -66,3 +67,17 @@ translation, and it wants deciding rather than patching at the end of a review p
       translating every non-`ProcessLookupError` `OSError` the driver's job alone (rule 1 says
       infra returns plain data, which argues for the driver)?
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Resolved by TASK-0001.06 and TASK-0001.08:
+
+1. TASK-0001.06 gave the Reap rung's "leader already collected" case its own value (`ExitCodeUnknown`), discarded by `_reap_after_kill`, rather than skipping the rung or adding a new effect -- `reap`/`reap_deadline`/`reap_nowait` catch `ChildProcessError` and translate it, never raise it. (Open question 1, settled.)
+2. One subclass per genuinely new failure stayed the answer (rule 13): `group_alive`/`signal_group`'s fix did not need a new `presentation/errors.py` type at all, because the chosen answer to question 3 (below) means nothing escapes the driver for either of them to translate. (Open question 2, settled -- no new type needed for this pair.)
+3. TASK-0001.08 chose infra's own side: `group_alive` now catches `OSError` broadly (not just `ProcessLookupError`) and answers `False`; `signal_group` wraps its call the same way and answers nothing (its contract was already `None`). Rule 1's "infra returns plain data" argues for infra deciding this, not the driver -- the driver has no plain-data shape of its own to fall back to the way `group_alive`'s `bool` already does. (Open question 3, settled.)
+
+Checked while closing TASK-0001.08's AC#2 ("no teardown rung can leak a raw OSError") for the *whole* rung, not just the `killpg` calls: the `Verify` rung's other infra call (`reap_nowait`) and the `Reap` rung's (`reap`, `reap_deadline`) all go through `os.waitpid`, which this review's own measured case (1) already fixed for `ChildProcessError`/ECHILD. `os.waitpid`'s only other POSIX errno is `EINVAL` (bad options), unreachable here since brig always passes `0` or `os.WNOHANG`; `EINTR` is retried internally by CPython since 3.5 (PEP 475), never surfaced. So `ChildProcessError` is the only `OSError` subtype these three can raise for a pid brig itself spawned, and the existing `except ChildProcessError` already covers it -- no further change needed in `infra/processes.py` or the driver for this draft's scope. Verified by code inspection (POSIX `waitpid(2)` contract, CPython's documented EINTR retry) rather than by forcing EINVAL/EINTR in a test, since neither is reachable through this codebase's own call shape to force.
+
+All three open questions above are answered by committed work; this draft looks ready to archive or promote-and-close, but that call is left to whoever reviews TASK-0001.08 rather than made here.
+<!-- SECTION:NOTES:END -->
