@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0014
+id: TASK-0005
 title: >-
   infra.processes.spawn: a relocated source fd can land on one of fds's own
   target numbers and then be closed before exec
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-18 08:22'
 labels: []
