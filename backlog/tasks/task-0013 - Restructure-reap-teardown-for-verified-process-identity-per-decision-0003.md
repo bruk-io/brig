@@ -21,9 +21,12 @@ modified_files:
   - src/brig/infra/processes.py
   - src/brig/domain/effects.py
   - src/brig/domain/teardown.py
+  - src/brig/domain/operations.py
+  - src/brig/presentation/ports.py
   - src/brig/presentation/drivers/bwrap.py
   - src/brig/presentation/api.py
   - tests/unit/test_teardown.py
+  - tests/integration/fakes.py
   - tests/integration/test_teardown_leader_reaped_early.py
   - tests/integration/test_walking_skeleton.py
   - tests/e2e/test_processes_gateway.py
