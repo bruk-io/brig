@@ -171,6 +171,131 @@ def test_brig_class_forms_accepts_a_protocol_subclass_via_attribute_chain(tmp_pa
     assert_rule_clean(project, "brig-class-forms", src=("src",))
 
 
+def test_brig_class_forms_accepts_a_protocol_subclass_via_attribute_chain_with_state(
+    tmp_path: Path,
+) -> None:
+    """The same attribute-chain base as the test above, but with the class body
+    also assigning ``self.<name> = ...`` -- the shape TASK-0001.18's review
+    found firing the stateful-class check (rule 7's fifth shape) solely
+    because the attribute-chain base could not be resolved to the exempt
+    shape it actually is. An unresolved base must stay "cannot tell", never
+    "confirmed not exempt": this must come back clean, not as a stateful-class
+    finding.
+    """
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-class-forms",
+        src=("src",),
+        files={
+            "src/brig/domain/ports.py": (
+                "import typing as t\n\n\n"
+                "class Port(t.Protocol):\n    def __init__(self) -> None:\n        self.x = 1\n"
+            )
+        },
+    )
+    assert_rule_clean(project, "brig-class-forms", src=("src",))
+
+
+def test_brig_class_forms_accepts_an_enum_subclass_via_attribute_chain_with_state(
+    tmp_path: Path,
+) -> None:
+    """The ``enum`` counterpart of the ``typing`` case above -- the exact shape
+    TASK-0001.18's review verified empirically against the real rule:
+    ``import enum`` / ``class Signal(enum.Enum)`` with the stdlib-blessed
+    ``def __init__(self, number, label): self.number = number`` pattern.
+    """
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-class-forms",
+        src=("src",),
+        files={
+            "src/brig/domain/signal.py": (
+                "import enum\n\n\n"
+                "class Signal(enum.Enum):\n"
+                "    RED = (1, 'red')\n\n"
+                "    def __init__(self, number: int, label: str) -> None:\n"
+                "        self.number = number\n"
+                "        self.label = label\n"
+            )
+        },
+    )
+    assert_rule_clean(project, "brig-class-forms", src=("src",))
+
+
+def test_brig_class_forms_fires_on_a_stateful_class_outside_infra(tmp_path: Path) -> None:
+    """A bare class with instance state, outside infra/, violates decision-0001
+    rule 7's fifth shape -- a stateful class confined to infra/.
+    """
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-class-forms",
+        src=("src",),
+        files={
+            "src/brig/domain/cache.py": (
+                "class Cache:\n    def __init__(self) -> None:\n        self.items = {}\n"
+            )
+        },
+    )
+    assert_rule_fires(project, "brig-class-forms", src=("src",))
+
+
+def test_brig_class_forms_accepts_a_stateful_class_in_infra(tmp_path: Path) -> None:
+    """The same bare, stateful class is exactly rule 7's allowed fifth shape
+    when it lives in infra/.
+    """
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-class-forms",
+        src=("src",),
+        files={
+            "src/brig/infra/cache.py": (
+                "class Cache:\n    def __init__(self) -> None:\n        self.items = {}\n"
+            )
+        },
+    )
+    assert_rule_clean(project, "brig-class-forms", src=("src",))
+
+
+def test_brig_class_forms_accepts_an_exception_subclass_with_instance_state(
+    tmp_path: Path,
+) -> None:
+    """An Exception subclass's own 'self.<name> = ...' in __init__ is rule 7's
+    typed failure shape, not the stateful-class shape confined to infra/ --
+    the real pattern in brig's own presentation/errors.py, and the false
+    positive the stateful check must not reproduce.
+    """
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-class-forms",
+        src=("src",),
+        files={
+            "src/brig/domain/errors.py": (
+                "class BadInput(Exception):\n"
+                "    def __init__(self, value: int) -> None:\n"
+                "        super().__init__(str(value))\n"
+                "        self.value = value\n"
+            )
+        },
+    )
+    assert_rule_clean(project, "brig-class-forms", src=("src",))
+
+
+def test_brig_class_forms_accepts_a_class_level_field_outside_infra(tmp_path: Path) -> None:
+    """A plain class-level field (`class Registry: DEFAULT = 1`) is a VARIABLE
+    member of the class scope too, the same as a `self.x = ...` instance
+    attribute -- but assigned directly in the class body, not from inside a
+    method, so it is not the 'instance state' the stateful-class check means
+    and must not fire on it.
+    """
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-class-forms",
+        src=("src",),
+        files={"src/brig/domain/registry.py": "class Registry:\n    DEFAULT = 1\n"},
+    )
+    assert_rule_clean(project, "brig-class-forms", src=("src",))
+
+
 def test_brig_vocabulary_fires_on_a_banned_name(tmp_path: Path) -> None:
     project = build_fixture(
         tmp_path,

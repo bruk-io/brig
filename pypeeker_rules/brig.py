@@ -34,13 +34,37 @@ reference's ``symbol_id`` already resolves within one file: to
 cross-module resolver needed. ``brig-class-forms`` below uses exactly this
 for the inheritance restriction. It is still single-file-only: a base
 reached through an attribute chain (``import typing as t; class C(t.Protocol)``)
-or re-exported through another project module resolves to neither shape and
-is conservatively *not* flagged (``value=False`` — never a guessed
-violation, since a guessed ``True`` would fail ``--strict`` on conforming
-code, not just report it at lower confidence) — a narrow, accepted gap of
-the same kind ``brig-one-writer``'s aliased-module-import gap already
-documents: both miss a real violation reached through that one path, rather
-than report one that is not there.
+or a dynamic one resolves to neither shape and is conservatively *not*
+flagged (never a guessed violation, since a guessed ``True`` would fail
+``--strict`` on conforming code, not just report it at lower confidence) —
+a narrow, accepted gap of the same kind ``brig-one-writer``'s
+aliased-module-import gap already documents: it misses a real violation
+reached through that one path, rather than reporting one that is not there.
+
+A base *re-exported* through another project module is **not** that case,
+despite what this docstring claimed before TASK-0001.19: it resolves to a
+real same-file ``IMPORT`` whose ``imported_from`` names the re-exporting
+module (``brig.domain.shim.Protocol``), which is not in
+``_EXEMPT_BASE_IMPORT_ORIGINS``, so it lands in ``disallowed`` and *fires* on
+a genuinely exempt base. Within one file that fact is indistinguishable from
+a genuine project base (``brig.domain.base.Mixin``), which must fire, so the
+two cannot be told apart here at all. Verified empirically both ways
+(TASK-0002 review); brig declares no such re-exported base today, so the gate
+is clean by conformance rather than by suppression. Tracked as TASK-0001.19.
+
+That "cannot tell" verdict needs a channel of its own, separate from
+"resolves to an exempt shape" — ``brig-class-forms``'s stateful-class check
+(rule 7's fifth shape) asks "is this class exempt from *that* check", and
+reads the same unresolved base as its answer. Collapsing "cannot tell" into
+a plain ``value=False`` there, consumed through ``not_(...eq(True))``, reads
+as "confirmed not exempt" and *fires* a finding out of a base this binder
+simply never resolved — manufacturing a violation rather than suppressing
+one, the opposite of this gap's accepted shape (TASK-0001.18 review, fixed
+by splitting the single disallowed/exempt walk three ways: ``disallowed``,
+``exempt``, and ``ambiguous`` — see ``_classify_header_bases``). The
+inheritance-restriction check above stays a two-way, false-negative-only
+gap; the stateful-class check needs the third bucket because it is
+consulted by negation.
 """
 
 from collections.abc import Mapping
@@ -63,7 +87,7 @@ from pypeeker.dsl import (
     symbols,
     trait_of,
 )
-from pypeeker.models import Confidence, FileIndex, ReferenceKind, SymbolKind
+from pypeeker.models import Confidence, FileIndex, ReferenceKind, ScopeKind, SymbolKind
 
 _DEFAULT_ROOT = "src/brig"
 
@@ -410,8 +434,7 @@ register_dsl_rule(
 
 
 # ---------------------------------------------------------------------------
-# rule 7: brig-class-forms (still partial: "a stateful class only in infra/"
-# is not checked -- see the module docstring)
+# rule 7: brig-class-forms
 # ---------------------------------------------------------------------------
 
 
@@ -424,9 +447,9 @@ def _non_frozen_dataclasses(options: Mapping[str, Any]) -> Selection:
     Exception/Enum/Protocol. This part checks the frozen half of the first
     shape, through the ``decorators`` field every symbol carries (raw
     decorator source text, per the binder). "A stateful class only in
-    infra/" still needs no base-class fact at all -- it is a question about
-    *where a class lives*, not what it inherits -- and is not mechanically
-    enforced by any rule in this file; it remains a review concern.
+    infra/" needs no base-class fact at all -- it is a question about *where
+    a class lives* and *whether it declares a member*, not what it inherits
+    -- and is checked separately below, by ``_stateful_outside_infra``.
     """
     root = options.get("root", _DEFAULT_ROOT)
 
@@ -443,11 +466,19 @@ def _non_frozen_dataclasses(options: Mapping[str, Any]) -> Selection:
     )
 
 
-_EXEMPT_BASE_IMPORT_ORIGINS = ("typing.Protocol", "enum.Enum", "enum.StrEnum")
+_EXEMPT_BASE_IMPORT_ORIGINS = ("typing.Protocol", "enum.Enum", "enum.StrEnum", "typing.TypedDict")
 """``imported_from`` values a header base may resolve to without violating
 decision-0001 rule 7's inheritance restriction, beyond a bare ``Exception``/
 ``BaseException`` (handled separately: those resolve to ``<builtins>.*``, no
-import involved)."""
+import involved).
+
+``typing.TypedDict`` joins this list with TASK-0001.15 step 2
+(``infra/supervisor/wire.py``'s message shapes): rule 7's own text names only
+``Exception``/``Enum``/``Protocol`` as allowed bases, but rule 8 separately
+*requires* ``TypedDict`` for every JSON shape, and ``TypedDict`` is the same
+kind of ``typing`` construct as ``Protocol`` -- it states a structural shape,
+not a real is-a relationship -- so it is exempted here on the same footing,
+not inherited from the two rules having already agreed."""
 
 _EXEMPT_BUILTIN_BASES = ("<builtins>.Exception", "<builtins>.BaseException")
 
@@ -481,39 +512,58 @@ def _header_base_refs(file_index: FileIndex, class_symbol: Any) -> list[Any]:
     ]
 
 
-def _declares_disallowed_base(file_index: FileIndex, symbol_id: str) -> Trait:
-    """Trait provider: does ``symbol_id`` (a class) declare a base that is not
-    ``Exception``, ``Enum``/``StrEnum`` or ``Protocol`` (decision-0001 rule 7's
-    inheritance restriction)?
+def _classify_header_bases(file_index: FileIndex, class_symbol: Any) -> tuple[bool, bool, bool]:
+    """Classify ``class_symbol``'s declared-base references in one walk.
 
-    Registered directly with ``pypeeker.analysis.register_trait`` rather than
-    composed with ``pypeeker.dsl.trait()``: the composed form only ever
-    quantifies over the symbols universe's declared row fields (and refuses a
-    ``project:`` reach outright), neither of which carries header-reference
-    facts. A hand-written provider's signature --
-    ``(file_index, symbol_id) -> Trait`` -- hands the whole ``FileIndex``
-    instead, which does: see the module docstring for the confirmed shape a
-    header reference's ``symbol_id`` already resolves to within one file.
+    Returns ``(disallowed, exempt, ambiguous)``, each independent (a compound
+    header can set more than one):
 
-    Reports ``Confidence.DECLARED`` always: every case this provider flags
-    (``value=True``) is one it can name outright -- a builtin, a same-file
-    import's recorded ``imported_from``, or another class this same file
-    declares. A base this file's own binder cannot resolve within one file
-    (an attribute-chain base, or a dynamic one) is never flagged: this
-    provider cannot tell such a case apart from one that would resolve to an
-    exempt form through another module, and guessing ``True`` under
-    ``--strict`` -- where a ``HEURISTIC`` finding still fails the gate, same
-    as a ``DECLARED`` one -- would reject conforming code outright, not just
-    report it with lower confidence. So an unresolved base reports
-    ``value=False``: honestly, "cannot tell", not a guessed violation.
+    - ``disallowed``: at least one base resolves -- to a builtin other than
+      ``Exception``/``BaseException``, a same-file import whose
+      ``imported_from`` is not in ``_EXEMPT_BASE_IMPORT_ORIGINS``, or another
+      class this same file declares -- to something that is not one of rule
+      7's four typed shapes.
+    - ``exempt``: at least one base resolves to ``Exception``/``BaseException``,
+      or a same-file import of ``Protocol``/``Enum``/``StrEnum``.
+    - ``ambiguous``: at least one base is a reference this file's own binder
+      could not resolve to either of the above *within this one file* -- an
+      attribute-chain base (``t.Protocol``) or a dynamic one. A base
+      re-exported through another project module does *not* land here: it is
+      a real same-file import, so it goes to ``disallowed`` (see the module
+      docstring and TASK-0001.19). Never set by a class that simply declares no
+      base at all (``refs`` is then empty), which is the plain "no base"
+      case ``_stateful_outside_infra``'s fifth-shape check depends on
+      telling apart from "an unresolvable one".
+
+    A hand-written ``register_trait`` provider rather than a composed
+    ``pypeeker.dsl.trait()``: the composed form only ever quantifies over the
+    symbols universe's declared row fields (and refuses a ``project:`` reach
+    outright), neither of which carries header-reference facts. This
+    provider's signature -- ``(file_index, symbol_id) -> Trait`` -- hands the
+    whole ``FileIndex`` instead: see the module docstring for the confirmed
+    shape a header reference's ``symbol_id`` already resolves to within one
+    file.
+
+    Every ``disallowed``/``exempt`` verdict this walk reaches names its base
+    outright (a builtin, a same-file import's recorded ``imported_from``, or
+    a same-file class) -- never a guess. A base the walk cannot place in
+    either bucket is reported through ``ambiguous`` instead of being folded
+    into ``disallowed`` (which would reject conforming code, since a
+    ``HEURISTIC`` finding still fails ``--strict`` same as ``DECLARED``) or
+    into ``exempt`` (which would hide a real violation from the inheritance
+    check *and* manufacture one in the stateful-class check, by telling it
+    "not exempt" when the honest answer is "cannot tell"). An attribute-chain
+    or dynamic base reaches no bucket and stays a false negative on the
+    inheritance check -- the same accepted gap ``brig-one-writer``'s
+    aliased-module-import gap already documents -- but no longer misfires
+    the stateful-class check the way an unresolved
+    attribute-chain base used to (confirmed empirically, TASK-0001.18
+    review: ``import enum`` / ``class Signal(enum.Enum)`` with a
+    stdlib-blessed ``self.number = number`` in ``__init__``, and ``import
+    typing`` / ``class Port(typing.Protocol)`` with ``self.x = 1``, both of
+    rule 7's own exempt shapes, used to fire the stateful-class check solely
+    because the attribute-chain base could not be resolved).
     """
-    provenance = (
-        f"pypeeker_rules.brig: declared-base references for '{symbol_id}' in {file_index.file_path}"
-    )
-    class_symbol = next((s for s in file_index.symbols if s.symbol_id == symbol_id), None)
-    if class_symbol is None or class_symbol.kind is not SymbolKind.CLASS:
-        return Trait(value=False, confidence=Confidence.DECLARED, provenance=provenance)
-
     imports_by_id = {s.symbol_id: s for s in file_index.symbols if s.kind is SymbolKind.IMPORT}
     local_class_ids = {s.symbol_id for s in file_index.symbols if s.kind is SymbolKind.CLASS}
 
@@ -522,28 +572,31 @@ def _declares_disallowed_base(file_index: FileIndex, symbol_id: str) -> Trait:
     # scope span, not one: a plain read of `t` plus an unresolved attribute
     # access on it (`<unresolved>.Protocol`, `receiver_root_symbol_id` set to
     # `t`'s own symbol_id). `t` is a real same-file IMPORT symbol -- without
-    # this filter it is itself mistaken for a declared base, and a module
-    # import's `imported_from` (e.g. "typing") never matches
-    # `_EXEMPT_BASE_IMPORT_ORIGINS` (e.g. "typing.Protocol"), so the chain's
-    # root would always disallow regardless of what it is an attribute of.
-    # A reference consumed as another reference's receiver root is a
-    # sub-expression of the real base, never the base itself. Filtered by
-    # symbol_id, not by the specific reference instance: a compound header
-    # that both inherits a name directly *and* uses that same name as a
-    # receiver root (``class Bad(Base, Base.Mixin)``) also loses the direct
-    # ``Base`` base this way -- a further instance of the same false-negative
-    # gap documented above and in the module docstring, not a new one.
+    # this filter it is itself mistaken for a declared base. A reference
+    # consumed as another reference's receiver root is a sub-expression of
+    # the real base, never the base itself. Filtered by symbol_id, not by
+    # the specific reference instance: a compound header that both inherits
+    # a name directly *and* uses that same name as a receiver root
+    # (``class Bad(Base, Base.Mixin)``) also loses the direct ``Base`` base
+    # this way -- a further instance of the same false-negative gap this
+    # function's own docstring names, not a new one.
     receiver_roots = {ref.receiver_root_symbol_id for ref in refs if ref.receiver_root_symbol_id}
 
     disallowed = False
+    exempt = False
+    ambiguous = False
     for ref in refs:
         if ref.symbol_id in receiver_roots:
             continue
         if ref.symbol_id in _EXEMPT_BUILTIN_BASES:
+            exempt = True
             continue
         imported = imports_by_id.get(ref.symbol_id)
         if imported is not None:
-            disallowed = disallowed or imported.imported_from not in _EXEMPT_BASE_IMPORT_ORIGINS
+            if imported.imported_from in _EXEMPT_BASE_IMPORT_ORIGINS:
+                exempt = True
+            else:
+                disallowed = True
             continue
         if ref.symbol_id in local_class_ids or ref.symbol_id.startswith("<builtins>."):
             disallowed = True
@@ -551,11 +604,30 @@ def _declares_disallowed_base(file_index: FileIndex, symbol_id: str) -> Trait:
         # Not a builtin, not a same-file import, not a same-file class: an
         # attribute-chain base, a dynamic one, or one this file's own binder
         # could not resolve. Cannot tell whether it would resolve to an
-        # exempt form through another module -- not flagged. A real
-        # violation reached only this way is a false negative, never a
-        # false positive: the same class of gap brig-one-writer's
-        # aliased-module-import gap already documents.
+        # exempt or a disallowed form through another module -- neither
+        # bucket is set.
+        ambiguous = True
 
+    return disallowed, exempt, ambiguous
+
+
+def _declares_disallowed_base(file_index: FileIndex, symbol_id: str) -> Trait:
+    """Trait provider: does ``symbol_id`` (a class) declare a base that is not
+    ``Exception``, ``Enum``/``StrEnum`` or ``Protocol`` (decision-0001 rule 7's
+    inheritance restriction)?
+
+    See ``_classify_header_bases`` for the shared walk and its conservatism.
+    Reports ``Confidence.DECLARED`` always: every ``value=True`` here names
+    its base outright, never a guess.
+    """
+    provenance = (
+        f"pypeeker_rules.brig: declared-base references for '{symbol_id}' in {file_index.file_path}"
+    )
+    class_symbol = next((s for s in file_index.symbols if s.symbol_id == symbol_id), None)
+    if class_symbol is None or class_symbol.kind is not SymbolKind.CLASS:
+        return Trait(value=False, confidence=Confidence.DECLARED, provenance=provenance)
+
+    disallowed, _, _ = _classify_header_bases(file_index, class_symbol)
     return Trait(value=disallowed, confidence=Confidence.DECLARED, provenance=provenance)
 
 
@@ -569,6 +641,209 @@ def _disallowed_inheritance(options: Mapping[str, Any]) -> Selection:
             row.kind.eq(SymbolKind.CLASS),
             row.file_path.startswith(f"{root}/"),
             trait_of("brig-class-forms-disallowed-base").value.eq(True),
+        )
+    )
+
+
+def _declares_exempt_base(file_index: FileIndex, symbol_id: str) -> Trait:
+    """Trait provider: does ``symbol_id`` (a class) declare a base that *is*
+    one of rule 7's four typed shapes -- ``Exception``/``BaseException``,
+    ``Enum``/``StrEnum`` or ``Protocol``?
+
+    The positive counterpart of ``_declares_disallowed_base``, needed because
+    that trait's ``value=False`` already covers two different cases --
+    "declares no base at all" (a candidate for the *stateful*-class shape
+    below) and "declares one of the four typed bases" (not a candidate, even
+    though it may also assign ``self.<name> = ...``) -- and
+    ``_stateful_outside_infra`` has to tell them apart. Confirmed against
+    brig's own ``presentation/errors.py``: each of its four ``Exception``
+    subclasses assigns ``self.<name>`` in ``__init__``, and must not be
+    flagged by the stateful-class check for that.
+
+    See ``_classify_header_bases`` for the shared walk. A base reached
+    through an attribute chain, or a dynamic one, is
+    ``ambiguous`` there, not ``exempt`` -- it is ``_declares_ambiguous_base``,
+    not this trait's ``value=False``, that tells ``_stateful_outside_infra``
+    apart from "declares no base at all". Reports ``Confidence.DECLARED``:
+    every ``value=True`` here names an exempt base outright.
+    """
+    provenance = (
+        f"pypeeker_rules.brig: exempt-base references for '{symbol_id}' in {file_index.file_path}"
+    )
+    class_symbol = next((s for s in file_index.symbols if s.symbol_id == symbol_id), None)
+    if class_symbol is None or class_symbol.kind is not SymbolKind.CLASS:
+        return Trait(value=False, confidence=Confidence.DECLARED, provenance=provenance)
+
+    _, exempt, _ = _classify_header_bases(file_index, class_symbol)
+    return Trait(value=exempt, confidence=Confidence.DECLARED, provenance=provenance)
+
+
+register_trait("brig-class-forms-exempt-base")(_declares_exempt_base)
+
+
+def _declares_ambiguous_base(file_index: FileIndex, symbol_id: str) -> Trait:
+    """Trait provider: does ``symbol_id`` (a class) declare a base reference
+    this file's own binder cannot resolve to either rule 7's exempt shapes or
+    a positively-disallowed one -- an attribute-chain base (``t.Protocol``)
+    or a dynamic one? (A base re-exported through another project module is
+    a real same-file import and lands in ``disallowed`` instead, not here --
+    TASK-0001.19.)
+
+    Exists so ``_stateful_outside_infra`` can tell "cannot tell whether this
+    base is exempt" apart from "declares no base at all": both left
+    ``_declares_exempt_base`` at ``value=False`` before this trait existed,
+    and consuming that alone through ``not_(...eq(True))`` silently treated
+    "cannot tell" as "confirmed not exempt" -- manufacturing a stateful-class
+    finding on a base this single-file binder simply could not resolve,
+    rather than suppressing one (TASK-0001.18 review: verified empirically
+    against ``import enum`` / ``class Signal(enum.Enum)`` with
+    ``self.number = number`` in ``__init__``, and ``import typing`` /
+    ``class Port(typing.Protocol)`` with ``self.x = 1`` -- both rule 7's own
+    exempt shapes, both firing the stateful-class check on the attribute-chain
+    base alone). See ``_classify_header_bases`` for the shared walk. Reports
+    ``Confidence.DECLARED``: "this file's binder could not resolve it" is
+    itself a fact the binder already settled, not a guess.
+    """
+    provenance = (
+        f"pypeeker_rules.brig: ambiguous-base references for '{symbol_id}' in "
+        f"{file_index.file_path}"
+    )
+    class_symbol = next((s for s in file_index.symbols if s.symbol_id == symbol_id), None)
+    if class_symbol is None or class_symbol.kind is not SymbolKind.CLASS:
+        return Trait(value=False, confidence=Confidence.DECLARED, provenance=provenance)
+
+    _, _, ambiguous = _classify_header_bases(file_index, class_symbol)
+    return Trait(value=ambiguous, confidence=Confidence.DECLARED, provenance=provenance)
+
+
+register_trait("brig-class-forms-ambiguous-base")(_declares_ambiguous_base)
+
+
+def _declares_instance_state(file_index: FileIndex, symbol_id: str) -> Trait:
+    """Trait provider: does ``symbol_id`` (a class) declare an instance
+    attribute -- some ``self.<name> = ...`` / ``cls.<name> = ...`` the binder
+    recorded as a member of this class's own scope, assigned from *inside a
+    method*?
+
+    A class's ``scope_id`` equals its ``symbol_id`` (the discriminator the
+    module docstring and ``_header_base_refs`` both already use), and
+    ``self.<name> = ...`` anywhere in the class's body declares ``<name>`` as
+    a ``SymbolKind.VARIABLE`` member of exactly that scope
+    (``pypeeker.binder.assignments._declare_instance_attribute``), deduplicated
+    to the first such assignment. But a plain class-level field
+    (``class Registry: DEFAULT = 1``) is *also* a ``VARIABLE`` member of the
+    same class scope -- ``visit_assignment`` binds it there through the same
+    ``_bind_into`` the plain-local case uses, just with the class body as the
+    current scope -- and is not what this trait means by "instance state"
+    (confirmed empirically: a planted ``class Registry: DEFAULT = 1`` fixture
+    triggered this trait before this span check was added). The two are told
+    apart by where the assignment's own location falls: ``self.x = ...``'s
+    location sits inside a ``ScopeKind.FUNCTION`` scope (a method body,
+    however deeply nested within it), while a class-level field's does not --
+    the same span-containment test ``_header_base_refs`` already does for
+    base references, over ``file_index.scopes`` instead of ``.references``.
+
+    That needs no source-text parsing and no project-wide reach -- a plain
+    scan of this one file's own symbols and scopes -- which is exactly the
+    row-field limitation the module docstring names for the *base-class*
+    questions (no ``bases`` field, no project corpus from a ``where()``
+    clause) not applying here: "does some other symbol in this file name me
+    as its parent scope, from inside one of my methods" is answered by
+    scanning ``file_index.symbols``/``.scopes`` directly, the same move
+    ``_declares_disallowed_base`` makes for header references.
+
+    Reports ``Confidence.DECLARED``: the binder already decided this is an
+    instance attribute, so there is nothing here to guess. A class whose only
+    mutation runs through ``object.__setattr__(self, ...)`` (a frozen
+    dataclass's usual escape hatch) is not seen either way by this trait --
+    brig's own frozen dataclasses never use it, and ``_stateful_outside_infra``
+    exempts the frozen-dataclass shape before this trait is even consulted.
+    """
+    provenance = (
+        f"pypeeker_rules.brig: instance-attribute members of '{symbol_id}' in "
+        f"{file_index.file_path}"
+    )
+    class_symbol = next((s for s in file_index.symbols if s.symbol_id == symbol_id), None)
+    if class_symbol is None or class_symbol.kind is not SymbolKind.CLASS:
+        return Trait(value=False, confidence=Confidence.DECLARED, provenance=provenance)
+
+    function_spans = [
+        (_pos(scope.span.start), _pos(scope.span.end))
+        for scope in file_index.scopes
+        if scope.kind is ScopeKind.FUNCTION
+    ]
+
+    def _assigned_inside_a_method(symbol: Any) -> bool:
+        point = _pos(symbol.location.span.start)
+        return any(start <= point <= end for start, end in function_spans)
+
+    has_state = any(
+        symbol.kind is SymbolKind.VARIABLE
+        and symbol.parent_scope_id == symbol_id
+        and _assigned_inside_a_method(symbol)
+        for symbol in file_index.symbols
+    )
+    return Trait(value=has_state, confidence=Confidence.DECLARED, provenance=provenance)
+
+
+register_trait("brig-class-forms-instance-state")(_declares_instance_state)
+
+
+def _stateful_outside_infra(options: Mapping[str, Any]) -> Selection:
+    """A class with instance state, outside a frozen dataclass or one of rule
+    7's other three typed shapes, anywhere under ``root`` but ``infra/``.
+
+    decision-0001 rule 7's fifth shape -- "a class holding changing state
+    only in ``infra/``, its invariant in its docstring" -- is the one this
+    module's own docstrings named as unchecked (TASK-0001.04). It turns out
+    checkable without either of the two blocked paths the module docstring
+    documents (a ``bases`` row field, or ``Hierarchy``'s cross-module
+    resolution): "where a class lives" is a plain ``file_path`` comparison,
+    and "whether it declares a member" is a same-file scan
+    (``_declares_instance_state``), not a question about inheritance at all.
+
+    A class exempted by one of the other three typed shapes
+    (``_declares_exempt_base``: Exception/BaseException, Enum/StrEnum,
+    Protocol) is not flagged even when it does assign ``self.<name> = ...`` --
+    confirmed against brig's own ``presentation/errors.py``, whose four
+    ``Exception`` subclasses do exactly that in ``__init__``. The
+    frozen-dataclass shape is checked the same way ``_non_frozen_dataclasses``
+    does, inline rather than through a trait, since both parts already read
+    the same ``decorators`` field and brig's own frozen dataclasses hold no
+    ``self.<name> = ...`` to begin with (their fields are class-level
+    annotations, not assignments the binder would ever see here).
+
+    A class whose base this single-file binder cannot resolve at all
+    (``_declares_ambiguous_base``: an attribute-chain base, or a dynamic
+    one) is not flagged either, for the same
+    reason an unresolved base never fires ``_disallowed_inheritance``: this
+    rule cannot tell such a base apart from one that would resolve to an
+    exempt shape through another module, and firing here would manufacture a
+    violation out of "cannot tell" rather than suppress one. Consuming only
+    ``_declares_exempt_base``'s own ``value=False`` here, without this
+    trait, previously collapsed that "cannot tell" into "confirmed not
+    exempt" and fired wrongly on exactly that case (TASK-0001.18 review).
+    """
+    root = options.get("root", _DEFAULT_ROOT)
+    infra_prefix = f"{root}/infra/"
+
+    @opaque("brig-class-forms-lacks-frozen-shape", reads=("decorators",))
+    def _not_a_frozen_dataclass(record: Any) -> bool:
+        for decorator in record.decorators:
+            name = decorator.split("(", 1)[0].strip()
+            if name in ("dataclass", "dataclasses.dataclass"):
+                return "frozen=True" not in decorator.replace(" ", "")
+        return True
+
+    return symbols().where(
+        all_of(
+            row.kind.eq(SymbolKind.CLASS),
+            row.file_path.startswith(f"{root}/"),
+            not_(row.file_path.startswith(infra_prefix)),
+            _not_a_frozen_dataclass,
+            not_(trait_of("brig-class-forms-exempt-base").value.eq(True)),
+            not_(trait_of("brig-class-forms-ambiguous-base").value.eq(True)),
+            trait_of("brig-class-forms-instance-state").value.eq(True),
         )
     )
 
@@ -590,9 +865,20 @@ register_dsl_rule(
                     "class '{symbol_id}' inherits from a base that is not "
                     "Exception, Enum/StrEnum or Protocol (decision-0001 rule 7). "
                     "Single-file check: a base reached through an attribute "
-                    "chain or re-exported through another module is not "
-                    "resolved and so cannot trigger this -- see the module "
+                    "chain, or a dynamic one, is not resolved and so cannot "
+                    "trigger this; one re-exported through a project module "
+                    "resolves to that module and does -- see the module "
                     "docstring"
+                ),
+            ),
+            RulePart(
+                build=_stateful_outside_infra,
+                message=(
+                    "class '{symbol_id}' declares instance state (a "
+                    "'self.<name> = ...' assignment) but is not a frozen "
+                    "dataclass, Protocol, Enum/StrEnum or Exception subclass: "
+                    "decision-0001 rule 7 confines a stateful class to infra/, "
+                    "its invariant in its docstring"
                 ),
             ),
         ),
@@ -638,13 +924,25 @@ _DOTTED_WRITE_STREAMS = tuple(".".join(parts) for parts in _WRITE_STREAMS)
 'sys.stdout' -- one source of truth, read both ways below."""
 
 
+def _one_writer_allow(options: Mapping[str, Any]) -> tuple[str, ...]:
+    """Modules decision-0001 rule 14 itself names as exempt: ``infra/log.py``
+    (no findings to exempt there yet -- it writes through its own encoder,
+    never ``print``/``sys.std*`` directly) and the supervisor's own wire
+    (``infra/supervisor/program.py``, TASK-0001.15 step 2), configured per
+    project since this is brig's own custom rule, not one of pypeeker's own
+    options."""
+    return tuple(options.get("allow") or ())
+
+
 def _print_calls(options: Mapping[str, Any]) -> Selection:
     root = options.get("root", _DEFAULT_ROOT)
+    allow = _one_writer_allow(options)
     return references().where(
         all_of(
             row.file_path.startswith(f"{root}/"),
             row.kind.eq(ReferenceKind.CALL),
             row.symbol_id.eq("<builtins>.print"),
+            *((not_(row.module.is_in(*allow)),) if allow else ()),
         )
     )
 
@@ -674,6 +972,7 @@ def _stream_writes(options: Mapping[str, Any]) -> Selection:
     known, narrower gap.
     """
     root = options.get("root", _DEFAULT_ROOT)
+    allow = _one_writer_allow(options)
     return references().where(
         all_of(
             row.file_path.startswith(f"{root}/"),
@@ -682,6 +981,7 @@ def _stream_writes(options: Mapping[str, Any]) -> Selection:
                 row.receiver_chain.is_in(*_WRITE_STREAMS),
                 row.receiver_root_imported_from.is_in(*_DOTTED_WRITE_STREAMS),
             ),
+            *((not_(row.module.is_in(*allow)),) if allow else ()),
         )
     )
 
@@ -695,8 +995,8 @@ register_dsl_rule(
                 message=(
                     "'{module}' calls print(): brig's processes log JSON lines "
                     "through infra/log.py and the supervisor's wire, nothing else "
-                    "writes (decision-0001 rule 14). No infra/log.py or supervisor "
-                    "wire module exists yet to exempt"
+                    "writes (decision-0001 rule 14). Add it to "
+                    "[tool.pypeeker.brig-one-writer].allow if it is one of those"
                 ),
             ),
             RulePart(
@@ -705,7 +1005,8 @@ register_dsl_rule(
                     "'{module}' writes to sys.stdout/sys.stderr directly: brig's "
                     "processes log JSON lines through infra/log.py and the "
                     "supervisor's wire, nothing else writes (decision-0001 rule 14). "
-                    "No infra/log.py or supervisor wire module exists yet to exempt"
+                    "Add it to [tool.pypeeker.brig-one-writer].allow if it is one of "
+                    "those"
                 ),
             ),
         ),
