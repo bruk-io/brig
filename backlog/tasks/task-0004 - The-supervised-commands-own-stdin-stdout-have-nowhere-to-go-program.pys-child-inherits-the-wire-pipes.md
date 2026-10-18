@@ -6,10 +6,15 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-10-18 04:34'
-updated_date: '2026-10-18 07:31'
+updated_date: '2026-10-18 07:58'
 labels:
   - brig
+  - size-3
 dependencies: []
+references:
+  - >-
+    backlog/decisions/decision-0002 -
+    The-supervisor-request-channels-and-the-grading-skeleton-the-next-slices-shape.md
 ---
 
 ## Description
@@ -157,3 +162,12 @@ jailed commands' exit codes are faithful. Note also that fd 2 is untouched by
 stderr-writing commands are unaffected (measured above), which is itself an
 inconsistency the eventual design should resolve rather than preserve by accident.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [x] #1 The wire protocol moves off fd 0/1/2 onto fixed fds (wire.py's REQUEST_FD/EVENTS_FD), freeing the supervised command's own stdin/stdout/stderr to inherit from the embedder exactly as they would with no supervisor in between
+- [x] #2 program.py's _start_child explicitly closes the wire fds for the real command it starts, so it can never reach the control channel regardless of what its own fd 0/1/2 do
+- [x] #3 infra.processes.spawn's fd redirection generalizes from stdin_fd/stdout_fd to an arbitrary target-fd mapping, correct regardless of this process's own fd-allocation state (measured: a source fd landing on its own target, or on another pair's target, is the common case at fd 3/4, not a rare one)
+- [x] #4 Measured against real bwrap in a privileged Linux container: /bin/echo hello through run_jail returns 0 (not 1); test_tiocsti_battery.py's TIOCSTI-injection test stops skipping and passes; test_claims_wiring.py's tiocsti_closure claim grades ENFORCED again, not UNENFORCED
+- [x] #5 just done green on macOS; lint/typecheck/gates and the full pytest suite green against real bwrap on Linux (Docker, privileged ubuntu:24.04)
+<!-- AC:END -->
