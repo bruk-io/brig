@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0016
+id: TASK-0006
 title: >-
   The supervisor's temp script lives in /tmp, so any fs policy that excludes
   /tmp breaks every jail under it
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-18 13:05'
 labels: []
