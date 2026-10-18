@@ -97,7 +97,7 @@ sees the rule report it.
    in one process. (pypeeker: `brig-no-patching`; `just done` runs the integration suite twice.)
 6. **The house rules.** A package `__init__.py` only re-exports; no reaching into another module's
    `_names`; a public name only its own module uses is private; importing a module has no side
-   effects; no import cycles. (pypeeker: `init-reexport-only`, `under-exposed-access`,
+   effects; no import cycles. (pypeeker: `barrel-only`, `under-exposed-access`,
    `over-exposed-module-symbol`, `import-time-side-effects`, `no-import-cycles`.)
 7. **Four uses of `class`.** A frozen dataclass for shape, a `Protocol` for a port, an `Enum` or
    `StrEnum` for a closed set, an `Exception` subclass for a failure. A class holding changing state

@@ -68,7 +68,7 @@ I would prefer all logs to be JSON-shaped and consistent.
 ## References
 
 - decision-0001 (accepted): the design. Where it is built, the layout, the rules and the pypeeker rule that enforces each boundary, what is kept, cut and paused, and the order, outside-in.
-- decision-0002 (proposed): the supervisor, request channels, and the grading skeleton -- the next slice's shape, and a revised order for decision-0001's step 4.
+- decision-0002 (accepted): the supervisor, request channels, and the grading skeleton -- the next slice's shape, and a revised order for decision-0001's step 4.
 - The owner's philosophy plugin: the Python rules and the test rules (unit, integration, e2e, defined by where the mocks start), from knowhere.
 - The c4-architecture plugin, from knowhere (`likec4-diagrams`: scaffold.py's layout, c4lint, the hard rules).
 - `@likec4/mcp` (1.60.0), `mkdocs-likec4` (1.2.2), `mkdocstrings-python` (2.0.9), `rust-just` (1.59.0): the versions current on 2026-10-17.

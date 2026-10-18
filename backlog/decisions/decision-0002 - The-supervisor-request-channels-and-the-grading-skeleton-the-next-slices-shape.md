@@ -100,3 +100,9 @@ suggests:
   claim from day one, rather than grading being bolted on at the very end the way the pre-rewrite
   brig did it — the thing this whole rewrite exists to fix.
 
+## Acceptance
+
+Accepted by the owner in conversation, 2026-10-18: build the supervisor first, as proposed. The
+consequence left open above (whether TASK-0001.07 keeps going against the current pre-supervisor
+architecture or pauses) is decided separately, not by this acceptance.
+
