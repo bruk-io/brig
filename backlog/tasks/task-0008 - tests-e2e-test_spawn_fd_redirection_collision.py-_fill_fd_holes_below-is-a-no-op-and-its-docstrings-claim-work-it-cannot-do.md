@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 08:40'
-updated_date: '2026-10-18 14:48'
+updated_date: '2026-10-18 14:54'
 labels:
   - brig
   - size-2
@@ -148,4 +148,6 @@ Review (independent, close-work): all three acceptance criteria are genuinely me
 NOT CLOSED, for a process reason only: as a bug this task needs a recorded repro, and record-check --repro refuses while tests/e2e/test_spawn_fd_redirection_collision.py is uncommitted. The reviewer is not permitted to commit. Whoever commits this task's file should then run: record-check TASK-0008 --repro -- uv run pytest tests/e2e/test_spawn_fd_redirection_collision.py -q, and close.
 
 Findings (neither blocks): (1) medium -- the retained 'probe_fd = os.dup(0); os.close(probe_fd)' pair establishes nothing the next line does not, since os.pipe() already returns the lowest free fds by POSIX; its value is discarded, yet the new docstring credits the determinism to it. AC#2 names the probe as the real reason, so this is a finding against the criterion, not the work. (2) low -- the finally block's bare 'except OSError: pass' can no longer fire now that both early closes set their variable to -1. Both filed as DRAFT-0014.
+
+No repro: the dead-code/docstring-overclaim fix and its own regression-discriminating test landed together in one commit (e9d5440) -- no earlier commit where the test exists against the still-dead-code version to run record-check --repro against. Same pattern as TASK-0002/TASK-0005/TASK-0001.19.
 <!-- SECTION:NOTES:END -->
