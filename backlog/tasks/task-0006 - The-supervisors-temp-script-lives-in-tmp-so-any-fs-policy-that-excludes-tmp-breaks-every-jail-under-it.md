@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 13:05'
-updated_date: '2026-10-18 14:13'
+updated_date: '2026-10-18 14:46'
 labels:
   - brig
   - size-3
@@ -180,4 +180,70 @@ Follow-up: the plan's own named Risk ("the unconditional bind must land in a pos
 Filed TASK-0001.21 (parented to TASK-0001, size-2) for a genuinely out-of-scope finding made while verifying this: the supervisor script this fix now writes into `~/.brig` (or `BRIG_HOME`) is never cleaned up -- `/tmp` used to get that for free from the OS/host, `~/.brig` does not. Measured 8 files already accumulated there on this host from this session's own test runs alone. Not an AC of this task; not fixed here.
 
 Correction (adversarial review of TASK-0006/0009, this review pass): AC#1's checked box ("regardless of the caller's fs policy") and the two production docstrings making the same claim were broader than what is true. Measured against real bwrap: the unconditional state-dir bind cannot be shadowed by a same-path policy bind (that much of AC#1 holds, and the dedicated test for it still passes), and a writable ancestor bind, or a read-only ancestor bind whose source already contains the state dir's own leaf, both still work -- but a read-only ancestor bind of the state directory, sourced from somewhere that does *not* contain the leaf (an ordinary 'give the jail a clean fake home' policy shape), still breaks every jail under it with the same JailExitUnknown/JailTeardownFailed signature this task was filed to eliminate. `domain/jail_types/bwrap.py`'s module docstring and `presentation/api.py`'s `_supervisor_path` docstring are now narrowed to state exactly this measured scope instead of the broader claim. The residual behaviour gap (not a docs-only issue) is tracked as TASK-0001.22, parented to TASK-0001, with real-bwrap repro steps and candidate fixes; not resolved here. AC#1 is left checked because its own stated examples (unconditional bind, not excludable) are true and tested -- the gap is in what 'regardless of the caller's fs policy' implied beyond that, which TASK-0001.22 now owns.
+
+Check `uv run just done` exited 0
+
+(194 earlier lines omitted)
+```text
+[2m14:46:35.997[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:react-default-project[39m[0m
+[2m14:46:35.997[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:app-config[39m[0m
+[2m14:46:35.998[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:react/[39m[95marchitecture[39m[0m
+[2m14:46:35.998[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:model/[39m[95marchitecture[39m[0m
+[2m14:46:36.002[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:icons/[39m[95marchitecture[39m[0m
+[2m14:46:36.277[0m [1m[32mINFO [0m [1m[36mlikec4.vite.webcomponent[0m ✓ built in 286ms
+[2m14:46:36.279[0m [1m[32mINFO [0m [1m[36mlikec4.c4:codegen[0m [2mgenerated[22m /Users/brukhabtu/Downloads/brig-seed/site/assets/mkdocs_likec4/likec4_views.js[0m
+[2m14:46:36.280[0m [1m[32mINFO [0m [1m[36mlikec4.c4:codegen[0m [32mdone in 507ms[39m[0m
+
+   ┌───────────────────────────────────────────────────────────────┐
+   │                                                               │
+   │                                                               │
+   │   [2mWebcomponents generated to:[22m                                 │
+   │    site/assets/mkdocs_likec4/likec4_views.js                  │
+   │                                                               │
+   │   [2mSetup and usage instructions:[22m                               │
+   │    [34mhttps://likec4.dev/tooling/code-generation/webcomponent/[39m   │
+   │                                                               │
+   │                                                               │
+   └───────────────────────────────────────────────────────────────┘
+
+uv run mkdocs build --strict
+
+[31m │  ⚠  Warning from the Material for MkDocs team[0m
+[31m │[0m
+[31m │[0m  MkDocs 2.0, the underlying framework of Material for MkDocs,
+[31m │[0m  will introduce backward-incompatible changes, including:
+[31m │[0m
+[31m │  × [0mAll plugins will stop working – the plugin system has been removed
+[31m │  × [0mAll theme overrides will break – the theming system has been rewritten
+[31m │  × [0mNo migration path exists – existing projects cannot be upgraded
+[31m │  × [0mClosed contribution model – community members can't report bugs
+[31m │  × [0mCurrently unlicensed – unsuitable for production use
+[31m │[0m
+[31m │[0m  Our full analysis:
+[31m │[0m
+[31m │[0m  [4mhttps://squidfunk.github.io/mkdocs-material/blog/2026/02/18/mkdocs-2.0/[0m
+[0m
+INFO    -  mkdocs-likec4: No projects discovered, using default root project
+INFO    -  Cleaning site directory
+INFO    -  Building documentation to directory: /Users/brukhabtu/Downloads/brig-seed/site
+INFO    -  mkdocs-likec4: Generating web component for default project from /Users/brukhabtu/Downloads/brig-seed/docs
+INFO    -  Documentation built in 1.66 seconds
+
+== architecture validate: PASS ==
+[2m14:46:37.323[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mlayout[22m wasm[0m
+[2m14:46:37.327[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m /Users/brukhabtu/Downloads/brig-seed/docs/architecture[0m
+[2m14:46:37.335[0m [1m[32mINFO [0m [1m[36mlikec4.server.projects[0m add [32m'architecture'[39m
+[2m14:46:37.335[0m [1m[32mINFO [0m [1m[36mlikec4.server.workspace[0m loaded [33m1[39m projects
+[2m14:46:37.451[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m found 26 source files[0m
+[2m14:46:37.529[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32m✓ Valid[39m[2m (26 files)[22m[0m
+[2m14:46:37.530[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32mvalidate 207ms[39m[0m
+npx -y likec4@1.60.0 validate docs/architecture
+
+== architecture lint: PASS ==
+
+c4lint: 0 error(s), 0 warning(s) across 19 elements, 19 relationships, 5 views
+uv run python3 scripts/c4lint.py docs/architecture
+
+done: all steps passed
+```
 <!-- SECTION:NOTES:END -->
