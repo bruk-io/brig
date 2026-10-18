@@ -133,6 +133,26 @@ this plan -- reuse these exact mechanisms, don't rediscover them)
 - The early-return-when-already-GONE path in `teardown()` needs explicit thought: does it ever
   peek a pid it then never releases, under the new scheme? Trace it, don't assume today's
   structure generalizes.
+
+### Addendum: folding in TASK-0001.07's bounded grace period
+
+TASK-0001.07 found that the kill ladder's post-KILL Reap no longer acts as a
+synchronization barrier once the leader can already be ECHILD by the time it runs
+(the multi-process-group case): the final Verify can then run before SIGKILL has
+actually finished taking effect on the rest of the group, reporting JailTeardownFailed
+as a false negative. Reproduces ~100% on macOS without bwrap; needs confirming for
+real on Linux+bwrap as part of this task's own AC#4.
+
+Build this as one deadline-bound group-liveness primitive, not two: the same
+Linux /proc-scan / macOS-killpg-stays-as-is split this task already needs for the
+held-pid case, extended with a `deadline: float` parameter (same vocabulary as
+`reap_deadline`) that polls until either the group reads gone or the deadline
+passes. Teardown's post-KILL rung calls this bounded version instead of the
+immediate-single-check `Verify`; the ladder's own `Verify`/`SignalGroup` effect
+shapes may need a new variant or an added field for the deadline -- decide which
+fits the closed `Effect` union's own existing style better (TASK-0001.06/.07's own
+precedent: `AwaitSupervisorDone` added a new effect rather than overloading an
+existing one, when the two cases needed genuinely different data).
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
