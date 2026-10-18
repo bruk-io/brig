@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 17:30'
-updated_date: '2026-10-18 21:05'
+updated_date: '2026-10-18 21:09'
 labels:
   - brig
   - size-2
@@ -351,4 +351,6 @@ Both ACs were already ticked in the last commit, so this review leaves the
 finish line untouched. Nothing was committed: src/brig/infra/processes.py and
 tests/e2e/test_processes_gateway.py remain modified in the working tree, and the
 status stays In Progress.
+
+No repro: fix and discriminating tests landed together, no earlier failing-state commit to run record-check --repro against. Same pattern as TASK-0002/TASK-0005/TASK-0001.19/TASK-0006/TASK-0001.21/TASK-0011/TASK-0012.
 <!-- SECTION:NOTES:END -->
