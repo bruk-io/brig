@@ -41,16 +41,42 @@ a narrow, accepted gap of the same kind ``brig-one-writer``'s
 aliased-module-import gap already documents: it misses a real violation
 reached through that one path, rather than reporting one that is not there.
 
-A base *re-exported* through another project module is **not** that case,
-despite what this docstring claimed before TASK-0001.19: it resolves to a
-real same-file ``IMPORT`` whose ``imported_from`` names the re-exporting
-module (``brig.domain.shim.Protocol``), which is not in
-``_EXEMPT_BASE_IMPORT_ORIGINS``, so it lands in ``disallowed`` and *fires* on
-a genuinely exempt base. Within one file that fact is indistinguishable from
-a genuine project base (``brig.domain.base.Mixin``), which must fire, so the
-two cannot be told apart here at all. Verified empirically both ways
-(TASK-0002 review); brig declares no such re-exported base today, so the gate
-is clean by conformance rather than by suppression. Tracked as TASK-0001.19.
+A base *re-exported* through another project module looked like the same
+case at first (TASK-0001.19's own early investigation claimed it): it
+resolves to a real same-file ``IMPORT`` whose ``imported_from`` names the
+re-exporting module (``brig.domain.shim.Protocol``), which is not in
+``_EXEMPT_BASE_IMPORT_ORIGINS`` -- indistinguishable, *within this one file*,
+from a genuine project base (``brig.domain.base.Mixin``). But the single-file
+walk is not the only project-reach surface this DSL has: ``pypeeker.dsl``'s
+*project columns* (``column_of(DEFINITION_KIND)``, ``column_of(DEFINITION_NAME)``
+-- ``pypeeker.dsl.columns``) stay on the *same row* while consulting
+``Corpus.resolver`` (a real ``CrossModuleResolver``, the same one ``check``'s
+own builtin rules use, e.g. ``pypeeker.dsl.visibility``), unlike
+``follow(...)``, which replaces the row and loses exactly the correlation
+this check needs (which class a resolved base belongs to). So
+``_classify_header_bases`` no longer tries to settle a same-file-import base
+of unresolved origin on its own -- it reports ``ambiguous`` (see below) and a
+fourth rule part, ``_reexported_base_disallowed``, settles it with a
+project-reach ``imports()`` selection instead. ``CrossModuleResolver.resolve_definition``
+follows ``imported_from`` transitively (any number of re-export hops, not
+just one), but stops at the first module this project's corpus has not
+indexed -- stdlib included, since brig is never given ``typing``'s or
+``enum``'s own source. For ``brig.domain.shim.Protocol`` that means the walk
+lands on ``shim.py``'s own ``Protocol`` import (confirmed empirically:
+``DEFINITION_KIND`` is ``SymbolKind.IMPORT``, ``DEFINITION_NAME`` is
+``'Protocol'``), one node short of ``typing.Protocol`` itself, because
+``typing`` is outside the corpus. ``_reexported_base_disallowed`` reads that
+boundary node's *kind* and *name* -- an unindexed-boundary import bound to a
+name rule 7 exempts is treated as exempt, matching the direct-import
+shortcut's four names. For a genuine disallowed base
+(``brig.domain.base.Mixin``) the walk instead reaches a same-corpus
+``CLASS`` symbol, never an unindexed boundary, so it still fires. The
+residual gap: the walk cannot see *which* unindexed module the boundary
+import actually names -- a third-party package re-exporting something
+named, say, ``Protocol`` would read the same as ``typing.Protocol`` to this
+check. Not a hand-rolled resolver of brig.py's own with its own hop limit;
+``resolve_definition`` already exists in pypeeker and is used exactly as
+pypeeker's own builtin rules use it (TASK-0001.19).
 
 That "cannot tell" verdict needs a channel of its own, separate from
 "resolves to an exempt shape" — ``brig-class-forms``'s stateful-class check
@@ -63,8 +89,13 @@ one, the opposite of this gap's accepted shape (TASK-0001.18 review, fixed
 by splitting the single disallowed/exempt walk three ways: ``disallowed``,
 ``exempt``, and ``ambiguous`` — see ``_classify_header_bases``). The
 inheritance-restriction check above stays a two-way, false-negative-only
-gap; the stateful-class check needs the third bucket because it is
-consulted by negation.
+gap for an attribute-chain or dynamic base; a same-file-import base of
+unresolved origin is also ``ambiguous`` now (TASK-0001.19), with
+``_reexported_base_disallowed`` as the project-reach check that still catches
+a genuine violation reached that way -- so the gap the stateful-class check
+must not fire through grew by one shape, not two; the inheritance-restriction
+check lost no coverage, because the fourth rule part replaces exactly the
+coverage ``disallowed`` gave up.
 """
 
 from collections.abc import Mapping
@@ -72,12 +103,15 @@ from typing import Any
 
 from pypeeker.analysis import Trait, register_trait
 from pypeeker.dsl import (
+    DEFINITION_KIND,
+    DEFINITION_NAME,
     DslRule,
     MultiPartRule,
     RulePart,
     Selection,
     all_of,
     any_of,
+    column_of,
     imports,
     not_,
     opaque,
@@ -482,6 +516,14 @@ not inherited from the two rules having already agreed."""
 
 _EXEMPT_BUILTIN_BASES = ("<builtins>.Exception", "<builtins>.BaseException")
 
+_EXEMPT_BASE_NAMES = tuple(origin.rpartition(".")[-1] for origin in _EXEMPT_BASE_IMPORT_ORIGINS)
+"""The bare names of ``_EXEMPT_BASE_IMPORT_ORIGINS`` -- ``('Protocol', 'Enum',
+'StrEnum', 'TypedDict')`` -- derived rather than repeated, since
+``_reexported_base_disallowed`` below reads only the name at the unindexed
+boundary ``CrossModuleResolver.resolve_definition`` stops at (it cannot see
+into ``typing``/``enum`` themselves, which are never part of this corpus), not
+the full dotted origin ``_EXEMPT_BASE_IMPORT_ORIGINS`` matches directly."""
+
 
 def _pos(position: Any) -> tuple[int, int]:
     return (position.line, position.column)
@@ -519,21 +561,28 @@ def _classify_header_bases(file_index: FileIndex, class_symbol: Any) -> tuple[bo
     header can set more than one):
 
     - ``disallowed``: at least one base resolves -- to a builtin other than
-      ``Exception``/``BaseException``, a same-file import whose
-      ``imported_from`` is not in ``_EXEMPT_BASE_IMPORT_ORIGINS``, or another
-      class this same file declares -- to something that is not one of rule
-      7's four typed shapes.
+      ``Exception``/``BaseException``, or another class this same file
+      declares -- to something that is not one of rule 7's four typed shapes.
+      A same-file import is *never* placed here (see ``ambiguous`` below);
+      this bucket now only covers the two shapes a single file can settle on
+      its own without the project-reach check.
     - ``exempt``: at least one base resolves to ``Exception``/``BaseException``,
-      or a same-file import of ``Protocol``/``Enum``/``StrEnum``.
+      or a same-file import whose ``imported_from`` is already one of
+      ``_EXEMPT_BASE_IMPORT_ORIGINS`` directly (``from typing import Protocol``,
+      not re-exported).
     - ``ambiguous``: at least one base is a reference this file's own binder
-      could not resolve to either of the above *within this one file* -- an
-      attribute-chain base (``t.Protocol``) or a dynamic one. A base
-      re-exported through another project module does *not* land here: it is
-      a real same-file import, so it goes to ``disallowed`` (see the module
-      docstring and TASK-0001.19). Never set by a class that simply declares no
-      base at all (``refs`` is then empty), which is the plain "no base"
-      case ``_stateful_outside_infra``'s fifth-shape check depends on
-      telling apart from "an unresolvable one".
+      could not place in either bucket above *within this one file* -- an
+      attribute-chain base (``t.Protocol``), a dynamic one, or a same-file
+      import whose ``imported_from`` does not match
+      ``_EXEMPT_BASE_IMPORT_ORIGINS`` directly. That last shape used to go to
+      ``disallowed`` (TASK-0001.19's own earlier docstring claimed re-export
+      and genuine-project-base were indistinguishable and so both had to);
+      they still are indistinguishable *here*, but ``_reexported_base_disallowed``
+      (a separate, project-reach rule part below) settles exactly this shape by
+      resolving the import across files -- see the module docstring. Never set
+      by a class that simply declares no base at all (``refs`` is then empty),
+      which is the plain "no base" case ``_stateful_outside_infra``'s
+      fifth-shape check depends on telling apart from "an unresolvable one".
 
     A hand-written ``register_trait`` provider rather than a composed
     ``pypeeker.dsl.trait()``: the composed form only ever quantifies over the
@@ -542,27 +591,33 @@ def _classify_header_bases(file_index: FileIndex, class_symbol: Any) -> tuple[bo
     provider's signature -- ``(file_index, symbol_id) -> Trait`` -- hands the
     whole ``FileIndex`` instead: see the module docstring for the confirmed
     shape a header reference's ``symbol_id`` already resolves to within one
-    file.
+    file. It is also why this walk cannot itself finish the re-export case:
+    ``(file_index, symbol_id)`` is one file, and ``Corpus.resolver`` -- what
+    ``_reexported_base_disallowed`` reaches for -- is not part of that
+    signature.
 
     Every ``disallowed``/``exempt`` verdict this walk reaches names its base
-    outright (a builtin, a same-file import's recorded ``imported_from``, or
-    a same-file class) -- never a guess. A base the walk cannot place in
-    either bucket is reported through ``ambiguous`` instead of being folded
-    into ``disallowed`` (which would reject conforming code, since a
-    ``HEURISTIC`` finding still fails ``--strict`` same as ``DECLARED``) or
-    into ``exempt`` (which would hide a real violation from the inheritance
-    check *and* manufacture one in the stateful-class check, by telling it
-    "not exempt" when the honest answer is "cannot tell"). An attribute-chain
-    or dynamic base reaches no bucket and stays a false negative on the
-    inheritance check -- the same accepted gap ``brig-one-writer``'s
-    aliased-module-import gap already documents -- but no longer misfires
-    the stateful-class check the way an unresolved
+    outright (a builtin, a same-file import's recorded ``imported_from``
+    matched directly, or a same-file class) -- never a guess. A base the walk
+    cannot place in either bucket is reported through ``ambiguous`` instead of
+    being folded into ``disallowed`` (which would reject conforming code,
+    since a ``HEURISTIC`` finding still fails ``--strict`` same as
+    ``DECLARED``) or into ``exempt`` (which would hide a real violation from
+    the inheritance check *and* manufacture one in the stateful-class check,
+    by telling it "not exempt" when the honest answer is "cannot tell, from
+    this file alone"). An attribute-chain or dynamic base reaches no bucket
+    and stays a false negative on the inheritance check -- the same accepted
+    gap ``brig-one-writer``'s aliased-module-import gap already documents --
+    but no longer misfires the stateful-class check the way an unresolved
     attribute-chain base used to (confirmed empirically, TASK-0001.18
     review: ``import enum`` / ``class Signal(enum.Enum)`` with a
     stdlib-blessed ``self.number = number`` in ``__init__``, and ``import
     typing`` / ``class Port(typing.Protocol)`` with ``self.x = 1``, both of
     rule 7's own exempt shapes, used to fire the stateful-class check solely
-    because the attribute-chain base could not be resolved).
+    because the attribute-chain base could not be resolved). A same-file
+    import of unresolved origin gets the same treatment now, for the same
+    reason -- the inheritance check's own false negative here is covered by
+    ``_reexported_base_disallowed`` instead of by this walk.
     """
     imports_by_id = {s.symbol_id: s for s in file_index.symbols if s.kind is SymbolKind.IMPORT}
     local_class_ids = {s.symbol_id for s in file_index.symbols if s.kind is SymbolKind.CLASS}
@@ -596,7 +651,16 @@ def _classify_header_bases(file_index: FileIndex, class_symbol: Any) -> tuple[bo
             if imported.imported_from in _EXEMPT_BASE_IMPORT_ORIGINS:
                 exempt = True
             else:
-                disallowed = True
+                # A same-file import whose imported_from does not match one
+                # of the four exempt origins directly: within this one file
+                # that is the same fact whether the import names a genuine
+                # project base (brig.domain.base.Mixin) or re-exports an
+                # exempt one through a project module (brig.domain.shim.Protocol)
+                # -- ambiguous, not disallowed (TASK-0001.19). The project-reach
+                # part of brig-class-forms (_reexported_base_disallowed) is
+                # what actually settles this case, by resolving the import
+                # across files instead of guessing from this file alone.
+                ambiguous = True
             continue
         if ref.symbol_id in local_class_ids or ref.symbol_id.startswith("<builtins>."):
             disallowed = True
@@ -641,6 +705,107 @@ def _disallowed_inheritance(options: Mapping[str, Any]) -> Selection:
             row.kind.eq(SymbolKind.CLASS),
             row.file_path.startswith(f"{root}/"),
             trait_of("brig-class-forms-disallowed-base").value.eq(True),
+        )
+    )
+
+
+def _reexport_candidate_owner(file_index: FileIndex, import_symbol_id: str) -> str | None:
+    """The class, if any, in ``file_index`` that declares ``import_symbol_id`` as a
+    header base whose ``imported_from`` is not one of ``_EXEMPT_BASE_IMPORT_ORIGINS``
+    directly -- the shape ``_classify_header_bases`` reports ``ambiguous`` for.
+
+    The same scope-span walk ``_classify_header_bases`` does, inverted: that
+    function is keyed by class and asks "what does this class's base resolve
+    to"; this one is keyed by import and asks "is this import some class's
+    base of the shape only a project-reach check can settle". Both need the
+    same ``_header_base_refs``/receiver-root filtering, so this is not new
+    logic, just a different anchor on it -- the anchor
+    ``_reexported_base_disallowed`` below needs, since ``column_of`` reads the
+    *current row's* subject, and the import -- not the class -- is the row a
+    project-reach check over ``imports()`` can resolve across files.
+    """
+    import_symbol = next((s for s in file_index.symbols if s.symbol_id == import_symbol_id), None)
+    if import_symbol is None or import_symbol.kind is not SymbolKind.IMPORT:
+        return None
+    if import_symbol.imported_from in _EXEMPT_BASE_IMPORT_ORIGINS:
+        return None
+    for class_symbol in file_index.symbols:
+        if class_symbol.kind is not SymbolKind.CLASS:
+            continue
+        refs = _header_base_refs(file_index, class_symbol)
+        receiver_roots = {
+            ref.receiver_root_symbol_id for ref in refs if ref.receiver_root_symbol_id
+        }
+        for ref in refs:
+            if ref.symbol_id in receiver_roots:
+                continue
+            if ref.symbol_id == import_symbol_id:
+                # pypeeker ships no py.typed marker (see pyproject.toml's mypy
+                # override), so class_symbol.symbol_id is Any at the type
+                # checker even though it is str at runtime (Symbol.symbol_id:
+                # str) -- str(...) states that rather than suppressing the
+                # check.
+                return str(class_symbol.symbol_id)
+    return None
+
+
+def _reexport_candidate(file_index: FileIndex, symbol_id: str) -> Trait:
+    """Trait provider, keyed on an ``imports()`` row's own ``symbol_id``: the
+    owning class's id, if this import is a header base of the shape
+    ``_reexported_base_disallowed`` resolves across files, else ``None``.
+
+    Reports ``Confidence.DECLARED``: "some class in this file uses this
+    import as a base, unresolved to an exempt origin within this file" is a
+    fact the single-file walk already settles outright, same as
+    ``_classify_header_bases``'s other verdicts.
+    """
+    provenance = (
+        f"pypeeker_rules.brig: re-export-candidate base owner for '{symbol_id}' in "
+        f"{file_index.file_path}"
+    )
+    owner = _reexport_candidate_owner(file_index, symbol_id)
+    return Trait(value=owner, confidence=Confidence.DECLARED, provenance=provenance)
+
+
+register_trait("brig-class-forms-reexport-candidate")(_reexport_candidate)
+
+
+def _reexported_base_disallowed(options: Mapping[str, Any]) -> Selection:
+    """A header-base import (``_reexport_candidate``) whose cross-file resolution
+    is not one of rule 7's exempt shapes -- the project-reach half of the
+    inheritance restriction, picking up exactly the shape
+    ``_classify_header_bases`` now reports ``ambiguous`` for (TASK-0001.19).
+
+    ``column_of(DEFINITION_KIND)``/``column_of(DEFINITION_NAME)`` stay on this
+    row (the import) while resolving it through ``Corpus.resolver`` --
+    ``CrossModuleResolver.resolve_definition``, the same transitive walk
+    ``pypeeker.dsl.visibility``'s own builtin rules use, not a resolver
+    brig.py built. A genuine disallowed base (``brig.domain.base.Mixin``)
+    resolves all the way to that class's own ``CLASS`` symbol; a base
+    re-exported from an exempt stdlib construct resolves only as far as the
+    last project-indexed import before the boundary (``typing``/``enum`` are
+    never in this corpus), which is why the test here is "did resolution stop
+    at an import bound to one of rule 7's four names", not "is the final
+    answer a class". See the module docstring for the one gap that leaves: a
+    third-party package re-exporting something bound to one of those same
+    four bare names would read the same way, because this check cannot see
+    which unindexed module the boundary import actually names.
+    """
+    root = options.get("root", _DEFAULT_ROOT)
+    return (
+        imports()
+        .where(row.file_path.startswith(f"{root}/"))
+        .with_field("base_of_class", trait_of("brig-class-forms-reexport-candidate").value)
+        .where(
+            all_of(
+                row.base_of_class.is_true(),
+                not_(
+                    all_of(
+                        column_of(DEFINITION_KIND).eq(SymbolKind.IMPORT),
+                        column_of(DEFINITION_NAME).is_in(*_EXEMPT_BASE_NAMES),
+                    )
+                ),
+            )
         )
     )
 
@@ -865,10 +1030,18 @@ register_dsl_rule(
                     "class '{symbol_id}' inherits from a base that is not "
                     "Exception, Enum/StrEnum or Protocol (decision-0001 rule 7). "
                     "Single-file check: a base reached through an attribute "
-                    "chain, or a dynamic one, is not resolved and so cannot "
-                    "trigger this; one re-exported through a project module "
-                    "resolves to that module and does -- see the module "
-                    "docstring"
+                    "chain or a dynamic one, or one reached through a same-file "
+                    "import, is not settled here -- see "
+                    "_reexported_base_disallowed and the module docstring"
+                ),
+            ),
+            RulePart(
+                build=_reexported_base_disallowed,
+                message=(
+                    "class '{base_of_class}' inherits via '{module}' importing "
+                    "'{imported_from}', which does not resolve (across files) to "
+                    "Exception, Enum/StrEnum, Protocol or TypedDict "
+                    "(decision-0001 rule 7)"
                 ),
             ),
             RulePart(

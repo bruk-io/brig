@@ -113,6 +113,79 @@ def test_brig_class_forms_fires_on_disallowed_inheritance(tmp_path: Path) -> Non
     assert_rule_fires(project, "brig-class-forms", src=("src",))
 
 
+def test_brig_class_forms_fires_on_disallowed_inheritance_via_import(tmp_path: Path) -> None:
+    """The cross-file counterpart of the test above: a genuine disallowed base
+    reached through an import (``from brig.domain.base import Mixin``), not a
+    same-file class. ``_classify_header_bases`` reports this ``ambiguous``
+    (TASK-0001.19) rather than ``disallowed``, so this is pinned by the
+    project-reach rule part (``_reexported_base_disallowed``), not by
+    ``_disallowed_inheritance`` -- the shape AC#2 names.
+    """
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-class-forms",
+        src=("src",),
+        files={
+            "src/brig/domain/base.py": "class Mixin:\n    pass\n",
+            "src/brig/domain/q.py": (
+                "from brig.domain.base import Mixin\n\n\nclass Thing(Mixin):\n    pass\n"
+            ),
+        },
+    )
+    assert_rule_fires(project, "brig-class-forms", src=("src",))
+
+
+def test_brig_class_forms_accepts_a_protocol_re_exported_through_a_project_module(
+    tmp_path: Path,
+) -> None:
+    """TASK-0001.19's own planted violation: a project module re-exports an
+    exempt stdlib base (``brig.domain.shim`` does ``from typing import
+    Protocol``), and a class inherits from it through that re-export. Within
+    one file this is the same fact as the genuine-disallowed-base test above
+    (a same-file import of unresolved origin); the project-reach rule part
+    tells them apart by resolving the import across files.
+    """
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-class-forms",
+        src=("src",),
+        files={
+            "src/brig/domain/shim.py": "from typing import Protocol\n",
+            "src/brig/domain/p.py": (
+                "from brig.domain.shim import Protocol\n\n\n"
+                "class Port(Protocol):\n    def do(self) -> None: ...\n"
+            ),
+        },
+    )
+    assert_rule_clean(project, "brig-class-forms", src=("src",))
+
+
+def test_brig_class_forms_accepts_a_protocol_re_export_with_state(tmp_path: Path) -> None:
+    """The re-exported-Protocol fixture above, with the class also assigning
+    ``self.x = 1`` -- the stateful-class check (rule 7's fifth shape) must
+    not manufacture a finding out of this base either, the same "cannot
+    tell, from this file alone" treatment TASK-0001.18 already pins for an
+    attribute-chain base: ``_classify_header_bases`` reports this base
+    ``ambiguous``, not ``exempt``, so ``_stateful_outside_infra`` must read
+    that as "cannot tell", not "confirmed not exempt".
+    """
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-class-forms",
+        src=("src",),
+        files={
+            "src/brig/domain/shim.py": "from typing import Protocol\n",
+            "src/brig/domain/p.py": (
+                "from brig.domain.shim import Protocol\n\n\n"
+                "class Port(Protocol):\n"
+                "    def __init__(self) -> None:\n"
+                "        self.x = 1\n"
+            ),
+        },
+    )
+    assert_rule_clean(project, "brig-class-forms", src=("src",))
+
+
 def test_brig_class_forms_accepts_a_protocol_subclass(tmp_path: Path) -> None:
     project = build_fixture(
         tmp_path,
