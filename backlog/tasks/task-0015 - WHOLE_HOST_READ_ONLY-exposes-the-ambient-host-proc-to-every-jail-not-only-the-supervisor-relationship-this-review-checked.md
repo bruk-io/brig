@@ -80,11 +80,11 @@ pass actually checked and closed.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 domain/jail_types/bwrap.py's compile_supervisor_launch adds --proc /proc --dev /dev --tmpfs /sys unconditionally, after state_dir's own bind and before the namespace flags -- a new named constant, not folded into _NAMESPACE_FLAGS
-- [ ] #2 A real-bwrap test proves a jail's own /proc listing contains only its own namespace's processes, not the host's (measured today: without the fix, 1/8/9 real host pids; with it, exactly 1 -- itself)
-- [ ] #3 A real-bwrap test proves /sys is empty inside the jail
-- [ ] #4 The existing walking-skeleton journey and every other real-bwrap battery still pass unmodified -- the new flags must not break the basic create/run/destroy path
-- [ ] #5 tests/unit/test_bwrap_compile.py's byte-exact assertion on compile_supervisor_launch's output is updated for the new flags, proving nothing else in the compiled argv changed
+- [x] #1 domain/jail_types/bwrap.py's compile_supervisor_launch adds --proc /proc --dev /dev --tmpfs /sys unconditionally, after state_dir's own bind and before the namespace flags -- a new named constant, not folded into _NAMESPACE_FLAGS
+- [x] #2 A real-bwrap test proves a jail's own /proc listing contains only its own namespace's processes, not the host's (measured today: without the fix, 1/8/9 real host pids; with it, exactly 1 -- itself)
+- [x] #3 A real-bwrap test proves /sys is empty inside the jail
+- [x] #4 The existing walking-skeleton journey and every other real-bwrap battery still pass unmodified -- the new flags must not break the basic create/run/destroy path
+- [x] #5 tests/unit/test_bwrap_compile.py's byte-exact assertion on compile_supervisor_launch's output is updated for the new flags, proving nothing else in the compiled argv changed
 <!-- AC:END -->
 
 ## Implementation Plan
