@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 13:05'
-updated_date: '2026-10-18 13:36'
+updated_date: '2026-10-18 13:37'
 labels:
   - brig
   - size-3
@@ -42,9 +42,9 @@ Invisible on macOS: the test is skipif(shutil.which('bwrap') is None), so it ski
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The supervisor's script is reachable from inside the jail regardless of the caller's fs policy (e.g. the supervisor's own path is bound into the launch unconditionally, or the script is passed by a mechanism that does not depend on the policy's binds)
-- [ ] #2 tests/e2e/test_fs_policy_battery.py::test_a_path_outside_the_policy_is_unreadable_in_a_real_bwrap_jail passes on real Linux, exiting 2 (ENOENT for the planted secret) rather than raising JailExitUnknown
-- [ ] #3 A policy that excludes /tmp is covered by a test asserting the jail still starts, so this coupling cannot regress silently
+- [x] #1 The supervisor's script is reachable from inside the jail regardless of the caller's fs policy (e.g. the supervisor's own path is bound into the launch unconditionally, or the script is passed by a mechanism that does not depend on the policy's binds)
+- [x] #2 tests/e2e/test_fs_policy_battery.py::test_a_path_outside_the_policy_is_unreadable_in_a_real_bwrap_jail passes on real Linux, exiting 2 (ENOENT for the planted secret) rather than raising JailExitUnknown
+- [x] #3 A policy that excludes /tmp is covered by a test asserting the jail still starts, so this coupling cannot regress silently
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -165,4 +165,10 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+Implementation (TASK-0006): new `src/brig/infra/state_dir.py` (`resolve`/`ensure`, functional-core/imperative-shell split -- `BRIG_HOME` taken exactly as given, else `~/.brig`). `presentation/api.py`'s `_supervisor_path()` now writes the assembled supervisor into that directory (via `NamedTemporaryFile(dir=...)`) instead of the default tempdir; a new cached `_resolved_state_dir()` resolves+ensures it once per process. `domain/jail_types/bwrap.py`'s `compile_supervisor_launch` takes a required keyword-only `state_dir: str` and adds one unconditional `--ro-bind <state_dir> <state_dir>` after the policy's own binds and before `_NAMESPACE_FLAGS` (bwrap: later overlapping bind wins, so it cannot be shadowed). Every caller (`_supervisor_argv`, `_supervisors_for`) updated. `tests/unit/test_bwrap_compile.py`'s byte-exact argv assertions and the TASK-0009 cross-check against `tests/e2e/test_tiocsti_battery.py`'s hand-maintained prefix (now a function, `_bwrap_argv_prefix()`, since it has to carry the real resolved+ensured state dir to spawn real bwrap for real) updated to match.
+
+Tests added: `tests/e2e/test_state_dir.py` (resolve/ensure, pure+real-I/O; lives in e2e per `brig-test-layers` -- a `tests/unit` import of anything under `brig.infra` is a hard violation of that rule). `tests/e2e/test_fs_policy_battery.py::test_a_policy_excluding_tmp_still_lets_the_jail_start` (AC#3): the policy it builds excludes `/tmp` *and*, surgically, the state directory's own leaf under its parent (drilling one level into the mirror rather than excluding the parent's whole top-level entry, which measured broken for an unrelated reason in the probe container -- uv's managed CPython lives under that same top-level entry, e.g. `/root/.local/share/uv/...`, so withholding all of it took the interpreter down with it). Verified attributable, not just passing: with the new unconditional `--ro-bind` temporarily removed from `compile_supervisor_launch` in a scratch copy, this new test FAILS with exactly TASK-0006's original signature (`can't open file '/root/.brig/brig-supervisor-*.py'`, JailExitUnknown) while the AC#2 test still passes (that one only needed the move off /tmp) -- confirming the unconditional bind is doing real, necessary work and this test would catch its regression.
+
+Proof: `uv run python3 scripts/run_done.py` (just done) green in full on macOS -- lint, typecheck, gates (pypeeker --strict), pypeeker rule tests (25), unit (22), integration x2 (7 each), e2e (34 passed/12 skipped, all skips the pre-existing bwrap-unavailable-on-macOS set plus this task's own 5 new fs-policy-battery skips), docs build, arch-validate, arch-lint. Real Linux + real bwrap (`brig-probe-amd64:latest`, `--platform linux/amd64 --privileged`, repo copied to writable `/work`, `uv sync`): `uv run mypy` clean, `pypeeker check --strict` clean, `pytest tests/ pypeeker_rules/tests -rs` -> 98 passed, 2 skipped (both pre-existing, measured reasons -- the close-action-race fallback-scan skip and the no-setsid TIOCSTI gateway skip -- nothing new). AC#2's previously-failing test (`test_a_path_outside_the_policy_is_unreadable_in_a_real_bwrap_jail`) now passes for real against real bwrap, exiting 2 (ENOENT), not `JailExitUnknown`. AC#3's new test passes for real too, and was confirmed attributable per the note above.
 <!-- SECTION:NOTES:END -->
