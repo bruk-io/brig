@@ -6,7 +6,10 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-10-17 22:57'
-labels: []
+updated_date: '2026-10-18 02:06'
+labels:
+  - brig
+  - size-2
 dependencies: []
 type: bug
 ---
