@@ -3,13 +3,17 @@ id: TASK-0018
 title: >-
   First real CI run found a margin-calculation bug in the forged-done timing
   assertions
-status: To Do
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 23:30'
+updated_date: '2026-10-18 23:30'
 labels:
-  - brig
+  - size-1
 dependencies: []
+modified_files:
+  - tests/e2e/test_supervisor_link_gateway.py
+type: bug
 ordinal: 26000
 ---
 
@@ -22,3 +26,10 @@ Root cause: a real math bug, not CI slowness. 'start = time.monotonic()' was cap
 
 Fixed: start is now captured before the early-check call (i.e., at the actual process-spawn point), so elapsed genuinely measures the full real process lifetime and the margin means what it says. Verified 5/5 stable on macOS and 5/5 stable on real Linux+bwrap (brig-probe-amd64:latest) after the fix.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 Both forged-done tests measure elapsed time from the actual process-spawn point, not from after the early-check's own deadline has already consumed part of the window
+- [ ] #2 Both tests pass stably (5+ consecutive runs) on macOS and real Linux+bwrap
+- [ ] #3 CI (GitHub Actions) passes on a re-push
+<!-- AC:END -->
