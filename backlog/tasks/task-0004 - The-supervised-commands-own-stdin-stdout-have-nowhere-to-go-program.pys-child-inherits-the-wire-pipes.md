@@ -7,10 +7,11 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 04:34'
-updated_date: '2026-10-18 07:58'
+updated_date: '2026-10-18 07:59'
 labels:
   - brig
   - size-3
+  - finish-moved
 dependencies: []
 references:
   - >-
@@ -265,3 +266,16 @@ open; `_main` closes this process's own copy only after `_start_child` has retur
      `Evidence(control_observed=True, violation_blocked=True)` -> `Grade.ENFORCED` (was
      `UNENFORCED` on this same host before this draft's fix).
 <!-- SECTION:PLAN:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-10-18 07:59
+
+---
+
+Acceptance criteria added after the draft's promotion to a task: the draft itself (DRAFT-0010) carried no AC, only an open design question plus a long measured history; promoting it to TASK-0004 is what first gave it AC, stated here as the resolution actually implemented and measured, not negotiated against a pre-existing set. finish-moved per board-check.
+
+---
+<!-- COMMENTS:END -->
