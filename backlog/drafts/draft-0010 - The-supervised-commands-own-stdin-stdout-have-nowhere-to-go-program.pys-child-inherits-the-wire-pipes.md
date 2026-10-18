@@ -6,7 +6,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-10-18 04:34'
-updated_date: '2026-10-18 07:18'
+updated_date: '2026-10-18 07:28'
 labels:
   - brig
 dependencies: []
@@ -105,4 +105,54 @@ Two independent adversarial reviews of TASK-0001.15/.16/.17 (filed against this 
 **A further, narrower question this adversarial review raised and measured, not fully this draft's own scope**: does sealing the supervised command's own fd 0/1 actually stop it from reaching the events pipe at all, given `WHOLE_HOST_READ_ONLY` also makes the jail's `/proc` reachable, and `/proc/<supervisor's pid>/fd/1` names the same pipe regardless of what the confined process's *own* fd table says? Measured, real bwrap, same container: with the fix above, the supervised command cannot open `/proc/<supervisor>/fd/1` nor read anything but `PATH` from `/proc/<supervisor>/environ` (the kernel's own ptrace-permission model denies a child introspecting its own parent this way under this host's default Yama settings, and `_start`'s own env for the supervisor was separately narrowed to just `PATH`, below). That measurement is specific to this one relationship (supervisor and its direct child, this host's ptrace_scope) and says nothing about `WHOLE_HOST_READ_ONLY`'s own, much broader habit of making every other host process's `/proc` entry reachable from inside any jail regardless of this fix -- which is this policy's own open question, not this draft's, and is being filed separately rather than claimed settled here.
 
 **A related fix, same review pass, to `infra/supervisor/link.py`'s `_start`**: decision-0002's own request-channel finding (6) measured that handing the supervisor process "this process's own environment" (an earlier correction, replacing a single mapping shared with the supervised command) was *also* not safe on its own -- the same `/proc` reachability above means an embedder's real secrets, sitting in that environment for reasons having nothing to do with brig, were one `/proc/<supervisor>/environ` read away from the very command they were never meant to reach. `_start` now gives the supervisor process a fixed, minimal, non-secret environment (`PATH` alone, the one thing `posix_spawnp("bwrap", ...)` actually needs) instead.
+
+## Fix-confirmation update: the sealed pipe silently rewrites the exit code of any command that writes to stdout
+
+Measured while re-verifying the adversarial-review fixes, through brig's public API
+(`create_bwrap_jail`/`run_jail`) against real bwrap in a `--privileged ubuntu:24.04`
+container, and reproduced at the `link.py` layer on macOS:
+
+| supervised command | `run_jail` returns | should be |
+| --- | --- | --- |
+| `/bin/true` | 0 | 0 |
+| `/bin/sh -c "echo hello; exit 0"` | 0 | 0 |
+| `/bin/sh -c "echo hello; exit 7"` | 7 | 7 |
+| `/bin/echo hello` | **1** | **0** |
+| `/bin/sh -c "echo oops 1>&2; exit 0"` | 0 | 0 |
+
+The walking skeleton is intact -- this is *not* the `/dev/null` class of breakage, which
+failed every jailed command. But `/bin/echo hello` is an ordinary, non-adversarial
+command that succeeds outside a jail and reports failure inside one. The cause is the
+sealed pipe itself: fd 1's read end is closed in `_start_child`'s own `finally`, so the
+command's first write gets `EPIPE`/`SIGPIPE` with no reader anywhere, and whatever the
+command does about that becomes its exit code. coreutils `echo` catches the write error
+and exits 1; a command leaving `SIGPIPE` at its default disposition would be killed
+outright and report `-13`; `sh`'s builtin `echo` fails but lets the script's own
+`exit 0` stand. Which of the three happens is the command's business, not brig's --
+brig's part is that the exit code it hands the embedder is no longer the exit code the
+same command would have had outside the jail.
+
+Two reasons this is worth recording rather than leaving implicit in "a write to fd 1
+raises `EPIPE`/`SIGPIPE` immediately", which is all this draft said before:
+
+1. **It is silent.** Before the fix, a command writing to stdout corrupted the event
+   stream loudly -- `WireError` -> `SupervisorDoneUnknown` -> `JailExitUnknown`, a brig
+   type the embedder catches. After the fix, `run_jail` returns a plausible-looking
+   wrong integer and nothing anywhere says a write failed. The honest-command case
+   traded a loud failure for a quiet one.
+2. **It reaches grading.** `tests/e2e/test_tiocsti_battery.py` encodes an errno in its
+   probe's exit code (`_ERRNO_EXIT_OFFSET`). Any battery probe that writes to stdout
+   before exiting now has that encoding overwritten by an EPIPE-derived code, which
+   `_evidence_from_measured_exit_codes` cannot tell from a real measurement. The
+   existing `ENOTTY` skip covers today's probe's fd 0; this is the same hazard on fd 1,
+   not yet hit only because no current probe writes to stdout.
+
+Not fixed here, and deliberately so: the fix is to give the supervised command a real
+stdout, which is exactly the design question this draft exists to hold. Noted so that
+whoever settles it knows the sealed pipe is a *stopgap with its own cost*, not a
+neutral placeholder -- and so nobody reads the current green suite as evidence that
+jailed commands' exit codes are faithful. Note also that fd 2 is untouched by
+`_start_child`: the supervised command's stderr still inherits the supervisor's, so
+stderr-writing commands are unaffected (measured above), which is itself an
+inconsistency the eventual design should resolve rather than preserve by accident.
 <!-- SECTION:DESCRIPTION:END -->
