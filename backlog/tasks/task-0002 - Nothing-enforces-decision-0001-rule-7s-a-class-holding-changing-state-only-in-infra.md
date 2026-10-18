@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@bruk'
 created_date: '2026-10-17 22:57'
-updated_date: '2026-10-18 04:33'
+updated_date: '2026-10-18 04:34'
 labels:
   - brig
   - size-2
@@ -143,4 +143,17 @@ effect variants that task added to `type Effect`), and `gates` (three
 `over-exposed-module-symbol` findings on src/brig/infra/supervisor/link.py). That last one
 passed clean an hour earlier in this same review, before link.py's consumers moved under it --
 the churn is theirs. No `brig-class-forms` finding in any run.
+
+### Final `just done` (authoritative)
+
+`lint` PASS, `gates` PASS, `pypeeker rule tests` PASS (22/22), `unit` PASS,
+`integration` PASS (both passes), `e2e` PASS (11 passed, 6 skipped -- bwrap unavailable on
+macOS), `docs build` PASS, `architecture validate` PASS, `architecture lint` PASS. One
+step fails: `typecheck`, `src/brig/presentation/drivers/bwrap.py:73`, `assert_never` over
+`_StartSupervisedCommand | _AwaitSupervisorDone`. Foreign to this task -- bwrap.py is
+unmodified (f43c40f) and those two variants come from the concurrently-running TASK-0001.15
+work's uncommitted `src/brig/domain/effects.py`. The `lint` and `gates` failures seen in
+the previous run were that same task's `src/brig/infra/supervisor/link.py` and cleared on
+their own as it progressed. Nothing was committed; this task's working-tree diff is confined
+to pypeeker_rules/brig.py and pypeeker_rules/tests/test_brig_rules.py.
 <!-- SECTION:NOTES:END -->
