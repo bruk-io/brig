@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0014
+id: TASK-0014
 title: >-
   infra.processes.spawn's SpawnError docstring is false on Linux: a missing
   argv[0] spawns successfully and dies 127
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-18 17:30'
 labels: []
