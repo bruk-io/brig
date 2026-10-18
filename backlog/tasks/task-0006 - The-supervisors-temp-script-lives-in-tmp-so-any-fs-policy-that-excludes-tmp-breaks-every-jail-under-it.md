@@ -17,6 +17,9 @@ modified_files:
   - src/brig/presentation/api.py
   - src/brig/domain/jail_types/bwrap.py
   - tests/e2e/test_fs_policy_battery.py
+  - tests/e2e/test_state_dir.py
+  - tests/e2e/test_tiocsti_battery.py
+  - tests/unit/test_bwrap_compile.py
 type: bug
 ---
 
