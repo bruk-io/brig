@@ -131,4 +131,13 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+No repro: the discrimination this bug turns on cannot be expressed as a committed test, the same way TASK-0001.20's could not. It requires forcing destroy_jail's kill_grace_s to 0.0, which deliberately never lands -- record-check --repro needs a test path that fails at a prior commit, and no such commit exists (the new test and the measurement land together). The equivalent repro, run by the reviewer rather than taken on report:
+
+docker run --rm --platform linux/amd64 --privileged -v <repo>:/repo:ro brig-probe-amd64:latest bash -c 'mkdir -p /work && tar -C /repo -cf - . | tar -C /work -xf - ; cd /work && uv sync -q && uv run python -c "import brig,pytest,sys; brig.destroy_jail.__kwdefaults__[\"kill_grace_s\"]=0.0; sys.exit(pytest.main([\"-q\",\"tests/e2e/test_processes_gateway.py::test_destroy_jail_survives_the_leader_exiting_before_its_group_without_a_pre_sleep\"]))"'
+
+AC#1: that command failed with "39 iteration(s) raised JailTeardownFailed" out of 40 -- the new no-pre-sleep test is decisive on Linux with the grace window disabled.
+AC#2: against the real default, both leader-exits-before-group tests pass on Linux (2 passed, brig-probe-amd64:latest) and the full macOS "uv run just done" exited 0 with the merged state of TASK-0016 and TASK-0017 together.
+
+Reviewer's measurement that does NOT match this task's own premise, recorded here rather than silently dropped: the task describes the ORIGINAL pre-sleep test as vacuous on Linux (0/150 at kill_grace_s=0.0). Re-measured twice in brig-probe-amd64:latest by the method above, it failed 150/150 at kill_grace_s=0.0 -- it is not vacuous on this host. This does not affect either criterion (the new test is decisive regardless, and both pass against the default), but it does contradict the docstrings this task rewrote. Filed as a draft. Note the reviewer's host runs the amd64 image emulated on Darwin 27, which the original measurement may not have; the figure is reported with its method so a future reader can reconcile the two.
 <!-- SECTION:NOTES:END -->
