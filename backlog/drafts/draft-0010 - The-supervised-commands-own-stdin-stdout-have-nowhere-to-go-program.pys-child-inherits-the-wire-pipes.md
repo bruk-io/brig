@@ -6,7 +6,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-10-18 04:34'
-updated_date: '2026-10-18 05:09'
+updated_date: '2026-10-18 05:35'
 labels:
   - brig
 dependencies: []
@@ -87,4 +87,10 @@ event named a pid of 3, not 1, until `--as-pid-1` was added to
 `domain/jail_types/bwrap.py`'s `_BWRAP_ARGV`). Fixed as part of this step,
 unrelated to this draft's own stdio question, but recorded here since both
 were found by the same real-bwrap measurement pass.
+
+## TASK-0001.15 step 5 update: the same gap reaches test_claims_wiring.py's own grading, and the battery's own skip
+
+Re-measured in a fresh `--privileged ubuntu:24.04` Docker container while writing step 5's tests: `test_tiocsti_battery.py::test_tiocsti_injection_fails_in_a_real_bwrap_jail` reproduces exactly as the update above describes (`ENOTTY`). Rather than leave it failing, it now skips with that measured reason (checked against the actual exit code, not unconditionally, so it starts asserting the real claim again on its own once this draft's stdio question is settled -- no code change needed there when that day comes).
+
+A second, previously unrecorded consequence of the same root cause: `test_claims_wiring.py`'s `_measure_tiocsti_closure` drives the identical real-jail probe (`_jailed_tiocsti_probe`, through `create_bwrap_jail`/`run_jail`) to produce `Evidence` for the `tiocsti_closure` claim. On real Linux now, that probe also reports the `ENOTTY` exit code instead of 0 or the denied-errno shape, which `_evidence_from_measured_exit_codes` already classifies as the generic "ambiguous, no evidence" branch (`control_observed=False`) -- so `test_tiocsti_closure_claim_grades_from_whatever_this_host_can_measure` still passes, but the claim itself now grades `UNENFORCED` on Linux where it previously graded `ENFORCED`, through no code change and no test failure. No separate fix needed (the classifier's own existing honesty already absorbs it correctly), but it is a second, real-world consequence of this draft's own open question, beyond the one battery already named -- recorded here so whoever settles the stdio design question knows both call sites it will restore.
 <!-- SECTION:DESCRIPTION:END -->
