@@ -6,6 +6,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-10-18 03:11'
+updated_date: '2026-10-18 03:19'
 labels: []
 dependencies: []
 type: bug
@@ -23,7 +24,13 @@ Two model/text accuracy gaps left by TASK-0001.13.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 models/brig/_relationships.c4 models teardown -> effects
-- [ ] #2 supervisor.c4's comment and docs/architecture/index.md agree with decision-0002 on which files belong to the supervisor container
+- [x] #1 models/brig/_relationships.c4 models teardown -> effects
+- [x] #2 supervisor.c4's comment and docs/architecture/index.md agree with decision-0002 on which files belong to the supervisor container
 - [ ] #3 decision-0002 says explicitly whether wire.py is shared by the host end (link.py) or duplicated, consistent with rule 17
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AC#1/#2 resolved directly: added the teardown -> effects edge, and synced supervisor.c4/docs/architecture/index.md to decision-0002's corrected wording. AC#3 (whether wire.py is shared or duplicated across the boundary) deliberately left open for whoever builds the supervisor -- not a drafting gap, a real implementation decision.
+<!-- SECTION:NOTES:END -->
