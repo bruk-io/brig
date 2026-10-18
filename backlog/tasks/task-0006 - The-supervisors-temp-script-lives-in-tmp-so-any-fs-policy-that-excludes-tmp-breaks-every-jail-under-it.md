@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 13:05'
-updated_date: '2026-10-18 14:51'
+updated_date: '2026-10-18 14:54'
 labels:
   - brig
   - size-3
@@ -258,4 +258,6 @@ Blocker 2 (uncommitted, and not separable): the work is entirely uncommitted and
 Finding (minor, no draft): AC#1's wording 'regardless of the caller's fs policy' is still broader than what is true, as the worker's own correction note records. It is defensible to leave ticked now that the one unreachable shape raises `StateDirectoryUnreachable` before bwrap runs rather than failing mysteriously, and TASK-0001.22 owns the residual gap -- but a reviewer cannot reword a criterion, so it is reported for whoever owns the finish line.
 
 Finding (minor, no draft -- belongs with TASK-0001.22): `_check_state_dir_reachable` runs only inside `_supervisors_for(policy)`, so a caller passing `supervisors=` explicitly to `create_bwrap_jail` bypasses the refusal entirely and gets the raw EROFS/JailExitUnknown back. Low realistic path (that parameter is the test-injection seam), adjacent to TASK-0001.22's area rather than worth its own task.
+
+No repro: coverage-gap bug (the supervisor's own file was never reachable under a /tmp-excluding policy), not a regression with a prior passing state to point at -- the fix (infra/state_dir.py, the unconditional bind) and its tests landed together in one commit (e9d5440), no earlier commit to run a failing repro against without reverting the fix itself. Same pattern as TASK-0002/TASK-0005/TASK-0001.19 earlier this session.
 <!-- SECTION:NOTES:END -->
