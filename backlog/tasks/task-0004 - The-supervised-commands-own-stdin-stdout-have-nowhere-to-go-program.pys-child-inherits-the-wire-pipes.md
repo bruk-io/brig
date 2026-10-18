@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0010
+id: TASK-0004
 title: >-
   The supervised command's own stdin/stdout have nowhere to go: program.py's
   child inherits the wire pipes
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-18 04:34'
 updated_date: '2026-10-18 07:31'
