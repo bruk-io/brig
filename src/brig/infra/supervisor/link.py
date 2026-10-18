@@ -92,13 +92,20 @@ next to one newline-delimited JSON event line, so the ordinary case is one sysca
 """
 
 _SUPERVISOR_ENV: dict[str, str] = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
-"""The *only* environment `_start` ever gives the supervisor process itself (and,
-through it, `supervisor_argv[0]` -- "bwrap", resolved by `posix_spawnp` through
-`PATH`) -- never this process's own full `os.environ`, and never `command_env`.
+"""The *only* environment `_start` ever gives the supervisor process itself --
+never this process's own full `os.environ`, and never `command_env`.
 
-`PATH` is the one thing a bare `posix_spawnp("bwrap", ...)` call genuinely needs:
-`sys.executable`, the interpreter running the rest of `supervisor_argv`, is already
-an absolute path and needs no lookup. Measured why "this process's own environment"
+Correction (TASK-0014): this `PATH` does *not* resolve `supervisor_argv[0]`
+("bwrap") the way an earlier version of this docstring claimed. `posix_spawnp`'s
+own `PATH` search, measured directly against both Apple's libc and glibc,
+consults the *calling* process's real `os.environ` for that search, never the
+`env` argument handed to the new process (`infra/processes.py`'s `spawn`
+docstring has the full measurement) -- `env` only becomes the new process's own
+environment once exec has already succeeded. So "bwrap" is already resolved,
+regardless of what `_SUPERVISOR_ENV` says, by the time this function runs; this
+`PATH` entry exists only as a sane, minimal default for whatever bwrap's own
+internals (or anything it in turn execs) might consult `PATH` for once running,
+not to make the spawn itself succeed. Measured why "this process's own environment"
 (an earlier version of this fix) was still not safe, even after `command_env` no
 longer reached the supervisor's own spawn (TASK-0001.15/.16/.17 adversarial
 review): `WHOLE_HOST_READ_ONLY`'s own whole-host bind makes a real jail's `/proc`

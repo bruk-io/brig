@@ -53,13 +53,26 @@ layer may not import -- to fetch the one adapter (`presentation/api.py`'s
 `_real_supervisor_port`) that translates between them.
 """
 
+import errno
 import os
+import shutil
 import signal
+import tempfile
 import time
 from typing import Any, cast
 
+import pytest
+
 from brig import Jail, JailTeardownFailed, destroy_jail
-from brig.infra.processes import ProcessUnknown, peek, reap, reap_deadline, release, spawn
+from brig.infra.processes import (
+    ProcessUnknown,
+    SpawnError,
+    peek,
+    reap,
+    reap_deadline,
+    release,
+    spawn,
+)
 from brig.infra.supervisor.link import LiveSupervisors
 
 _STDIO_FDS = (0, 1, 2)
@@ -264,3 +277,82 @@ def test_destroy_jail_does_not_misread_a_long_held_zombie_as_alive() -> None:
         f"destroy_jail took {elapsed:.2f}s -- a misread zombie-as-alive would "
         "escalate signals for nothing and burn the whole 5s grace window"
     )
+
+
+def test_spawn_raises_spawnerror_for_an_unresolvable_bare_name() -> None:
+    """TASK-0014: `spawn`'s own pre-check now raises `SpawnError` for a bare
+    `argv[0]` that cannot be resolved against `PATH`, on every platform --
+    previously only macOS's own `posix_spawnp` raised for this; on Linux, glibc
+    returned a healthy-looking `SpawnedProcess` whose child just exited 127.
+    """
+    with pytest.raises(SpawnError) as excinfo:
+        spawn(("definitely-not-a-real-command-xyz",), _STDIO_FDS)
+
+    assert excinfo.value.errno == errno.ENOENT
+
+
+def test_spawn_resolvable_bare_name_is_unaffected_by_the_pre_check() -> None:
+    """A bare `argv[0]` that resolves against `PATH` still spawns normally --
+    the pre-check adds a raise for the unresolvable case, nothing else.
+    """
+    process = spawn(("true",), _STDIO_FDS)
+
+    assert reap(process.pid) == 0
+
+
+def test_spawn_direct_path_is_checked_literally_but_still_checked() -> None:
+    """A direct path (one containing `/`) is checked literally by `shutil.which`,
+    never PATH-searched -- matching `execvp`'s own semantics -- so an existing
+    one still spawns. A missing one raising `SpawnError` is NOT pre-existing
+    OS-level behavior on every platform: on macOS the OS itself already raised
+    for this shape, but on Linux `os.posix_spawnp` with a nonexistent direct
+    path does not raise either (measured: the identical unexplained-exit-127
+    shape a missing bare name has) -- this pre-check is what makes it raise
+    there too, the same narrowing TASK-0014 was filed to add for bare names.
+    """
+    existing = shutil.which("true")
+    assert existing is not None
+
+    process = spawn((existing,), _STDIO_FDS)
+    assert reap(process.pid) == 0
+
+    with pytest.raises(SpawnError):
+        spawn(("/definitely/not/a/real/path/brig-test-xyz",), _STDIO_FDS)
+
+
+def test_spawn_pre_check_ignores_envs_own_narrower_path() -> None:
+    """A narrow `PATH` given only through `env` must NOT make the pre-check raise
+    for a name that resolves through this process's own `os.environ`: measured
+    directly (Apple libc and glibc both), `posix_spawnp`'s own PATH search
+    consults the calling process's real environment, never `env`'s, so a bare
+    name on this process's own `PATH` spawns fine regardless of what `env` says.
+    A wrong implementation that searched `env`'s own `PATH` instead would raise
+    `SpawnError` here even though the real spawn below would have succeeded.
+    """
+    narrow_env = {"PATH": "/definitely/not/a/real/directory"}
+
+    process = spawn(("true",), _STDIO_FDS, env=narrow_env)
+
+    assert reap(process.pid) == 0
+
+
+def test_spawn_pre_check_raises_for_a_name_only_envs_own_path_would_resolve() -> None:
+    """The case this task was actually filed for, reproduced through `env`: a
+    bare name resolvable only through a `PATH` given in `env`, not through this
+    process's own `os.environ`, must raise `SpawnError` -- because the real
+    `posix_spawnp` below never consults `env`'s own `PATH` for its search
+    either, and would otherwise spawn a child that exits 127 unexplained
+    (measured directly: this exact shape, on Linux/glibc in
+    brig-probe-amd64:latest, before this pre-check existed).
+    """
+    bin_dir = tempfile.mkdtemp()
+    script_path = os.path.join(bin_dir, "brig-test-precheck-probe")
+    with open(script_path, "w") as handle:
+        handle.write("#!/bin/sh\nexit 0\n")
+    os.chmod(script_path, 0o755)
+    try:
+        with pytest.raises(SpawnError):
+            spawn(("brig-test-precheck-probe",), _STDIO_FDS, env={"PATH": bin_dir})
+    finally:
+        os.remove(script_path)
+        os.rmdir(bin_dir)

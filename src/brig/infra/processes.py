@@ -19,6 +19,7 @@ import errno
 import fcntl
 import os
 import resource
+import shutil
 import signal
 import time
 from collections.abc import Mapping
@@ -230,9 +231,23 @@ class ProcessUnknown:
 class SpawnError(Exception):
     """Raised when `spawn` could not start `argv` as a new process.
 
+    Fires whenever `spawn`'s own pre-check cannot resolve `argv[0]` against
+    `PATH` (`errno.ENOENT`), on every platform -- and, where the OS itself still
+    raises for a failed exec after that (measured true on macOS), whenever that
+    happens too. It does NOT fire, and cannot structurally be made to fire, for an
+    `argv[0]` that resolves at pre-check time but whose exec fails later for some
+    reason the OS reports as a plain exit code instead of a spawn failure: on
+    Linux, glibc's own `posix_spawnp` takes that shape for an argv[0] that stops
+    resolving between the pre-check and the real spawn (TASK-0014's own TOCTOU
+    residual) -- it does not raise at all, and the child it starts anyway just
+    exits 127, indistinguishable by exit code alone from a command that chose to
+    exit 127 on its own.
+
     Args:
         argv: The command that could not be run.
-        errno: The `OSError.errno` the OS reported for the failed spawn.
+        errno: The `OSError.errno` the OS reported for the failed spawn, or
+            `errno.ENOENT` when it was `spawn`'s own pre-check that failed
+            rather than the OS.
     """
 
     def __init__(self, argv: tuple[str, ...], *, errno: int) -> None:
@@ -371,12 +386,48 @@ def spawn(
     own close are still two separate steps, racing exactly as before, just over a
     shorter gap), while doubling the scan's cost on every spawn, racing or not.
 
+    Before ever calling `os.posix_spawnp`, resolves `argv[0]` itself with
+    `shutil.which`, against this process's own `os.environ.get("PATH",
+    os.defpath)` -- deliberately *not* `env`'s own `PATH`, even where `env`
+    overrides it -- and raises `SpawnError` proactively when it cannot resolve
+    (TASK-0014). `env` only becomes the new process's own environment once exec
+    succeeds; `posix_spawnp`'s own PATH search, measured directly against both
+    Apple's libc and glibc, consults this calling process's own environment for
+    that search regardless of what `env` says -- a POSIX wrinkle visible only by
+    testing it (a bare `argv[0]` that resolves solely through a `PATH` given in
+    `env` still spawns a child that exits 127 unexplained, the exact shape this
+    task exists to catch, because the real search never looked there). This
+    pre-check mirrors that, on purpose, so it predicts the real spawn below
+    rather than some other, plausible-sounding, unmeasured mechanism.
+    `shutil.which` already matches `execvp`'s own semantics for a name containing `/`:
+    checked literally against that exact path, never PATH-searched -- but still
+    checked for existence and executability, the same as a PATH-searched name. A
+    missing direct path is therefore also caught here now, narrowing the Linux
+    gap for that shape too (measured: `os.posix_spawnp` with a nonexistent
+    direct path does not raise there either, the identical unexplained-exit-127
+    shape a missing bare name has). Only the search step (PATH walk vs. literal
+    check) differs from the bare-name case, not whether the pre-check applies.
+
+    This narrows, but cannot close, the gap this function was filed against:
+    glibc's own `posix_spawnp`, measured on Linux, does not raise at all for an
+    `argv[0]` that cannot be resolved -- it returns a pid for a child that starts
+    and immediately exits 127, indistinguishable from a command that chose that
+    exit code itself. The common case (`argv[0]` never resolves at all) is
+    caught here, before any spawn is attempted, on every platform. What is not
+    caught is the TOCTOU race: `argv[0]` resolving at pre-check time but the
+    binary vanishing before the real spawn runs a moment later. On macOS the OS's
+    own `posix_spawnp` still raises `FileNotFoundError` for that, so `SpawnError`
+    still fires; on Linux nothing does, and that race falls through to the same
+    unexplained exit-127 shape as before this pre-check existed.
+
     Raises:
-        SpawnError: `argv[0]` could not be found on `PATH` or exec'd, or a close
-            action's fd lost the race twice in a row (see above); its `errno` says
-            which.
+        SpawnError: `argv[0]` could not be resolved against `PATH` by this
+            function's own pre-check, or a close action's fd lost the race
+            twice in a row (see above); its `errno` says which.
     """
     spawn_env = dict(env) if env is not None else dict(os.environ)
+    if shutil.which(argv[0], path=os.environ.get("PATH", os.defpath)) is None:
+        raise SpawnError(argv, errno=errno.ENOENT)
     resolved_fds, relocated = _resolve_fd_sources(fds) if fds else ({}, ())
     protect = frozenset(resolved_fds.values())
     fd_actions = _fd_actions(resolved_fds)
