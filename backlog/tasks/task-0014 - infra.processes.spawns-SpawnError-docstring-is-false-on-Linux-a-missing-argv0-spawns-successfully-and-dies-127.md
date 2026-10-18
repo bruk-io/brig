@@ -324,4 +324,31 @@ _SUPERVISOR_ENV['PATH'] may still be justified on other grounds (it is the
 child's own environment, and bwrap execs further things), but the stated reason
 is wrong -- wrong in exactly the way this task exists to correct, in a file the
 report claims to have audited for this question.
+
+### LOW
+
+3. spawn()'s docstring breaks an inline code span across a line -- 'shutil.'
+   newline 'which' -- which renders as 'shutil. which'. The strict docs build
+   does not catch a malformed inline span.
+4. The implementation report says 'six new tests'; there are five new test
+   functions (the direct-path one carries two assertions in one test). Cosmetic,
+   but the report is the evidence a reviewer judges against.
+
+### Not findings, noted
+
+- spawn_env = dict(...) is computed before the pre-check that may raise. This is
+  harmless; the ordering that actually matters -- raising before
+  _resolve_fd_sources so no fds are duplicated, and link.py's
+  'except (SpawnError, OSError)' closing its four pipes -- is correct.
+- AC#2's decision living in the task's plan section rather than a decision file
+  is consistent with this repo: there is no docs/decisions directory, and
+  decision-0001 is itself a board task.
+- The remaining three new tests each discriminate: the unresolvable bare name
+  would not have raised on Linux before; the resolvable bare name guards against
+  the pre-check over-raising; the direct-path one covers both directions.
+
+Both ACs were already ticked in the last commit, so this review leaves the
+finish line untouched. Nothing was committed: src/brig/infra/processes.py and
+tests/e2e/test_processes_gateway.py remain modified in the working tree, and the
+status stays In Progress.
 <!-- SECTION:NOTES:END -->
