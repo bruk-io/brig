@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 07:18'
-updated_date: '2026-10-18 21:39'
+updated_date: '2026-10-18 21:40'
 labels:
   - brig
   - size-3
@@ -205,4 +205,60 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+## Review (philosophy:reviewer, 2026-10-18)
+
+Verdict: the work itself is sound and every acceptance criterion is genuinely met, but
+the task cannot be closed by this review: the implementation is still uncommitted, and
+this reviewer's own guardrail forbids it making commits. Two board/process blockers,
+no technical blockers.
+
+Evidence gathered independently (not from the worker's report):
+
+- AC#1: `_VIRTUAL_FS_FLAGS = ("--proc","/proc","--dev","/dev","--tmpfs","/sys")` is its own
+  constant, spliced literally into `compile_supervisor_launch`'s argv tuple after the
+  state_dir `--ro-bind` triple and before `*_NAMESPACE_FLAGS`. No policy branch anywhere
+  near it: genuinely unconditional.
+- AC#2/#3 discrimination, the one real risk: measured in brig-probe-amd64:latest
+  (privileged, linux/amd64, repo copied to /opt/brig). With the splice removed from the
+  container's own copy, both probes return **exit 5** -- the specific "foreign pid found"
+  and "/sys not empty" codes, not the "broken jail" code 4. The relaxation of
+  decision-0004's literal "exactly 1" to "every numeric /proc entry is in {1, pid, ppid}"
+  therefore still discriminates: the unfixed listing is the container's whole outer
+  process tree and lands outside that set.
+- AC#5 + argv mirror: `test_e2e_tiocsti_battery_bwrap_argv_prefix_matches_compile_supervisor_launch`
+  is a real prefix equality against the compiled argv, and it fails on the reverted copy --
+  so `test_tiocsti_battery.py`'s `_bwrap_argv_prefix` update was required and is byte-correct.
+- AC#4: full suite in the container -- 122 passed, 3 skipped, mypy strict clean (62 files),
+  pypeeker --strict clean. The 3 skips are all pre-existing environment skips (no
+  /proc/self/fd race path, bwrap-missing mirror, no posix_spawn setsid); none introduced by
+  --dev or --tmpfs. The TIOCSTI battery, the suite most exposed to --dev replacing /dev,
+  runs and passes.
+- macOS: record-check --tier full green (lint, unit, integration x2, e2e, docs, architecture
+  validate + lint), just gates and just typecheck green. No file was reformatted or fixed by
+  any check (git status unchanged across the runs).
+- decision-0004's claim re-traced: `infra/supervisor/program.py` is stdlib-only, imports
+  nothing under brig, and its reap loop is `os.waitpid(-1, 0)` (line 242) -- no /proc. The
+  two /proc readers in `infra/processes.py` (`/proc/self/fd` enumeration, the `/proc/<pid>/stat`
+  group scan) are host-side only and are not reachable from the in-jail supervisor.
+
+Blockers (both for the worker, not technical):
+
+1. The change is uncommitted (src/brig/domain/jail_types/bwrap.py,
+   tests/unit/test_bwrap_compile.py, tests/e2e/test_fs_policy_battery.py,
+   tests/e2e/test_tiocsti_battery.py). The reviewer cannot commit it.
+2. `board-check close TASK-0015` refuses: all five acceptance criteria were added after
+   the task was accepted in 81ffcf6, so it needs the `finish-moved` label plus a note
+   saying what changed and why, committed with the work.
+
+Low-severity finding, no draft filed (no realistic path to a failure, and it does not
+weaken the claim): `_SYS_EMPTY_PROBE`'s control check is `os.path.exists(sys.argv[1])`
+where argv[1] is `sys.executable` -- the interpreter already executing the probe. That is
+near-tautological and cannot detect a broken jail the way `_READ_PROBE`'s control can. The
+`os.listdir("/sys")` assertion itself is sound and was shown to discriminate.
+
+Deviation accepted: AC#2's parenthetical "exactly 1" was a measurement note taken from bare
+bwrap with no supervisor; through the public API the jail's own tree is supervisor-as-PID-1
+plus the probe, so the subset form is the correct expression of the same criterion ("only
+its own namespace's processes") and was proven to fail loudly without the fix.
 <!-- SECTION:NOTES:END -->
