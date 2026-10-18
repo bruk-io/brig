@@ -3,10 +3,10 @@ id: TASK-0010
 title: >-
   Model teardown -> effects, and say where wire.py lives once the supervisor is
   built
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-10-18 03:11'
-updated_date: '2026-10-18 13:24'
+updated_date: '2026-10-18 13:45'
 labels: []
 dependencies: []
 type: bug
@@ -65,4 +65,6 @@ names rather than a shared import, and pinned by whatever test a later step
 of TASK-0001.15 adds.
 
 No repro: this task is a documentation/model-accuracy fix (an orphaned C4 relationship, container-attribution text, and decision-0002's own wording) with no code behavior to reproduce a failure against; AC#1-#3 are verified by board/text inspection and by just gates (pypeeker rule 6), recorded above and in TASK-0007's own close.
+
+Closed as a draft already settled in substance: AC#1 (teardown -> effects edge) and AC#2 (supervisor.c4/index.md container attribution) were resolved directly per the notes above, and AC#3 (wire.py shared-vs-duplicated) was settled empirically in TASK-0001.15 step 3 and independently confirmed by running 'just gates' (pypeeker rule 6: over-exposed-module-symbol, under-exposed-access) and a manual end-to-end round trip of link.py against program.py over real OS pipes -- both recorded in this task's own Implementation Notes before promotion. TASK-0007 has now additionally landed decision-0002's own text with the same shared/duplicated split, per rule 17, so the answer no longer lives only here. No repro needed: documentation/model-accuracy work, not a code defect.
 <!-- SECTION:NOTES:END -->
