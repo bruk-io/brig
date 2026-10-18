@@ -3,11 +3,17 @@ id: TASK-0008
 title: >-
   tests/e2e/test_spawn_fd_redirection_collision.py: _fill_fd_holes_below is a
   no-op, and its docstrings claim work it cannot do
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-10-18 08:40'
-labels: []
+updated_date: '2026-10-18 13:20'
+labels:
+  - brig
+  - size-2
 dependencies: []
+modified_files:
+  - tests/e2e/test_spawn_fd_redirection_collision.py
 type: bug
 ---
 
@@ -33,3 +39,31 @@ Also in the same cleanup: `request_write_fd` is closed at line 92 and closed aga
 - [ ] #2 The module docstring and the test's own comments state the real reason the fd allocation is deterministic (the `os.dup(0)` probe plus lowest-free allocation), and claim no behaviour the code does not have
 - [ ] #3 `request_write_fd` is closed exactly once, with no bare `except OSError` masking a double close of a number that may have been reallocated
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+### Order of work
+1. Remove `_fill_fd_holes_below` (dead code: its only caller's `limit = os.dup(0)`
+   means every fd in range is already open by construction, so the loop always
+   finds zero holes to fill) -- or give it a caller that can actually exercise it.
+   Default to removal unless doing so would also remove the test's own
+   determinism; if so, say explicitly in code why it stays.
+2. Rewrite the module docstring and the helper's own former claims to state the
+   real reason the fd allocation is deterministic: the `os.dup(0)` probe plus
+   POSIX lowest-free-fd allocation across the two `os.pipe()` calls -- not a hole
+   this helper closes off.
+3. Fix `request_write_fd` being closed twice (once explicitly, once in a `finally`
+   behind a bare `except OSError`) -- close it exactly once.
+
+### Proof
+- just gates, just done green.
+- The test still fails against a reconstructed pre-fix `_resolve_fd_sources`/
+  `_fd_actions` (re-confirm this directly, the same way TASK-0005's close review
+  did, so removing the dead code didn't accidentally remove the discriminating
+  property too) and passes against the real fix.
+
+### Risks
+- Low: test-only file, no production code touched. The one thing to verify
+  carefully is that the test is still genuinely discriminating after the cleanup.
+<!-- SECTION:PLAN:END -->
