@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 08:40'
-updated_date: '2026-10-18 14:46'
+updated_date: '2026-10-18 14:48'
 labels:
   - brig
   - size-2
@@ -142,4 +142,10 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+Review (independent, close-work): all three acceptance criteria are genuinely met. AC#1 _fill_fd_holes_below removed, and its removal is correct -- os.dup(0) returns the lowest free fd, so range(3, limit) was fully open and the loop could never find a hole. AC#2 the module and test docstrings no longer claim the helper's work. AC#3 request_write_fd is set to -1 right after its explicit close, so the finally loop skips it: closed exactly once, nothing masked. Evidence: full-tier check 'uv run just done' exited 0 (recorded above); the test passes alone (1 passed in 0.02s).
+
+NOT CLOSED, for a process reason only: as a bug this task needs a recorded repro, and record-check --repro refuses while tests/e2e/test_spawn_fd_redirection_collision.py is uncommitted. The reviewer is not permitted to commit. Whoever commits this task's file should then run: record-check TASK-0008 --repro -- uv run pytest tests/e2e/test_spawn_fd_redirection_collision.py -q, and close.
+
+Findings (neither blocks): (1) medium -- the retained 'probe_fd = os.dup(0); os.close(probe_fd)' pair establishes nothing the next line does not, since os.pipe() already returns the lowest free fds by POSIX; its value is discarded, yet the new docstring credits the determinism to it. AC#2 names the probe as the real reason, so this is a finding against the criterion, not the work. (2) low -- the finally block's bare 'except OSError: pass' can no longer fire now that both early closes set their variable to -1. Both filed as DRAFT-0014.
 <!-- SECTION:NOTES:END -->
