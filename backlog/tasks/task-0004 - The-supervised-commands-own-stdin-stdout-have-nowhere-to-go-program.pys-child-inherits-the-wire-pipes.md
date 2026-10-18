@@ -3,11 +3,11 @@ id: TASK-0004
 title: >-
   The supervised command's own stdin/stdout have nowhere to go: program.py's
   child inherits the wire pipes
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 04:34'
-updated_date: '2026-10-18 08:22'
+updated_date: '2026-10-18 12:06'
 labels:
   - brig
   - size-3
@@ -420,6 +420,20 @@ surfacing as `SupervisorSpawnError`. Filed as DRAFT for the coverage, alongside 
   in, `uv sync`, `pytest tests/ pypeeker_rules/tests -rs` -> **80 passed, 2 skipped**, both
   skips with measured reasons unrelated to this task.
 - **AC#4** was verified independently by the dispatching reviewer and not re-derived here.
+
+Two independent adversarial reviews, both with real measurements in a privileged ubuntu:24.04 Docker container against real bwrap, not taken on self-report:
+
+AC#1 -- confirmed: wire protocol genuinely on fixed fds 3/4 (wire.py REQUEST_FD/EVENTS_FD); link._start passes fds={3:...,4:...} with inheritable_fds=(0,1,2); _start_child gives the real command no file action for 0/1/2. A real supervised /bin/echo hello printed to the reviewer's own terminal and returned 0.
+
+AC#2 -- confirmed discriminating, not merely present: removing both POSIX_SPAWN_CLOSE actions in a container copy fails exactly the confused-deputy regression test (test_a_supervised_commands_direct_write_to_the_events_fd_cannot_reach_it). The confused-deputy hole TASK-0001.15's original review found stays closed under this fd-3/4 redesign.
+
+AC#3 -- confirmed, after a real blocking bug was found and fixed as its own task (TASK-0005): the first review found infra.processes.spawn's fd-collision relocation could land a relocated source on one of fds's own target numbers (os.dup returns the lowest free fd, which is a target whenever there's a hole there), silently losing the events channel. Fixed in TASK-0005 (fcntl.F_DUPFD past max(targets)), independently re-verified by a second reviewer who reconstructed the pre-fix code and confirmed the exact measured failure, then confirmed the fix and its regression test both hold.
+
+AC#4 -- confirmed directly, by me: create_bwrap_jail(('/bin/echo','hello')) through run_jail returns 0; test_tiocsti_battery.py's main claim test passes outright (not the ENOTTY skip); test_claims_wiring.py's _measure_tiocsti_closure() returns Evidence(control_observed=True, violation_blocked=True), the ENFORCED shape, on real Linux+bwrap.
+
+AC#5 -- confirmed: record-check --tier full green on macOS (nothing reformatted); 80 passed/2 skipped in brig-probe-amd64:latest after TASK-0005's fix landed.
+
+This redesign replaced an earlier stopgap (sealing the supervised command's fd 0/1 with discard pipes) that closed the same confused-deputy hole but silently corrupted exit codes for ordinary stdout-writing commands and degraded the tiocsti_closure claim from ENFORCED to UNENFORCED with no test failure -- both now restored. Committed together with TASK-0001.15/.16/.17/TASK-0005 in a485ee1, since this feature and TASK-0005's fix to it are textually inseparable (no earlier commit of this feature alone exists).
 <!-- SECTION:NOTES:END -->
 
 ## Comments
