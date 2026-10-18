@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-18 07:18'
-updated_date: '2026-10-18 21:40'
+updated_date: '2026-10-18 21:42'
 labels:
   - brig
   - size-3
@@ -261,4 +261,21 @@ Deviation accepted: AC#2's parenthetical "exactly 1" was a measurement note take
 bwrap with no supervisor; through the public API the jail's own tree is supervisor-as-PID-1
 plus the probe, so the subset form is the correct expression of the same criterion ("only
 its own namespace's processes") and was proven to fail loudly without the fix.
+
+### Two clarifications
+
+- AC#4 read literally ("every other real-bwrap battery still pass **unmodified**") is not
+  met: tests/e2e/test_tiocsti_battery.py is modified. Judged met anyway, deliberately --
+  the only change in that file is its hand-maintained `_bwrap_argv_prefix` mirror of the
+  compiled argv, which test_bwrap_compile.py's fidelity cross-check makes non-optional
+  (proven: that test FAILS on the reverted copy). Every behavioral assertion in the battery
+  is unchanged and passes. The AC's own gloss -- the new flags must not break the basic
+  create/run/destroy path -- is met outright.
+- All five criteria arrived at this review already ticked by the worker; this review's
+  independent judgment agrees with every tick, so it changed none of them.
+- 81ffcf6 ("Promote draft DRAFT-0012") is confirmed to be this task's own acceptance
+  commit -- it renames this very file from DRAFT-0012 to TASK-0015 -- so board-check's
+  finish-moved finding stands as stated.
+- The commit set for the worker is five files, not the four dirty at review start: the
+  four source/test files plus this task file, now dirty from these review notes.
 <!-- SECTION:NOTES:END -->
