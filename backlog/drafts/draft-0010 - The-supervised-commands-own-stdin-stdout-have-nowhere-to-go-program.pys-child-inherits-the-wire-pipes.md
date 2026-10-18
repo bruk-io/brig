@@ -6,6 +6,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-10-18 04:34'
+updated_date: '2026-10-18 05:09'
 labels:
   - brig
 dependencies: []
@@ -52,4 +53,38 @@ real command's output through the wire protocol itself as a new event kind.
 Left to whoever designs the supervisor's fuller shape (decision-0002 already
 defers the log envelope and egress to "after the supervisor lands" for a
 similar reason).
+
+## TASK-0001.15 step 4 update: confirmed regression, measured against real bwrap
+
+Wiring presentation through the supervised path (StartSupervisedCommand/
+AwaitSupervisorDone replacing Spawn/Reap for the normal create/run journey)
+surfaces a concrete consequence of this gap, measured against real bwrap in a
+privileged Docker container (ubuntu:24.04): `tests/e2e/test_tiocsti_battery.py`'s
+`test_tiocsti_injection_fails_in_a_real_bwrap_jail` now fails --
+`assert 125 == (100 + 1)`. Exit code 125 decodes (the battery's own
+`_ERRNO_EXIT_OFFSET` of 100) to errno 25, `ENOTTY`: the probe's
+`fcntl.ioctl(0, termios.TIOCSTI, ...)` now runs against fd 0 of the
+*supervised* probe process, which is the exec request pipe (already closed on
+its write end), not a controlling terminal at all -- so the ioctl fails for a
+reason unrelated to confinement, and the battery can no longer tell "TIOCSTI
+denied by the jail" apart from "TIOCSTI not applicable because fd 0 is not a
+tty any more". TIOCSTI is, incidentally, still closed either way, but the
+battery's own claim (AC#2/AC#3's attribution) is no longer evidence of that --
+it is exactly the ambiguity rule 11's own batteries exist to avoid. This is
+not a new bug introduced by the wiring step; it's the first concrete,
+measured case of this already-filed gap actually breaking an existing
+battery, now that the supervised path is live on the normal create/run
+journey rather than only reachable by hand. Left unfixed here, same as
+before: resolving it means designing the supervised command's own stdio
+channel, which this draft already scopes as its own design question.
+
+Separately confirmed in the same session: decision-0002's "a supervisor is
+PID 1 inside the jail's namespace" needs bwrap's own `--as-pid-1` flag to
+actually hold -- without it, `--unshare-all`'s implied `--unshare-pid`
+installs bwrap's *own* reaper as the namespace's real PID 1, with the
+supervisor running as PID 2 instead (measured: the supervisor's own `started`
+event named a pid of 3, not 1, until `--as-pid-1` was added to
+`domain/jail_types/bwrap.py`'s `_BWRAP_ARGV`). Fixed as part of this step,
+unrelated to this draft's own stdio question, but recorded here since both
+were found by the same real-bwrap measurement pass.
 <!-- SECTION:DESCRIPTION:END -->
