@@ -3,11 +3,11 @@ id: TASK-0015
 title: >-
   WHOLE_HOST_READ_ONLY exposes the ambient host /proc to every jail, not only
   the supervisor relationship this review checked
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 07:18'
-updated_date: '2026-10-18 21:42'
+updated_date: '2026-10-18 22:05'
 labels:
   - brig
   - size-3
@@ -281,4 +281,6 @@ its own namespace's processes") and was proven to fail loudly without the fix.
   four source/test files plus this task file, now dirty from these review notes.
 
 finish-moved: promoted from a draft with no acceptance criteria, then given its real ACs in the same follow-up edit that set it In Progress -- drawn directly from decision-0004's own Consequences section, not a later scope change.
+
+Independent review confirmed all 5 ACs genuinely met, with the one real risk (AC#2's relaxed {1, pid, ppid} assertion) specifically re-verified by reverting the splice in a container copy: unfixed /proc listing contains the container's whole outer process tree (exit 5, foreign pid found), confirming the test genuinely discriminates rather than passing regardless. Same revert-and-confirm for the /sys test. test_tiocsti_battery.py's argv-mirror fidelity test also confirmed to fail against the reverted copy. Full suite 122 passed/3 skipped on real Linux+bwrap, just gates/typecheck/done green on macOS. decision-0004's reap-loop claim verified directly: program.py's loop is a pure os.waitpid(-1, 0) syscall, no /proc reads, confirmed by reading the source.
 <!-- SECTION:NOTES:END -->
