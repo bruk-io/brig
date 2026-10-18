@@ -3,11 +3,11 @@ id: TASK-0016
 title: >-
   infra.processes._group_alive_proc_scan can raise IndexError/ValueError out of
   group_alive, past the driver's deliberately-unwrapped Verify arm
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 20:04'
-updated_date: '2026-10-18 22:30'
+updated_date: '2026-10-18 22:31'
 labels:
   - brig
   - size-1
@@ -171,4 +171,18 @@ done: all steps passed
 ```
 
 No repro: fix and discriminating tests landed together, no earlier failing-state commit to run record-check --repro against. Same pattern as TASK-0002/TASK-0005/TASK-0001.19/TASK-0006/TASK-0001.21/TASK-0011/TASK-0012/TASK-0014. Discrimination was re-verified independently by the reviewer rather than taken on report: the pre-fix parse was reconstructed in memory (reading src/brig/infra/processes.py, replacing the new try/except block with the original three unguarded lines, exec'ing the result as a module -- no file on disk changed) and driven against the same fabricated /proc-shaped directories the two new tests build. Both shapes raised the exact escape this task describes: "IndexError: list index out of range" out of group_alive, for the malformed-only directory and for the malformed-plus-well-formed one. Against the landed fix both return the asserted bool.
+
+Closed by review. Both criteria hold on evidence the reviewer took independently rather than on the worker report.
+
+AC#1 (per-entry tolerance): the parse of a successfully-opened stat line now sits under except (IndexError, ValueError): continue, the same shape as the existing open/read except. Verified discriminating: the pre-fix parse was reconstructed in memory (no file changed) and raised "IndexError: list index out of range" out of group_alive for both fabricated-/proc shapes, the exact escape the description names. AC#2: group_alive returns a plain bool for an empty stat line, a line with no ")", and a line with too few fields -- three new e2e tests against real directories on a real filesystem, no patching, plus a real-host sanity test.
+
+The proc_root parameter is sound and does not leak into the public surface. It stops at infra: presentation/ports.py:117 declares group_alive(self, pgid, held), presentation/api.py:255 types the port Callable[[int, frozenset[int]], bool], and the only production call site, presentation/drivers/bwrap.py:154, passes two arguments. Nothing re-exports it. Both docstrings state plainly that it exists only so a test can point the scan at a directory of its own construction and that every production caller leaves it at the real /proc.
+
+Merged state verified, not each change in isolation. macOS: uv run just done exited 0 with TASK-0016 and TASK-0017 both applied (recorded above, tier full), and the check reformatted nothing -- the tree after it held only the two expected modified files. Linux (brig-probe-amd64:latest, privileged): lint, typecheck, gates, pypeeker rule tests, unit, integration x2 and e2e all PASS, 18/18 in tests/e2e/test_processes_gateway.py including all three new tests and TASK-0017s. The three failing just done steps there (docs build, architecture validate, architecture lint) are the container lacking npx -- exit 127, command not found -- and pass on macOS. No conflict leftovers, no duplicate test names, nothing from either task undoing the other.
+
+Findings, neither blocking, neither filed as a draft:
+1. test_group_alive_still_finds_a_well_formed_match_past_malformed_entries does not prove what its name suggests about exception breadth. Demonstrated: replacing the fix with a bare except Exception, the test still returns True and still passes, because the well-formed entry raises nothing inside the try at all. What it genuinely proves is that the tolerance skips the offending entry instead of aborting the scan -- real value, and all either criterion asks for. Not a defect, but the docstring frames it as guarding the plans stated risk more tightly than it does.
+2. Process: the worker ticked its own acceptance criteria. Ticking is the reviewers only permitted change to the finish line; here both genuinely hold, so nothing turns on it.
+
+Outstanding, and the one thing this review could not do: src/brig/infra/processes.py and tests/e2e/test_processes_gateway.py are still uncommitted. The reviewer is denied git commit by design. The change is review-passed and commit-ready exactly as it stands; it needs committing by the session that owns the tree.
 <!-- SECTION:NOTES:END -->
