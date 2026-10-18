@@ -67,6 +67,7 @@ from brig import Jail, JailTeardownFailed, destroy_jail
 from brig.infra.processes import (
     ProcessUnknown,
     SpawnError,
+    group_alive,
     peek,
     reap,
     reap_deadline,
@@ -92,6 +93,13 @@ _LEADER_EXITS_BEFORE_GROUP_ITERATIONS = 150
 all but certain to show at least one `PermissionError` if it still could; the fix
 removes the race entirely rather than narrowing its window, so the count this test
 asks for is about confidence in a real run, not about tuning odds.
+"""
+
+_LEADER_EXITS_BEFORE_GROUP_NO_PRE_SLEEP_ITERATIONS = 40
+"""Lower than `_LEADER_EXITS_BEFORE_GROUP_ITERATIONS` on purpose: TASK-0017 measured
+this shape's race at 200/200 `JailTeardownFailed` on Linux with `kill_grace_s=0.0`,
+near-deterministic, so a far smaller count is already decisive there. Running 150 of
+these would not buy more confidence, only a longer e2e suite.
 """
 
 
@@ -215,10 +223,18 @@ def test_destroy_jail_survives_the_leader_exiting_before_its_group() -> None:
     (the kill ladder's post-KILL verify could still see a group mid-death). That
     race is now closed by the post-KILL rung's own bounded grace-window poll
     (`destroy_jail`'s default `kill_grace_s`), measured directly against this exact
-    reproduction in `brig-probe-amd64:latest` (200/200 clean with the default grace
-    window; 100/200 `JailTeardownFailed` with it set to `0.0`, confirming the window
-    is what closes it, not that the race stopped existing) -- so this loop no longer
-    tolerates `JailTeardownFailed` either.
+    reproduction on macOS (149/150 `JailTeardownFailed` with `kill_grace_s=0.0`,
+    0/150 against the real default) -- so this loop no longer tolerates
+    `JailTeardownFailed` either.
+
+    TASK-0017: this test's 0.05s pre-sleep between spawning the leader and calling
+    `destroy_jail` is what gives it that discrimination on macOS -- but on Linux
+    (`brig-probe-amd64:latest`), by 0.05s the leader has already exited and its
+    orphaned sibling has already settled, so the race this test exists to catch
+    never fires: measured at 0/150 `JailTeardownFailed` with `kill_grace_s=0.0`
+    there, identical to the real default. CI runs Linux, so this test alone would
+    not catch a regression of TASK-0001.07's fix. See the no-pre-sleep variant
+    below, which does.
     """
     escaped: list[BaseException] = []
     teardown_failed = 0
@@ -226,6 +242,56 @@ def test_destroy_jail_survives_the_leader_exiting_before_its_group() -> None:
     for _ in range(_LEADER_EXITS_BEFORE_GROUP_ITERATIONS):
         spawned = spawn(_LEADER_EXITS_BEFORE_GROUP_ARGV, _STDIO_FDS)
         time.sleep(0.05)
+        jail = Jail(process=cast(Any, spawned), supervisors=cast(Any, LiveSupervisors(())))
+        try:
+            destroy_jail(jail)
+        except JailTeardownFailed:
+            teardown_failed += 1
+        except Exception as exc:
+            escaped.append(exc)
+        finally:
+            try:
+                os.killpg(spawned.pgid, signal.SIGKILL)
+            except OSError:
+                pass
+
+    assert escaped == [], (
+        f"non-brig exception(s) escaped destroy_jail: {[type(exc).__name__ for exc in escaped]}"
+    )
+    assert teardown_failed == 0, (
+        f"{teardown_failed} iteration(s) raised JailTeardownFailed -- the post-KILL "
+        "grace window should have closed this race"
+    )
+
+
+def test_destroy_jail_survives_the_leader_exiting_before_its_group_without_a_pre_sleep() -> None:
+    """TASK-0017: the race the test above exists to catch is real and decisive on
+    Linux only without the 0.05s pre-sleep between spawning the leader and calling
+    `destroy_jail` -- with it, the leader has already exited and its orphaned
+    sibling has already settled by the time `destroy_jail` looks, so the race never
+    fires there. Dropping the pre-sleep calls `destroy_jail` the instant after
+    spawning, while the leader may still be exiting and the sibling still forking,
+    which is exactly when the post-KILL verify can still see a group mid-death.
+
+    Measured against this exact reproduction in `brig-probe-amd64:latest`: 200/200
+    `JailTeardownFailed` with `kill_grace_s=0.0` (the grace window disabled), 0/200
+    against the real default -- the race is real and decisive there, and the
+    default grace window is what closes it.
+
+    On macOS this same shape is noisy and weak rather than decisive (measured
+    across several runs of 150: `JailTeardownFailed` anywhere from ~2% to ~23% of
+    iterations with `kill_grace_s=0.0`) -- the leader typically finishes exiting
+    and forking its sibling before this process even gets scheduled back in, so
+    this test does not lean on macOS for discrimination; the test above already
+    does that, with its pre-sleep. What this variant does confirm on macOS is that
+    dropping the pre-sleep introduces no flakiness against the real default
+    (measured at 0/150 across several runs).
+    """
+    escaped: list[BaseException] = []
+    teardown_failed = 0
+
+    for _ in range(_LEADER_EXITS_BEFORE_GROUP_NO_PRE_SLEEP_ITERATIONS):
+        spawned = spawn(_LEADER_EXITS_BEFORE_GROUP_ARGV, _STDIO_FDS)
         jail = Jail(process=cast(Any, spawned), supervisors=cast(Any, LiveSupervisors(())))
         try:
             destroy_jail(jail)
@@ -356,3 +422,78 @@ def test_spawn_pre_check_raises_for_a_name_only_envs_own_path_would_resolve() ->
     finally:
         os.remove(script_path)
         os.rmdir(bin_dir)
+
+
+def _write_fake_proc_entry(proc_root: str, pid: int, stat_content: str) -> None:
+    """Write `stat_content` verbatim to a `<proc_root>/<pid>/stat` this test builds
+    by hand -- a real file on a real filesystem, not a patched `open`, standing in
+    for a `/proc` entry whose content a real kernel never actually writes (TASK-
+    0016): `group_alive`'s own `proc_root` parameter exists so this shape can be
+    proven with real I/O rather than faked.
+    """
+    entry_dir = os.path.join(proc_root, str(pid))
+    os.mkdir(entry_dir)
+    with open(os.path.join(entry_dir, "stat"), "w") as handle:
+        handle.write(stat_content)
+
+
+def test_group_alive_tolerates_a_malformed_or_truncated_stat_line() -> None:
+    """TASK-0016 AC#1/#2: a malformed `/proc/<pid>/stat` line -- empty, missing
+    its `)` entirely, or with too few fields after it -- is skipped like a
+    vanished entry already was, never raised out of `group_alive` as a plain
+    `IndexError`/`ValueError`.
+
+    `held` must be non-empty to take the Linux scan branch at all (`group_alive`'s
+    own docstring); `0` names no entry this test ever writes, so nothing here is
+    excluded by it.
+
+    Pre-fix, this fails with a raw `IndexError` (the empty-content and too-few-
+    fields entries, where `fields[0]` or `fields[2]` has nothing to read) or
+    `ValueError` (the no-`)` entry, whose third field is not an int) -- confirmed
+    by running this test against the pre-fix code before the fix was written.
+    """
+    fake_proc = tempfile.mkdtemp()
+    try:
+        _write_fake_proc_entry(fake_proc, 1, "")
+        _write_fake_proc_entry(fake_proc, 2, "not a real stat line at all")
+        _write_fake_proc_entry(fake_proc, 3, "123 (prog) S 1")
+
+        result = group_alive(999_999, held=frozenset({0}), proc_root=fake_proc)
+
+        assert result is False
+    finally:
+        shutil.rmtree(fake_proc)
+
+
+def test_group_alive_still_finds_a_well_formed_match_past_malformed_entries() -> None:
+    """The fix's own risk (the plan's own words): widening what is tolerated must
+    not swallow a genuinely alive, well-formed entry elsewhere in the scan. A real
+    match sits alongside the same three malformed entries above, and is still
+    found.
+    """
+    fake_proc = tempfile.mkdtemp()
+    try:
+        _write_fake_proc_entry(fake_proc, 1, "")
+        _write_fake_proc_entry(fake_proc, 2, "not a real stat line at all")
+        _write_fake_proc_entry(fake_proc, 3, "123 (prog) S 1")
+        _write_fake_proc_entry(fake_proc, 4, "4 (real) R 1 42 42")
+
+        result = group_alive(42, held=frozenset({0}), proc_root=fake_proc)
+
+        assert result is True
+    finally:
+        shutil.rmtree(fake_proc)
+
+
+def test_group_alive_returns_a_bool_never_raises_on_the_real_host() -> None:
+    """AC#2's other half: `group_alive` itself, driven against the real host with
+    `held` non-empty (the only branch that ever reaches the Linux `/proc` scan),
+    still answers a plain bool -- never raises -- for a real process group.
+    """
+    process = spawn(("true",), _STDIO_FDS)
+    try:
+        result = group_alive(process.pgid, held=frozenset({process.pid}))
+        assert isinstance(result, bool)
+    finally:
+        os.killpg(process.pgid, signal.SIGKILL)
+        reap(process.pid)

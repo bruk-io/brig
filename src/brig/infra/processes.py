@@ -608,7 +608,7 @@ def release(pid: int) -> None:
         pass
 
 
-def _group_alive_proc_scan(pgid: int, held: frozenset[int]) -> bool:
+def _group_alive_proc_scan(pgid: int, held: frozenset[int], proc_root: str = "/proc") -> bool:
     """Linux's own per-member answer to `group_alive`, for when `held` is non-empty:
     report whether anything in the group `pgid` *other than* a pid in `held` is
     still alive.
@@ -624,31 +624,45 @@ def _group_alive_proc_scan(pgid: int, held: frozenset[int]) -> bool:
     so only the last one is guaranteed to be the real field separator -- and reads
     state, ppid, pgrp as the first three whitespace-separated fields after that.
     Swallows `FileNotFoundError`/`ProcessLookupError`/`PermissionError` for any one
-    entry: a process can exit mid-scan, or belong to another user whose `/proc`
-    entry this one cannot read fully, and neither should fail the whole scan.
+    entry (a process can exit mid-scan, or belong to another user whose `/proc`
+    entry this one cannot read fully) and `IndexError`/`ValueError` for a line that
+    reads back empty, truncated, or with a non-numeric pgid field -- none of these
+    should fail the whole scan, only skip the one entry that produced them.
+
+    `proc_root` defaults to the real `/proc` for every production caller; a test
+    pointing it at a directory of its own construction is how this function's
+    per-entry tolerance gets proven against a genuinely malformed stat line --
+    content the real kernel never actually writes.
     """
-    for name in os.listdir("/proc"):
+    for name in os.listdir(proc_root):
         if not name.isdigit():
             continue
         candidate = int(name)
         if candidate in held:
             continue
         try:
-            with open(f"/proc/{name}/stat") as handle:
+            with open(f"{proc_root}/{name}/stat") as handle:
                 stat_line = handle.read()
         except FileNotFoundError, ProcessLookupError, PermissionError:
             continue
         _, _, rest = stat_line.rpartition(")")
         fields = rest.split()
-        state, candidate_pgid = fields[0], fields[2]
-        if int(candidate_pgid) == pgid and state != "Z":
-            return True
+        try:
+            state, candidate_pgid = fields[0], fields[2]
+            if int(candidate_pgid) == pgid and state != "Z":
+                return True
+        except IndexError, ValueError:
+            continue
     return False
 
 
-def group_alive(pgid: int, held: frozenset[int] = frozenset()) -> bool:
+def group_alive(pgid: int, held: frozenset[int] = frozenset(), proc_root: str = "/proc") -> bool:
     """Report whether anything in the group `pgid`, other than a pid named in
     `held`, is still alive.
+
+    `proc_root` exists only so a test can point the Linux scan below at a
+    directory of its own construction; every production caller leaves it at the
+    real `/proc`.
 
     Signals the whole group with `0` by default (`killpg(pgid, 0)`, which sends
     nothing but still raises an exception once no member answers to it -- `killpg`'s
@@ -680,7 +694,7 @@ def group_alive(pgid: int, held: frozenset[int] = frozenset()) -> bool:
     """
     if held:
         try:
-            return _group_alive_proc_scan(pgid, held)
+            return _group_alive_proc_scan(pgid, held, proc_root)
         except FileNotFoundError:
             pass
     try:
