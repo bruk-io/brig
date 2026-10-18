@@ -3,11 +3,11 @@ id: TASK-0014
 title: >-
   infra.processes.spawn's SpawnError docstring is false on Linux: a missing
   argv[0] spawns successfully and dies 127
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 17:30'
-updated_date: '2026-10-18 21:09'
+updated_date: '2026-10-18 21:12'
 labels:
   - brig
   - size-2
@@ -353,4 +353,6 @@ tests/e2e/test_processes_gateway.py remain modified in the working tree, and the
 status stays In Progress.
 
 No repro: fix and discriminating tests landed together, no earlier failing-state commit to run record-check --repro against. Same pattern as TASK-0002/TASK-0005/TASK-0001.19/TASK-0006/TASK-0001.21/TASK-0011/TASK-0012.
+
+Review's blocking finding fixed directly: the docstrings in processes.py and the test comment in test_processes_gateway.py both claimed a missing direct path was 'unaffected either way' by the pre-check -- false on Linux, where the pre-check also newly catches a missing direct path (shutil.which checks existence/executability for a literal path too, not just a PATH-searched name). Corrected both, plus renamed the test to state the true, platform-dependent behavior. Also fixed the Medium finding: infra/supervisor/link.py's _SUPERVISOR_ENV docstring claimed its own PATH entry was 'the one thing a bare posix_spawnp("bwrap", ...) call genuinely needs' to resolve the binary -- false per this same task's own measurement (posix_spawnp's PATH search uses the calling process's real os.environ, never env); corrected to state the real reason (a sane minimal default for bwrap's own internals, not spawn resolution). Fixed the broken inline code span (shutil./which split across a line wrap). Re-verified: just gates/typecheck/done green on macOS; full suite 120 passed/3 skipped on real Linux+bwrap after all fixes, including the renamed test. The PATH-source correction (env never searched, only os.environ) was independently re-derived and reproduced from scratch by the reviewer, not taken on trust -- confirmed on both platforms. The call-site audit holds for a stronger reason than originally recorded: no live Spawn(...) construction anywhere in src/brig touches the embedder's own confined command, only host binaries (bwrap, sys.executable), so the pre-check cannot falsely reject something that previously resolved inside a jail.
 <!-- SECTION:NOTES:END -->
