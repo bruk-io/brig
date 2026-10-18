@@ -83,6 +83,32 @@ invoked, rather than letting this surface as ``JailExitUnknown`` ->
 from brig.domain.plan import Plan
 from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, Bind, FsPolicy
 
+_VIRTUAL_FS_FLAGS: tuple[str, ...] = ("--proc", "/proc", "--dev", "/dev", "--tmpfs", "/sys")
+"""Virtual-filesystem hygiene (TASK-0015, decision-0004), not a namespace/behavior
+flag -- kept as its own constant rather than folded into `_NAMESPACE_FLAGS` below
+for exactly that reason. `WHOLE_HOST_READ_ONLY`'s recursive `--ro-bind / /` carries
+along whatever the host already has mounted at `/proc` and `/sys`, so without this,
+a jailed command sees the *ambient host's* `/proc` (every real host pid, not only
+its own namespace's) and the host's real `/sys` (block/bus/class/dev/devices/
+firmware/kernel/module entries) -- measured directly against real bwrap
+(decision-0004).
+
+`--proc /proc` gives the jail a fresh procfs scoped to its own PID namespace,
+structurally (not a mitigation riding on a host's own `ptrace_scope`): measured,
+the jail's own `/proc` listing then contains only its own namespace's processes.
+`--dev /dev` gives a minimal, functional device set (null, zero, random, urandom
+and similar) instead of the host's real `/dev`, confirmed not to break the jail's
+own basic command. `--tmpfs /sys` masks `/sys` empty rather than giving it a
+namespace-scoped equivalent -- unlike procfs, sysfs has no per-namespace scoping
+to offer instead, so absent is the only safe default; an embedder whose own policy
+genuinely needs hardware introspection adds their own `/sys` bind back explicitly.
+
+Unconditional, placed after `state_dir`'s own bind and before `_NAMESPACE_FLAGS`,
+the same way `state_dir`'s own bind already is: never part of the caller's own
+`FsPolicy`, since an embedder narrowing or widening their own policy has no
+business accidentally re-exposing or hiding these.
+"""
+
 _NAMESPACE_FLAGS: tuple[str, ...] = (
     "--unshare-all",
     "--die-with-parent",
@@ -280,6 +306,7 @@ def compile_supervisor_launch(
         "--ro-bind",
         state_dir,
         state_dir,
+        *_VIRTUAL_FS_FLAGS,
         *_NAMESPACE_FLAGS,
         *supervisor_path,
     )

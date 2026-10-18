@@ -144,8 +144,10 @@ def _resolved_state_dir() -> str:
 def _bwrap_argv_prefix(state_dir: str) -> tuple[str, ...]:
     """Mirrors `domain/jail_types/bwrap.py`'s own `_NAMESPACE_FLAGS` (namespace-
     isolation flags) plus `_compile_binds`'s output for the default
-    `WHOLE_HOST_READ_ONLY` policy (the `--ro-bind / /` triple) and TASK-0006's own
-    unconditional state-dir bind, built here rather than imported: decision-0001
+    `WHOLE_HOST_READ_ONLY` policy (the `--ro-bind / /` triple), TASK-0006's own
+    unconditional state-dir bind, and TASK-0015's own unconditional
+    `_VIRTUAL_FS_FLAGS` (`--proc /proc --dev /dev --tmpfs /sys`), built here
+    rather than imported: decision-0001
     rule 4 lets an e2e test import the public API, or one `brig.infra` module for a
     gateway test, never a `domain` module directly, and this differential needs a
     variant `compile_run` itself deliberately never produces (the same argv with
@@ -207,6 +209,12 @@ def _bwrap_argv_prefix(state_dir: str) -> tuple[str, ...]:
         "--ro-bind",
         state_dir,
         state_dir,
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/sys",
         "--unshare-all",
         "--die-with-parent",
         "--new-session",

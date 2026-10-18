@@ -141,6 +141,46 @@ alone, the same discipline `_READ_PROBE` follows. `0`: the write succeeded. `2`:
 other `OSError`, which this battery never expects.
 """
 
+_PROC_NAMESPACE_PROBE = """
+import os, re, sys
+
+if not os.path.exists("/proc/self/status"):
+    sys.exit(4)  # /proc itself is not functional -- a broken jail, not evidence
+                 # about which namespace it shows
+pids = {entry for entry in os.listdir("/proc") if re.fullmatch(r"[0-9]+", entry)}
+allowed = {"1", str(os.getpid()), str(os.getppid())}
+sys.exit(0 if pids <= allowed else 5)
+"""
+"""The probe for TASK-0015 AC#2: lists `/proc`'s own numeric entries (process
+directories) and checks every one of them is this jail's own namespace's --
+the supervisor as PID 1 (decision-0002, `--as-pid-1`), this probe's own pid
+(its parent, under the supervisor, decision-0002's own child relationship),
+and its own parent pid, which is the supervisor's. Any numeric entry outside
+that set is a real host pid leaking through the ambient `/proc` this policy's
+recursive `--ro-bind / /` would otherwise carry in (decision-0004's own
+measurement: `1`, `8`, `9`, real host pids, without `--proc /proc`). `5`:
+found a foreign pid -- the vector this task closes. `4`: `/proc` itself is not
+even mounted/functional, the same self-discriminating "broken jail, not
+evidence" signal `_READ_PROBE`'s own control check follows.
+"""
+
+_SYS_EMPTY_PROBE = """
+import os, sys
+
+if not os.path.exists(sys.argv[1]):
+    sys.exit(4)  # the control path (the interpreter running this) is missing
+                 # too -- a broken jail, not evidence about /sys
+sys.exit(0 if os.listdir("/sys") == [] else 5)
+"""
+"""The probe for TASK-0015 AC#3: `/sys` has no per-namespace scoping to offer
+(decision-0004), so the only safe default is masked empty (`--tmpfs /sys`) --
+this lists `/sys` and reports whether it is empty. `0`: empty, as masked.
+`5`: not empty -- the host's real sysfs entries (block/bus/class/dev/devices/
+firmware/kernel/module) leaked through instead. `4`: the control path (the
+interpreter) is missing, a broken jail unrelated to this claim, checked first
+the same way `_READ_PROBE` checks its own control path.
+"""
+
 
 def _mirror_policy_excluding(*excluded_names: str) -> FsPolicy:
     """An `FsPolicy` that binds every top-level entry of the host's own root,
@@ -435,3 +475,42 @@ def test_positive_control_a_writable_bind_lets_the_jail_write_back_to_the_host()
 
         assert exit_code == 0
         assert target_path.read_text() == _PLANTED_CONTENT
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bwrap is not available; test skips on macOS, runs in CI on Linux",
+)
+def test_proc_inside_the_jail_contains_only_its_own_namespaces_processes() -> None:
+    """TASK-0015 AC#2: `compile_supervisor_launch`'s unconditional `--proc /proc`
+    (decision-0004) gives the jail a fresh procfs scoped to its own PID
+    namespace, not the ambient host's -- measured directly: without the fix,
+    `WHOLE_HOST_READ_ONLY`'s recursive `--ro-bind / /` carries the host's own
+    `/proc` in, and a jailed command sees every real host pid. Unconditional,
+    so this needs no custom policy to exercise -- the default policy already
+    proves it.
+    """
+    jail = create_bwrap_jail((sys.executable, "-c", _PROC_NAMESPACE_PROBE))
+    exit_code = run_jail(jail)
+    destroy_jail(jail)
+
+    assert exit_code == 0  # every /proc pid entry is this jail's own namespace's
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bwrap is not available; test skips on macOS, runs in CI on Linux",
+)
+def test_sys_inside_the_jail_is_empty() -> None:
+    """TASK-0015 AC#3: `compile_supervisor_launch`'s unconditional `--tmpfs /sys`
+    (decision-0004) masks `/sys` empty rather than carrying in the ambient
+    host's own real sysfs (block/bus/class/dev/devices/firmware/kernel/module
+    entries) -- sysfs has no per-namespace scoping to offer instead, so absent
+    is the only safe default. Unconditional, so the default policy alone
+    already proves it.
+    """
+    jail = create_bwrap_jail((sys.executable, "-c", _SYS_EMPTY_PROBE, sys.executable))
+    exit_code = run_jail(jail)
+    destroy_jail(jail)
+
+    assert exit_code == 0  # /sys is empty: masked, not the host's real one
