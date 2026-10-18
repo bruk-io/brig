@@ -3,11 +3,11 @@ id: TASK-0011
 title: >-
   tests/e2e/test_spawn_fd_redirection_collision.py: the os.dup(0) probe and the
   finally-block bare except are both dead
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-18 14:48'
-updated_date: '2026-10-18 17:15'
+updated_date: '2026-10-18 17:16'
 labels:
   - brig
   - size-1
@@ -181,4 +181,16 @@ overclaim, fix and discriminating test in one commit, no earlier failing-state c
 -- but moot until AC#2 is fixed.
 
 No repro: this bug is a set of untrue claims in a test file's own prose plus two dead statements, not a behaviour a test can fail on. The fix and the file's own discriminating test landed together in one change, so there is no earlier failing-state commit for record-check --repro to point at. The test's discriminating power was reconfirmed by reconstructing the pre-TASK-0005-fix shape (recorded above).
+
+Re-review verdict: closed. All three acceptance criteria hold.
+
+AC#1: the dead 'probe_fd = os.dup(0); os.close(probe_fd)' pair is gone; nothing downstream used its value and it mutated nothing.
+
+AC#2 (the prior review's blocker) now holds. The replacement 'four consecutive numbers' claim is gone and the docstring reasons only from what the test actually relies on: the first os.pipe() returns the two lowest free fds, so every fd up to and including request_write_fd is open, and closing request_write_fd therefore makes that number the lowest free fd. Verified the chain independently -- every fd below r is open because r is lowest-free, every fd between r and w is open because w is lowest-free once r is taken, and the second pipe only opens fds above w, so nothing below w changes. The parenthetical explicitly disclaiming the second call's own numbers is correct. Confirmed empirically on this host as well: after the same sequence, closing w=4 made os.dup(0) return 4, while the second pipe landed on 5/6 -- non-adjacent in general, and irrelevant to the argument, exactly as the docstring now states.
+
+AC#3: the finally block closes each fd directly; the unreachable 'except OSError: pass' is gone.
+
+Scoped checks on this task's own file, per the reviewer's instruction to avoid a whole-tree run while TASK-0012 has an in-progress rule-4 violation in an unrelated new file: pytest tests/e2e/test_spawn_fd_redirection_collision.py passed, ruff check and ruff format --check both clean.
+
+Findings: one, and it is procedural, not a defect in the work. The change is still UNCOMMITTED in the working tree -- the reviewer cannot commit the work it reviews, so the commit was not made here. tests/e2e/test_spawn_fd_redirection_collision.py must be committed on its own (path-scoped add), separately from the unrelated TASK-0012 changes also in the tree (src/brig/presentation/api.py, tests/e2e/test_supervisor_script_cleanup.py, tests/integration/test_teardown_failure_deletes_script.py), none of which touch fd resolution or _fd_actions. No drafts filed: nothing found warranted one.
 <!-- SECTION:NOTES:END -->
