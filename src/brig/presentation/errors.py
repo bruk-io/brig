@@ -114,3 +114,22 @@ class JailTeardownFailed(Exception):
     def __init__(self, process: Process) -> None:
         super().__init__(f"jail's process group still alive after teardown: {process!r}")
         self.process = process
+
+
+class ChannelNameRefused(Exception):
+    """Raised by `reserve_channels` when a declared channel's name would not name
+    exactly one file inside the jail's channel directory -- empty, `.` or `..`,
+    containing `/` or NUL, or repeating an earlier channel's name
+    (`domain/channels.py`'s `reserve`, TASK-0001.25). Nothing has been reserved or
+    started when this is raised.
+
+    Args:
+        name: The refused channel name.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"channel name {name!r} would escape or repeat in the jail's channel "
+            f"directory -- name each channel with one distinct path component"
+        )
+        self.name = name

@@ -11,6 +11,7 @@ Process the driver sends back.
 import pytest
 from tests.e2e.test_tiocsti_battery import _bwrap_argv_prefix
 
+from brig.domain.channels import ChannelDirectory, Reservation, Reservations
 from brig.domain.effects import Process, StartSupervisedCommand
 from brig.domain.jail_types import bwrap
 from brig.domain.operations import create
@@ -177,6 +178,79 @@ def test_bwrap_compile_supervisor_launch_translates_a_custom_policys_binds() -> 
         "python3",
         "/path/to/program.py",
     )
+
+
+_CHANNEL_DIR = _STATE_DIR_PLACEHOLDER + "/channels/abc"
+"""A plain-string channel directory beneath the state-dir placeholder, where
+`presentation/api.py`'s default places one."""
+
+
+def test_bwrap_compile_supervisor_launch_binds_the_channel_directory_for_declared_channels() -> (
+    None
+):
+    """TASK-0001.25 AC#2: a declared channel adds exactly one writable `--bind` of the
+    per-jail channel directory, host path to jail path, right after the read-only
+    `state_dir` bind (the channel directory lives beneath it, and bwrap's later bind
+    wins) and before the virtual-fs flags.
+    """
+    channels = Reservations(
+        directory=ChannelDirectory(host_path=_CHANNEL_DIR, jail_path="/jail/side"),
+        reservations=(
+            Reservation(name="ctl", bound_path=_CHANNEL_DIR + "/ctl", endpoint="/jail/side/ctl"),
+        ),
+    )
+
+    argv = bwrap.compile_supervisor_launch(
+        ("python3", "/path/to/program.py"), state_dir=_STATE_DIR_PLACEHOLDER, channels=channels
+    )
+
+    assert argv == (
+        "bwrap",
+        "--ro-bind",
+        "/",
+        "/",
+        "--ro-bind",
+        _STATE_DIR_PLACEHOLDER,
+        _STATE_DIR_PLACEHOLDER,
+        "--bind",
+        _CHANNEL_DIR,
+        "/jail/side",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/sys",
+        "--unshare-all",
+        "--die-with-parent",
+        "--new-session",
+        "--as-pid-1",
+        "--",
+        "python3",
+        "/path/to/program.py",
+    )
+
+
+def test_bwrap_compile_supervisor_launch_adds_no_bind_when_no_channel_is_declared() -> None:
+    """TASK-0001.25 AC#2: declaring no channel -- an empty reservation set, or none at
+    all -- leaves the argv exactly what it is without the parameter: no `--bind`, and
+    the channel directory named nowhere.
+    """
+    without = bwrap.compile_supervisor_launch(
+        ("python3", "/path/to/program.py"), state_dir=_STATE_DIR_PLACEHOLDER
+    )
+    empty = bwrap.compile_supervisor_launch(
+        ("python3", "/path/to/program.py"),
+        state_dir=_STATE_DIR_PLACEHOLDER,
+        channels=Reservations(
+            directory=ChannelDirectory(host_path=_CHANNEL_DIR, jail_path=_CHANNEL_DIR),
+            reservations=(),
+        ),
+    )
+
+    assert empty == without
+    assert "--bind" not in empty
+    assert _CHANNEL_DIR not in empty
 
 
 def test_bwrap_create_true_generator() -> None:

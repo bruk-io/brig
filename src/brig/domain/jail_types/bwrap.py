@@ -80,6 +80,7 @@ invoked, rather than letting this surface as ``JailExitUnknown`` ->
 ``JailTeardownFailed``.
 """
 
+from brig.domain.channels import Reservations
 from brig.domain.plan import Plan
 from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, Bind, FsPolicy
 
@@ -261,11 +262,25 @@ def covering_ancestor_bind(policy: FsPolicy, state_dir: str) -> Bind | None:
     return ancestor_binds[-1] if ancestor_binds else None
 
 
+def _compile_channel_bind(channels: Reservations | None) -> tuple[str, ...]:
+    """The writable bind of the per-jail channel directory (TASK-0001.25), or nothing
+    when `channels` declares no channel at all.
+
+    Writable because the jailed command creates its sockets there. Bound host path to
+    jail path (`ChannelDirectory`'s own docstring: equal for bwrap today).
+    """
+    if channels is None or not channels.reservations:
+        return ()
+    directory = channels.directory
+    return ("--bind", directory.host_path, directory.jail_path)
+
+
 def compile_supervisor_launch(
     supervisor_path: tuple[str, ...],
     *,
     state_dir: str,
     policy: FsPolicy = WHOLE_HOST_READ_ONLY,
+    channels: Reservations | None = None,
 ) -> tuple[str, ...]:
     """Wrap `supervisor_path` in this jail type's own bwrap flags, so bwrap starts
     the supervisor named there as the jail's one process, seeing exactly the paths
@@ -299,6 +314,16 @@ def compile_supervisor_launch(
     already-resolved argv in here as plain strings -- domain states the policy
     (which paths, namespace isolation, `--new-session`'s TIOCSTI closure) but does
     no I/O of its own to locate anything (rule 2).
+
+    `channels` (TASK-0001.25), when it declares at least one channel, adds one
+    writable `--bind` of its per-jail channel directory, right after the `state_dir`
+    bind: the channel directory lives beneath brig's state directory, and bwrap
+    applies binds in argv order (later wins), so it has to come after that read-only
+    bind to stay writable inside it. Declaring none adds nothing, so the argv is
+    exactly what it was before the parameter existed. The host directory must exist
+    before bwrap runs -- bwrap would otherwise try to create its mountpoint beneath
+    the read-only `state_dir` bind and fail with EROFS (TASK-0001.22's measured
+    shape); creating it is `infra/sockets.py`'s (TASK-0001.26), not this function's.
     """
     return (
         "bwrap",
@@ -306,6 +331,7 @@ def compile_supervisor_launch(
         "--ro-bind",
         state_dir,
         state_dir,
+        *_compile_channel_bind(channels),
         *_VIRTUAL_FS_FLAGS,
         *_NAMESPACE_FLAGS,
         *supervisor_path,

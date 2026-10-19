@@ -194,3 +194,19 @@ class SupervisorPort(Protocol):
         anything ever awaited it.
         """
         ...
+
+
+class ChannelDirectoryPort(Protocol):
+    """Where a jail's per-jail channel directory goes (TASK-0001.25): the one thing
+    `reserve_channels` needs from the world before it can derive any reservation.
+
+    `presentation/api.py`'s default names a fresh path under brig's own state
+    directory and creates nothing; creating, privatising and removing the directory
+    is TASK-0001.26's (`infra/sockets.py`), which grows this port.
+    """
+
+    def allocate(self) -> str:
+        """Name a new per-jail channel directory's host path, distinct from every
+        other jail's.
+        """
+        ...

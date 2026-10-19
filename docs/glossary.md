@@ -1,5 +1,8 @@
 # Glossary
 
+**channel**
+: A named request channel an embedder declares for its jail: one file, usually a socket, in the jail's own channel directory (`domain/channels.py`, decision-0002).
+
 **claim**
 : A statement made by a jail type's compile about what its jail enforces (decision-0001 rule 11).
 
@@ -29,6 +32,9 @@
 
 **process**
 : A spawned process's identity (pid and pgid) sufficient to reap, signal, or verify it later (`domain/effects.py`, decision-0001 rule 10).
+
+**reservation**
+: A channel's place in the jail's channel directory, made before the jail's process starts: its `bound_path` on the host and its `endpoint` inside the jail, which the embedder passes to the jailed command in argv, never env (`domain/channels.py`, decision-0002).
 
 **step**
 : Each effect a generator yields during an operation or teardown; examples include spawning the jail's process, reaping its exit code, signaling its process group, or verifying it is gone (decision-0001 rule 10).

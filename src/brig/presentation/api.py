@@ -10,9 +10,14 @@ is no longer shared across every jail a process creates -- `_supervisors_for` bu
 a fresh one, with its own freshly-written supervisor script, per `create_bwrap_jail`
 call, so `destroy_jail` can delete exactly one jail's own file without breaking any
 other jail still running.
+
+TASK-0001.25: `reserve_channels` is the one public call made *before* a jail exists --
+it hands back each declared channel's reservation, so the embedder can write each
+endpoint into the command's argv itself before `create_bwrap_jail` starts anything.
 """
 
 import functools
+import secrets
 import signal
 import sys
 import tempfile
@@ -20,8 +25,16 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import assert_never
 
+from brig.domain import channels as _channels
 from brig.domain import operations
+from brig.domain.channels import (
+    Channel,
+    ChannelDirectory,
+    ChannelRefused,
+    Reservations,
+)
 from brig.domain.effects import ExitCodeUnknown, GroupState, Process
 from brig.domain.jail_types import bwrap
 from brig.domain.policy.env import DENY_ALL, EnvPolicy
@@ -40,6 +53,7 @@ from brig.infra.processes import spawn as _spawn
 from brig.infra.supervisor import assemble, link
 from brig.presentation.drivers.bwrap import run
 from brig.presentation.errors import (
+    ChannelNameRefused,
     JailExitUnknown,
     JailTeardownFailed,
     JailWaitTimedOut,
@@ -47,6 +61,7 @@ from brig.presentation.errors import (
     StateDirectoryUnreachable,
 )
 from brig.presentation.ports import (
+    ChannelDirectoryPort,
     ProcessPort,
     ProcessUnknown,
     SupervisorDoneUnknown,
@@ -292,7 +307,9 @@ def _real_supervisor_port(live: link.LiveSupervisors) -> SupervisorPort:
     return _RealSupervisors(start=live.start, await_done=await_done, close=live.close)
 
 
-def _supervisors_for(policy: FsPolicy) -> tuple[SupervisorPort, Path]:
+def _supervisors_for(
+    policy: FsPolicy, channels: Reservations | None
+) -> tuple[SupervisorPort, Path]:
     """The `SupervisorPort` `create_bwrap_jail` uses for `policy`, when its own
     caller names no explicit `supervisors` port of its own, and the exact path of
     the fresh supervisor script file written for it, so the jail that gets this
@@ -318,14 +335,73 @@ def _supervisors_for(policy: FsPolicy) -> tuple[SupervisorPort, Path]:
     single read-only bind at `/` is itself such an ancestor bind, though it never
     actually fails this check in practice (`_resolved_state_dir()` already created
     the leaf before this runs, so `/`'s own source always contains it).
+
+    `channels` (TASK-0001.25) reaches `compile_supervisor_launch` unchanged, which
+    binds its channel directory writable when it declares any channel.
     """
     state_dir = _resolved_state_dir()
     _check_state_dir_reachable(policy, state_dir)
     supervisor_path = _supervisor_path()
     supervisor_argv = bwrap.compile_supervisor_launch(
-        supervisor_path, state_dir=state_dir, policy=policy
+        supervisor_path, state_dir=state_dir, policy=policy, channels=channels
     )
     return _real_supervisor_port(link.LiveSupervisors(supervisor_argv)), Path(supervisor_path[-1])
+
+
+def _allocate_channel_directory() -> str:
+    """Name a fresh per-jail channel directory under brig's own state directory
+    (`_resolved_state_dir`), never `/tmp` -- a random component per call, so no two
+    jails share one. Creates nothing: TASK-0001.26 (`infra/sockets.py`) creates,
+    privatises and removes it. `_resolved_state_dir` raises `StateDirectoryInvalid`
+    should `BRIG_HOME` name a value brig cannot use.
+    """
+    return f"{_resolved_state_dir()}/channels/{secrets.token_hex(8)}"
+
+
+@dataclass(frozen=True)
+class _RealChannelDirectories:
+    """The `ChannelDirectoryPort` an embedder gets by default: data (one function),
+    the same shape `_RealProcesses` gives `ProcessPort`.
+    """
+
+    allocate: Callable[[], str] = _allocate_channel_directory
+
+
+_channel_directories: ChannelDirectoryPort = _RealChannelDirectories()
+
+
+def reserve_channels(
+    channels: tuple[Channel, ...],
+    *,
+    directories: ChannelDirectoryPort = _channel_directories,
+) -> Reservations:
+    """Reserve each of `channels` for a jail not yet created (TASK-0001.25), and hand
+    back every reservation before anything starts.
+
+    The caller reads each `Reservation.endpoint`, writes it into the command's argv
+    itself, then passes these same `Reservations` to `create_bwrap_jail`'s
+    `channels` -- argv, never env (old SPEC decision-184/186), so nothing that
+    scrubs the jailed command's environment can lose it. bwrap binds the channel
+    directory at its own host path, so each endpoint equals its `bound_path`
+    (`ChannelDirectory`'s own docstring).
+
+    `directories` names the per-jail channel directory; left unset, a fresh path
+    under brig's own state directory, whose resolution raises `StateDirectoryInvalid`
+    should `BRIG_HOME` name a value brig cannot use (`_resolved_state_dir`).
+
+    Raises:
+        ChannelNameRefused: a channel's name would escape or repeat in the channel
+            directory (`domain/channels.py`'s `reserve`).
+    """
+    host_path = directories.allocate()
+    directory = ChannelDirectory(host_path=host_path, jail_path=host_path)
+    match _channels.reserve(channels, directory):
+        case Reservations() as reservations:
+            return reservations
+        case ChannelRefused(name=name):
+            raise ChannelNameRefused(name)
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 @dataclass(frozen=True)
@@ -364,6 +440,7 @@ def create_bwrap_jail(
     env: tuple[tuple[str, str], ...] = (),
     policy: FsPolicy = WHOLE_HOST_READ_ONLY,
     env_policy: EnvPolicy = DENY_ALL,
+    channels: Reservations | None = None,
     processes: ProcessPort = _processes,
     supervisors: SupervisorPort | None = None,
 ) -> Jail:
@@ -384,6 +461,13 @@ def create_bwrap_jail(
     the effect's `env` is already scrubbed, and nothing downstream (this driver,
     `infra/supervisor/link.py`) ever reads `env` or `os.environ` again to get
     there.
+
+    `channels` is what `reserve_channels` handed back for this jail (TASK-0001.25):
+    its channel directory is bound into the jail, writable, when it declares any
+    channel. It reaches the jailed command only through `command` -- the caller has
+    already written each endpoint there -- and never through `env`, which this
+    function neither reads nor extends with it (old SPEC decision-184/186). The
+    directory itself is not created here yet (TASK-0001.26).
 
     `supervisors`, left unset, is resolved from `policy` (`_supervisors_for`),
     which also writes this jail's own fresh supervisor script file and hands
@@ -416,7 +500,7 @@ def create_bwrap_jail(
         resolved_supervisors: SupervisorPort = supervisors
         supervisor_script: Path | None = None
     else:
-        resolved_supervisors, supervisor_script = _supervisors_for(policy)
+        resolved_supervisors, supervisor_script = _supervisors_for(policy, channels)
     plan = bwrap.compile_run(command, env=env)
     try:
         process = run(operations.create(plan, env_policy), processes, resolved_supervisors)

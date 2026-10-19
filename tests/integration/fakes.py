@@ -195,3 +195,19 @@ class FakeSupervisors:
     def close(self, pid: int) -> None:
         """Record `pid`."""
         self.closed.append(pid)
+
+
+@dataclass
+class FakeChannelDirectories:
+    """A fake of the world `brig.presentation.ports.ChannelDirectoryPort` asks for
+    (TASK-0001.25): `allocate` hands back `path` and counts itself in `allocated`,
+    never touching the filesystem.
+    """
+
+    path: str = "/fake/state/channels/0001"
+    allocated: int = 0
+
+    def allocate(self) -> str:
+        """Count the call and hand back `path`."""
+        self.allocated += 1
+        return self.path
