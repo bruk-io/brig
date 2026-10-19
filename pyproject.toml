@@ -33,8 +33,10 @@ line-length = 100
 src = ["src", "tests", "scripts", "pypeeker_rules"]
 # scripts/c4lint.py is vendored verbatim from the c4-architecture knowhere
 # plugin; re-synced by copying the upstream file over this one, so it is not
-# linted or reformatted to our own style.
-extend-exclude = ["scripts/c4lint.py"]
+# linted or reformatted to our own style. backlog/ holds board records, whose
+# code blocks are measured artefacts kept verbatim (TASK-0001.24's probe script),
+# so ruff format must not rewrite them.
+extend-exclude = ["scripts/c4lint.py", "backlog"]
 
 [tool.ruff.lint]
 preview = true
