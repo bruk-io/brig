@@ -26,8 +26,9 @@ def test_a_reservation_reaches_the_command_through_argv_and_never_through_env() 
     """`reserve_channels` hands back the endpoint before anything starts; the caller
     writes it into `command`; the supervisor is started with it in argv, and neither
     the endpoint nor the bound path appears anywhere in the env it was handed -- even
-    with a permissive `EnvPolicy` and a host-like `env` that a reservation could have
-    been smuggled into.
+    with an `EnvPolicy` that also allows the names a reservation would plausibly be
+    smuggled in under (`BRIG_CHANNEL_CTL`, `CTL`), so such an injection would survive
+    the scrub and reach the recorded env rather than being silently removed by it.
     """
     directories = FakeChannelDirectories()
     processes = FakeProcesses()
@@ -42,7 +43,7 @@ def test_a_reservation_reaches_the_command_through_argv_and_never_through_env() 
     jail = create_bwrap_jail(
         command,
         env=host_like_env,
-        env_policy=EnvPolicy(allowed=("PATH", "HOME")),
+        env_policy=EnvPolicy(allowed=("PATH", "HOME", "BRIG_CHANNEL_CTL", "CTL")),
         channels=reserved,
         processes=processes,
         supervisors=supervisors,
