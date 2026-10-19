@@ -6,6 +6,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-10-19 13:07'
+updated_date: '2026-10-19 13:09'
 labels:
   - brig
   - size-1
@@ -24,3 +25,9 @@ ruff format --check . formats python fenced blocks in markdown. The verbatim pro
 - [ ] #1 just done passes on main
 - [ ] #2 The probe script recorded in TASK-0001.24 stays verbatim
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Fixed directly in 99fa2e0: backlog/ added to ruff's extend-exclude in pyproject.toml, so board records keep measured code verbatim. uv run just done passes on main afterwards. Can be archived.
+<!-- SECTION:NOTES:END -->
