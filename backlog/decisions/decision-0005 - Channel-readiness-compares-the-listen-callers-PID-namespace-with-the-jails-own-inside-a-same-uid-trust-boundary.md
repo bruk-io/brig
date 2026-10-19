@@ -37,17 +37,25 @@ What was measured:
      namespace with `ioctl(NS_GET_USERNS)`, calls `setns` for the user and PID namespaces,
      forks, and listens at the reserved path from the host mount namespace. The verified
      check, strict and nested walk alike, read READY with the jail's namespace, and the
-     connection was answered by the co-tenant. Joining the inner user namespace fails with
-     EPERM; the outer one works.
+     connection was answered by the co-tenant. Going through the inner user namespace,
+     `setns` into the PID namespace fails with EPERM; going through the outer one works.
+     Measured as uid 1000 and as uid 0.
   2. A jail process calls `listen()` and passes the listening fd to a host process over
      `SCM_RIGHTS`. Readiness reads READY and the host process answers, because
      `SO_PEERCRED` and `SO_PEERPIDFD` name the process that called `listen()`, not the one
-     that accepts.
+     that accepts. A variant where the `listen()` caller hands off the fd and exits (left an
+     unreaped zombie under the jail's PID 1) also read READY (case C2).
+- Skeptic B also measured three attacks the check survives: a co-tenant hard-linking its
+  socket inode at the reserved path (refused), the jail hard-linking an outside socket into
+  the channel directory (EXDEV across the bind, so not ready), and a sibling jail listening
+  at the victim's reserved path (refused, different PID namespace).
 - Skeptic A (reproduction lens) reproduced every verdict and found that its uid-1000
-  co-tenant got EPERM, but that came from `nsenter --user` into the inner user namespace.
-  The outer path above works for the same uid. A listener under a different uid fails
-  closed: the check could not read its namespace (`rejected(peer-gone EACCES)`), and
-  joining its namespaces is denied (EPERM).
+  co-tenant got EPERM (`reassociate to namespace 'ns/pid' failed`), but that came from
+  `nsenter --user` into the inner user namespace. The outer path above works for the same
+  uid, and a root co-tenant using `nsenter` read READY. A listener under a different uid
+  fails closed: run as uid 1000 against a uid-2000 listener (set up as root), the check
+  could not read its namespace (`rejected(peer-gone EACCES)`). Whether a different-uid
+  co-tenant can join the jail's namespaces was not measured.
 - Both skeptics measured that when the `listen()` caller has exited and been reaped while a
   child keeps the socket, `getsockopt(SO_PEERPIDFD)` raises EINVAL. It does not hand back a
   pidfd whose fdinfo says `Pid: -1`, as the spike guessed, and the spike's probe let the
@@ -78,7 +86,9 @@ compares the path, and it never compares uid.**
    Both measured same-uid bypasses (the `NS_GET_USERNS` plus `setns` listener, and the
    `SCM_RIGHTS` hand-off of a listening fd) are therefore out of scope, and named here so
    no grade or document claims otherwise. Only a per-jail uid would close them, and that is
-   not being done. A co-tenant under a different uid fails closed, as measured.
+   not being done. A listener under a different uid fails closed, as measured: its
+   `ns/pid` cannot be read (EACCES), so readiness refuses. Whether a different-uid
+   co-tenant can join the jail's namespaces was not measured.
 4. **What readiness proves.** It proves that a process in the jail's PID namespace called
    `listen()` on the socket that answered this connect. It does not prove that process is
    the one accepting, that it is still alive, or that it is the process the embedder
@@ -113,10 +123,11 @@ decision-0002 set (`domain/channels.py`, `infra/sockets.py`, a readiness primiti
   spawns bwrap to the readiness primitive. The readiness API hands back the verified
   connected socket, or requires verification on every connect.
 - The `channel_exclusivity` grade (TASK-0001.28) cannot claim protection against a same-uid
-  host process. Its evidence covers different-uid co-tenants and planted paths only.
+  host process. Its evidence covers different-uid listeners and planted paths only.
 - The kernel floor for verified readiness on Linux is 6.5. Older kernels get a refusal, not
   a weaker check.
-- Not measured, and open until a task measures them: a bare-metal host, setuid bwrap,
+- Not measured, and open until a task measures them: a different-uid co-tenant trying to
+  join the jail's namespaces, a bare-metal host, setuid bwrap,
   `--disable-userns`, the `/proc/<bwrap>/task/*/children` lookup, a symlink swapped during
   connect, and Seatbelt.
 
