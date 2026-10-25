@@ -2,8 +2,10 @@
 plus `Claim`/`Evidence`/`Grade`/`grade`, `Bind`/`FsPolicy`/`WHOLE_HOST_READ_ONLY`, and
 `DENY_ALL`/`EnvPolicy`, and the channel data (`Channel`, `ChannelDirectory`,
 `Reservation`, `Reservations`) straight from `domain` (TASK-0001.18, TASK-0001.16,
-TASK-0001.17, TASK-0001.25). The layout's own description of this module is "re-exports
-presentation's api"; grading's four names and both policies' names are pure data
+TASK-0001.17, TASK-0001.25) -- and, since TASK-0001.27, `await_channel_ready` with
+its outcome and refusal types, which are `presentation`'s own. The layout's own
+description of this module is "re-exports presentation's api"; grading's four names
+and both policies' names are pure data
 (and, for `grade`, a pure function) with nothing of infra behind them to wrap, so
 routing them through a presentation module first would add an import with no job --
 `presentation/report.py`'s `render` is presentation's own real work here, and is
@@ -17,6 +19,7 @@ from brig.domain.policy.env import DENY_ALL, EnvPolicy
 from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, Bind, FsPolicy
 from brig.presentation.api import (
     Jail,
+    await_channel_ready,
     create_bwrap_jail,
     destroy_jail,
     reserve_channels,
@@ -25,6 +28,7 @@ from brig.presentation.api import (
 from brig.presentation.errors import (
     ChannelDirectoryUnreachable,
     ChannelNameRefused,
+    ChannelNamespaceNotFound,
     JailExitUnknown,
     JailSpawnFailed,
     JailTeardownFailed,
@@ -32,7 +36,16 @@ from brig.presentation.errors import (
     StateDirectoryInvalid,
     StateDirectoryUnreachable,
 )
-from brig.presentation.ports import ChannelDirectoryPort, ProcessUnknown, SupervisorDoneUnknown
+from brig.presentation.ports import (
+    ChannelDirectoryPort,
+    ChannelNotReady,
+    ChannelReadinessPort,
+    ChannelReadinessRefusal,
+    ChannelReady,
+    ChannelRefused,
+    ProcessUnknown,
+    SupervisorDoneUnknown,
+)
 from brig.presentation.report import render
 
 __all__ = [
@@ -42,6 +55,12 @@ __all__ = [
     "ChannelDirectoryPort",
     "ChannelDirectoryUnreachable",
     "ChannelNameRefused",
+    "ChannelNamespaceNotFound",
+    "ChannelNotReady",
+    "ChannelReadinessPort",
+    "ChannelReadinessRefusal",
+    "ChannelReady",
+    "ChannelRefused",
     "Claim",
     "DENY_ALL",
     "EnvPolicy",
@@ -60,6 +79,7 @@ __all__ = [
     "StateDirectoryUnreachable",
     "SupervisorDoneUnknown",
     "WHOLE_HOST_READ_ONLY",
+    "await_channel_ready",
     "create_bwrap_jail",
     "destroy_jail",
     "grade",

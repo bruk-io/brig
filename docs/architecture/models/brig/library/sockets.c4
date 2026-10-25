@@ -1,0 +1,9 @@
+// Component: infra/sockets.py.
+model {
+  extend brig.library {
+    sockets = component 'Sockets' {
+      technology 'Python 3.15, stdlib only'
+      description 'Creates and removes a jail\'s per-jail channel directory, and verifies a channel is ready: a connect that succeeds and is confirmed, by PID namespace, to be the jailed process\'s own listener -- never path existence. Plain data in and out -- never a brig type.'
+    }
+  }
+}

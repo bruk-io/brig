@@ -16,6 +16,7 @@ infra's).
 
 import signal
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol
 
 
@@ -192,6 +193,108 @@ class SupervisorPort(Protocol):
         already released it on a terminal outcome, or nothing was ever started for
         it. Call this one regardless from teardown, for the jail destroyed before
         anything ever awaited it.
+        """
+        ...
+
+
+class ChannelReadinessRefusal(Enum):
+    """Why a `ChannelReadinessPort` refused a connection that did connect
+    (decision-0005 items 2, 5 and 6, TASK-0001.27 AC#1).
+
+    A closed set of three names, mirroring the three reasons
+    `infra.sockets.channel_ready` can refuse for -- `presentation/api.py`'s default
+    wiring translates infra's own string constants into these, the same way its
+    `_reap` translates infra's `ProcessUnknown`. An embedder matches on these;
+    nothing under `infra/` is named here (rule 13).
+    """
+
+    PEER_OUTSIDE_JAIL = "peer_outside_jail"
+    """The peer connected, and its PID namespace is not the jail's own -- a listener
+    in a namespace strictly *nested* under the jail's is refused too, strict
+    equality only, no `NS_GET_PARENT` walk (decision-0005 item 2).
+    """
+
+    PEER_LOOKUP_FAILED = "peer_lookup_failed"
+    """The peer connected, but its identity could not be established: any `OSError`
+    from `SO_PEERPIDFD`, the `ns/pid` readlink or the pidfd re-check (`EINVAL` from
+    a reaped peer, `EACCES` from a different-uid peer, `ESRCH`, anything else), and
+    the pid-mismatch case where the two reads disagree (decision-0005 item 5).
+    """
+
+    KERNEL_UNSUPPORTED = "kernel_unsupported"
+    """This kernel cannot identify a connected peer at all: no `SO_PEERPIDFD`
+    (Linux before 6.5). Readiness fails closed with this rather than falling back to
+    the bare `SO_PEERCRED` pid, which is not re-checkable and so reopens the
+    pid-reuse window (decision-0005 item 6).
+    """
+
+
+@dataclass(frozen=True)
+class ChannelReady:
+    """A channel is ready: this connect reached a socket whose listening process is
+    inside the jail's own PID namespace.
+
+    What that proves, exactly, and nothing more: a process in that namespace called
+    `listen()` on the socket that answered -- not that it is the process accepting,
+    not that it is still alive, not that it is the process the embedder meant
+    (decision-0005 item 4).
+    """
+
+
+@dataclass(frozen=True)
+class ChannelNotReady:
+    """Nothing is listening at the channel's path yet: the connect itself failed, so
+    no peer was reached to say anything about.
+
+    Distinct from `ChannelRefused`, and the difference is what a caller must act on:
+    this is a transient state, worth polling through until a deadline, while a
+    refusal is a terminal answer about this connection (decision-0005 item 1: a
+    consumer that reconnects must verify again).
+    """
+
+
+@dataclass(frozen=True)
+class ChannelRefused:
+    """A connection reached a peer, and readiness refused it: `reason` says why
+    (`ChannelReadinessRefusal`).
+
+    Returned, never raised (decision-0005 item 5) -- a refusal is an ordinary answer
+    to "is this channel ready", not an exceptional situation, and `await_channel_ready`
+    treats it as terminal for the connection it describes.
+    """
+
+    reason: ChannelReadinessRefusal
+
+
+class ChannelReadinessPort(Protocol):
+    """What a jail type's driver needs from infra to answer "is this channel ready",
+    verified rather than by path existence (decision-0002 item 2, decision-0005).
+
+    Matches `brig.infra.sockets.channel_ready`'s own shape one for one, the same way
+    `ProcessPort` mirrors `brig.infra.processes`: `presentation/api.py`'s default
+    wiring translates infra's own `ChannelRefusalReason` strings and its `ChannelReady`/
+    `ChannelNotReady` sentinels into this module's values, so no infra type crosses
+    this port.
+
+    Finding the jail's own PID namespace (`infra.sockets.jail_pid1_namespace`) is
+    deliberately **not** behind a port: it is jail setup, called once from
+    `create_bwrap_jail` directly, the same way `_check_state_dir_reachable` calls
+    `bwrap.covering_ancestor_bind` directly. Nothing needs to fake "which pid is
+    bwrap's child"; a test needs to fake "is this channel ready yet", which is this
+    port.
+    """
+
+    def ready(
+        self, path: str, jail_namespace_fd: int
+    ) -> ChannelReady | ChannelNotReady | ChannelRefused:
+        """Connect to `path` once, and report whether the process that called
+        `listen()` on the socket that answered is inside the jail's PID namespace --
+        the one `jail_namespace_fd`, an open fd on it, names.
+
+        `jail_namespace_fd` is the caller's own precondition (it comes from
+        `create_bwrap_jail`, and is closed exactly once, by `destroy_jail`): passing
+        one that is not open raises `OSError`. Every other outcome is one of the
+        three returned values, never a raise.
         """
         ...
 

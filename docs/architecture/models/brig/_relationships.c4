@@ -41,5 +41,6 @@ model {
     // presentation -> infra (rule 1: presentation knows infra)
     api -> processes 'binds the real implementation of its port from'
     bwrapDriver -> processes 'translates spawn failures from'
+    api -> sockets 'creates and removes the channel directory, and verifies channel readiness, through'
   }
 }

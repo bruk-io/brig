@@ -11,12 +11,22 @@ a driver never reads -- teardown signals and probes the process *group* -- so
 `ports.py`'s `ProcessPort.spawn` returns `_ProcessIdentity`, a `Protocol` presentation
 owns rather than infra's concrete dataclass, so this fake's own same-shaped
 `_SpawnedProcess` satisfies it structurally without ever importing it.
+
+`FakeChannelReadiness` (TASK-0001.27) obeys the same rule: its outcome types come
+from brig's public API, not from `brig.presentation.ports` or `brig.infra.sockets`.
 """
 
+import os
 import signal
 from dataclasses import dataclass, field
 
-from brig import ProcessUnknown, SupervisorDoneUnknown
+from brig import (
+    ChannelNotReady,
+    ChannelReady,
+    ChannelRefused,
+    ProcessUnknown,
+    SupervisorDoneUnknown,
+)
 
 
 @dataclass(frozen=True)
@@ -233,3 +243,54 @@ class FakeChannelDirectories:
     def remove(self, path: str) -> None:
         """Record `path`."""
         self.removed.append(path)
+
+
+@dataclass
+class FakeChannelReadiness:
+    """A fake of the world `brig.presentation.ports.ChannelReadinessPort` asks for
+    (TASK-0001.27), mirroring `FakeSupervisors`'s shape: `ready` records every
+    `(path, jail_namespace_fd)` it was asked about in `asked`, and hands back the
+    next scripted outcome from `outcomes`, repeating the last one once the script
+    runs out -- so a test states "not ready, not ready, then ready" as three values
+    and lets `await_channel_ready` poll through them.
+
+    Bookkeeping only: no real socket, no real `/proc`, no real bwrap, and no clock
+    of its own -- a fake never sleeps, so a caller polling it to its own deadline
+    sees exactly the scripted sequence however many attempts that takes.
+    """
+
+    outcomes: list[ChannelReady | ChannelNotReady | ChannelRefused] = field(
+        default_factory=lambda: [ChannelReady()]
+    )
+    asked: list[tuple[str, int]] = field(default_factory=list)
+
+    def ready(
+        self, path: str, jail_namespace_fd: int
+    ) -> ChannelReady | ChannelNotReady | ChannelRefused:
+        """Record `(path, jail_namespace_fd)`; hand back the next scripted outcome,
+        repeating the last one once the script is exhausted.
+        """
+        self.asked.append((path, jail_namespace_fd))
+        index = min(len(self.asked), len(self.outcomes)) - 1
+        return self.outcomes[index]
+
+
+def plant_fake_proc(root: str, entries: dict[int, tuple[int, str]]) -> None:
+    """Build a fake procfs tree under the real directory `root`, one entry per
+    `pid: (ppid, nspid)` in `entries`, so a `/proc`-scanning code path can be driven
+    with real files and real I/O rather than a patched `open` (TASK-0016's own
+    reasoning for `group_alive`'s `proc_root` parameter, applied to TASK-0001.27's
+    scan).
+
+    Each entry gets a `status` carrying the `PPid:` and `NSpid:` lines the scan
+    reads, and an `ns/pid` leaf for `os.open` to succeed on -- a real empty file
+    stands in for the nsfs inode, since nothing under test reads its contents, only
+    holds the fd open.
+    """
+    for pid, (ppid, nspid) in entries.items():
+        entry = os.path.join(root, str(pid))
+        os.makedirs(os.path.join(entry, "ns"), exist_ok=True)
+        with open(os.path.join(entry, "status"), "w") as handle:
+            handle.write(f"Name:\tfake\nPid:\t{pid}\nPPid:\t{ppid}\nNSpid:\t{nspid}\n")
+        with open(os.path.join(entry, "ns", "pid"), "w") as handle:
+            handle.write("")

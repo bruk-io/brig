@@ -9,8 +9,15 @@ decision-184/186).
 to the supervisor.
 """
 
+from pathlib import Path
+
 import pytest
-from tests.integration.fakes import FakeChannelDirectories, FakeProcesses, FakeSupervisors
+from tests.integration.fakes import (
+    FakeChannelDirectories,
+    FakeProcesses,
+    FakeSupervisors,
+    plant_fake_proc,
+)
 
 from brig import (
     Channel,
@@ -22,17 +29,25 @@ from brig import (
 )
 
 
-def test_a_reservation_reaches_the_command_through_argv_and_never_through_env() -> None:
+def test_a_reservation_reaches_the_command_through_argv_and_never_through_env(
+    tmp_path: Path,
+) -> None:
     """`reserve_channels` hands back the endpoint before anything starts; the caller
     writes it into `command`; the supervisor is started with it in argv, and neither
     the endpoint nor the bound path appears anywhere in the env it was handed -- even
     with an `EnvPolicy` that also allows the names a reservation would plausibly be
     smuggled in under (`BRIG_CHANNEL_CTL`, `CTL`), so such an injection would survive
     the scrub and reach the recorded env rather than being silently removed by it.
+
+    TASK-0001.27: a channel-declaring create also scans for the jail's PID namespace;
+    `proc_root` points that scan at a tree this test plants, so no real bwrap is
+    needed (the same seam `infra.processes.group_alive` carries).
     """
     directories = FakeChannelDirectories()
     processes = FakeProcesses()
     supervisors = FakeSupervisors()
+    proc_root = str(tmp_path / "proc")
+    plant_fake_proc(proc_root, {2000: (1, "2000"), 2001: (2000, "2001\t1")})
 
     reserved = reserve_channels((Channel("ctl"),), directories=directories)
     (reservation,) = reserved.reservations
@@ -48,6 +63,7 @@ def test_a_reservation_reaches_the_command_through_argv_and_never_through_env() 
         processes=processes,
         supervisors=supervisors,
         directories=directories,
+        proc_root=proc_root,
     )
     destroy_jail(jail, processes=processes, supervisors=supervisors, directories=directories)
 

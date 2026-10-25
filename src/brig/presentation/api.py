@@ -17,6 +17,7 @@ endpoint into the command's argv itself before `create_bwrap_jail` starts anythi
 """
 
 import functools
+import os
 import secrets
 import signal
 import sys
@@ -32,9 +33,10 @@ from brig.domain import operations
 from brig.domain.channels import (
     Channel,
     ChannelDirectory,
-    ChannelRefused,
+    Reservation,
     Reservations,
 )
+from brig.domain.channels import ChannelRefused as _ChannelNameRefused
 from brig.domain.effects import ExitCodeUnknown, GroupState, Process
 from brig.domain.jail_types import bwrap
 from brig.domain.policy.env import DENY_ALL, EnvPolicy
@@ -56,6 +58,7 @@ from brig.presentation.drivers.bwrap import run
 from brig.presentation.errors import (
     ChannelDirectoryUnreachable,
     ChannelNameRefused,
+    ChannelNamespaceNotFound,
     JailExitUnknown,
     JailTeardownFailed,
     JailWaitTimedOut,
@@ -64,6 +67,11 @@ from brig.presentation.errors import (
 )
 from brig.presentation.ports import (
     ChannelDirectoryPort,
+    ChannelNotReady,
+    ChannelReadinessPort,
+    ChannelReadinessRefusal,
+    ChannelReady,
+    ChannelRefused,
     ProcessPort,
     ProcessUnknown,
     SupervisorDoneUnknown,
@@ -110,6 +118,25 @@ long enough that the kernel has finished processing `SignalKind.KILL` on an ordi
 multi-process group well before this passes, short enough that a group the kill
 ladder genuinely cannot bring down does not hang `destroy_jail` for long before it
 raises `JailTeardownFailed`.
+"""
+
+_DEFAULT_CHANNEL_READY_TIMEOUT_S = 30.0
+"""How long `await_channel_ready` keeps polling when an embedder gives no
+`timeout_s` of its own (TASK-0001.27).
+
+The same number as `_DEFAULT_WAIT_TIMEOUT_S`, for the same reason and as an
+independent constant rather than a shared one: both bound "wait for the thing the
+jail runs to get going", one on the process finishing and one on its listener
+coming up, and a change to either should be a decision about that one.
+"""
+
+_CHANNEL_READY_POLL_INTERVAL_S = 0.05
+"""How long `await_channel_ready` waits between readiness attempts.
+
+A whole verified connect is a `connect` syscall plus several `/proc` reads, so this
+is deliberately not the ~10ms range `infra/processes.py` polls a single syscall at
+(`_POLL_INTERVAL_S` there) nor `infra/sockets.py`'s own scan interval -- at this
+layer the cost per attempt is the reason the number exists.
 """
 
 
@@ -195,23 +222,53 @@ def _check_channel_directory_reachable(policy: FsPolicy, state_dir: str, channel
     `state_dir` that `compile_supervisor_launch` appends after them (its argv order:
     policy binds, then the `state_dir` bind, then the channel bind), so the synthetic
     bind here is always the *last* ancestor of any path nested under `state_dir` and
-    always wins over whatever `policy` names on its own. If that winning ancestor is
-    writable, or is `state_dir` itself (host path `state_dir`), nothing is refused:
-    brig creates the channel directory's leaf inside `state_dir` before bwrap runs
-    (`create_bwrap_jail`), so bwrap never has to make a mountpoint in a read-only
-    mount -- no filesystem check is needed here, unlike `_check_state_dir_reachable`.
-    The one case brig cannot repair is a channel directory outside `state_dir` under
-    a read-only ancestor bind of `policy`'s own, whose host directory is not one brig
-    owns or writes to. This relies on `compile_supervisor_launch`'s argv order
-    holding; a reordering there would silently break this guard rather than loudly.
+    always wins over whatever `policy` names on its own, when `channel_dir` is
+    nested under `state_dir` at all (a custom `ChannelDirectoryPort` need not put it
+    there, `ports.py`'s own docstring).
+
+    A winning ancestor is safe -- nothing is refused -- when it is writable (TASK-
+    0001.22's own finding, unchanged by anything here), *or* when `channel_dir`'s
+    own real host-side location genuinely sits inside `ancestor.host_path`'s own
+    real directory tree: a `--bind`/`--ro-bind` mounts whatever that real directory
+    *currently* holds, live, not a snapshot taken at argv-compile time, so brig
+    creating the leaf there before bwrap runs (`create_bwrap_jail`) is enough,
+    regardless of whether the ancestor is read-only. `ancestor.host_path == state_dir`
+    (the synthetic bind above) is one instance of this -- the default allocator
+    always places `channel_dir` under `state_dir` -- but it is not the only one:
+    `WHOLE_HOST_READ_ONLY`'s own single `Bind(host_path="/", jail_path="/")` is a
+    real, unmapped ancestor of *every* absolute path, `channel_dir` included,
+    regardless of where a caller's own `ChannelDirectoryPort` puts it (measured as a
+    real `ChannelDirectoryUnreachable` false refusal on real bwrap before this
+    docstring's own correction: TASK-0001.27's own battery allocates its channel
+    directory under pytest's `tmp_path`, not `state_dir`, and the earlier version of
+    this function -- checking only for the exact `state_dir` self-bind -- refused it
+    under the plain default policy, which is exactly the shape every other jail in
+    this codebase already relies on to reach paths outside `state_dir` too).
+    `ancestor.host_path` is not treated as a *remapped* ancestor's own real
+    directory happening to already contain a coincidentally-matching path: that
+    would need the filesystem check `_check_state_dir_reachable` makes, which this
+    function still does not need, because a prefix match on `channel_dir` itself
+    (not a derived "host equivalent" path) is already answering the right question
+    here -- whether the leaf *will* appear through this exact ancestor once created,
+    not whether some other path already does.
+
+    The one case brig cannot repair is a channel directory under a read-only
+    ancestor bind whose own host-side directory tree does *not* actually contain
+    where `channel_dir` really lives -- a policy bind that remaps some other real
+    location onto an ancestor of `channel_dir`'s jail-side path. This relies on
+    `compile_supervisor_launch`'s argv order holding; a reordering there would
+    silently break this guard rather than loudly.
 
     Raises:
-        ChannelDirectoryUnreachable: the winning ancestor is read-only and its host
-            path is not `state_dir`.
+        ChannelDirectoryUnreachable: the winning ancestor is read-only and
+            `channel_dir`'s own real location does not sit inside its host-side
+            directory tree.
     """
     augmented = FsPolicy(binds=(*policy.binds, Bind(host_path=state_dir, jail_path=state_dir)))
     ancestor = bwrap.covering_ancestor_bind(augmented, channel_dir)
-    if ancestor is None or ancestor.writable or ancestor.host_path == state_dir:
+    if ancestor is None or ancestor.writable:
+        return
+    if channel_dir.startswith(ancestor.host_path.rstrip("/") + "/"):
         return
     raise ChannelDirectoryUnreachable(channel_dir, ancestor)
 
@@ -411,6 +468,49 @@ class _RealChannelDirectories:
 _channel_directories: ChannelDirectoryPort = _RealChannelDirectories()
 
 
+def _channel_ready(
+    path: str, jail_namespace_fd: int
+) -> ChannelReady | ChannelNotReady | ChannelRefused:
+    """Adapt infra's `sockets.channel_ready` to `ChannelReadinessPort`'s contract:
+    translate infra's own `ChannelRefusalReason` strings and its `ChannelReady`/
+    `ChannelNotReady` sentinels into this port's values -- the one place the real
+    wiring knows both (rule 13: no infra type crosses a port), the same move
+    `_reap` makes above for `ProcessPort`.
+
+    Classified by `isinstance`, one branch per infra sentinel, rather than by a
+    `match` on `_sockets`'s own class patterns: pypeeker's resolver cannot follow a
+    class reference reached through a module alias inside a pattern (measured --
+    every `case _sockets.X()` read as a zero-origin symbol and tripped
+    `over-exposed-module-symbol` on `X` itself, with a fix-it that would have made
+    this module's own public names private). The isinstance form resolves, and says
+    the same thing.
+
+    Exhaustive over infra's values by construction: `channel_ready` returns exactly
+    one of those three, and the `assert_never` keeps a fourth from being added
+    silently.
+    """
+    outcome = _sockets.channel_ready(path, jail_namespace_fd)
+    if isinstance(outcome, _sockets.ChannelReady):
+        return ChannelReady()
+    if isinstance(outcome, _sockets.ChannelNotReady):
+        return ChannelNotReady()
+    if isinstance(outcome, _sockets.ChannelRefused):
+        return ChannelRefused(ChannelReadinessRefusal(outcome.reason))
+    assert_never(outcome)
+
+
+@dataclass(frozen=True)
+class _RealChannelReadiness:
+    """The `ChannelReadinessPort` an embedder gets by default: data (one function),
+    the same shape `_RealChannelDirectories` gives `ChannelDirectoryPort`.
+    """
+
+    ready: Callable[[str, int], ChannelReady | ChannelNotReady | ChannelRefused] = _channel_ready
+
+
+_channel_readiness: ChannelReadinessPort = _RealChannelReadiness()
+
+
 def reserve_channels(
     channels: tuple[Channel, ...],
     *,
@@ -439,7 +539,7 @@ def reserve_channels(
     match _channels.reserve(channels, directory):
         case Reservations() as reservations:
             return reservations
-        case ChannelRefused(name=name):
+        case _ChannelNameRefused(name=name):
             raise ChannelNameRefused(name)
         case _ as unreachable:
             assert_never(unreachable)
@@ -474,12 +574,22 @@ class Jail:
     when the jail declares no channel, or for a `Jail` built directly. Set only
     once `directories.create` has actually returned, so a `Jail` that exists never
     names a directory its creation did not finish.
+
+    `channel_namespace_fd` is an open fd on this jail's own PID namespace
+    (TASK-0001.27), which `await_channel_ready` compares a channel peer against;
+    `destroy_jail` closes it. `None` when the jail declares no channel: no
+    namespace was ever looked up, and there is nothing to compare. The fd is the
+    *namespace*, not a pid -- decision-0005 item 1 holds the nsfs inode open for
+    the jail's whole lifetime so it cannot be recycled under a later check -- and
+    it is deliberately not the bwrap process's own namespace, which is the host's
+    (`infra/sockets.py`'s `jail_pid1_namespace` has the measurement).
     """
 
     process: Process
     supervisors: SupervisorPort
     supervisor_script: Path | None = None
     channel_directory: Path | None = None
+    channel_namespace_fd: int | None = None
 
 
 def create_bwrap_jail(
@@ -492,6 +602,7 @@ def create_bwrap_jail(
     processes: ProcessPort = _processes,
     supervisors: SupervisorPort | None = None,
     directories: ChannelDirectoryPort = _channel_directories,
+    proc_root: str = "/proc",
 ) -> Jail:
     """Compile `command` into a bwrap jail and start its supervisor running it,
     seeing exactly the paths `policy` names (TASK-0001.16) and exactly the
@@ -538,7 +649,9 @@ def create_bwrap_jail(
     `StateDirectoryUnreachable` should `policy` name a read-only ancestor bind
     of that state directory whose own source lacks its leaf (TASK-0001.22), and
     `ChannelDirectoryUnreachable` should it leave the channel directory
-    unreachable (TASK-0001.26). `directories.create`'s own `OSError` (a full or
+    unreachable (TASK-0001.26), while `_namespace_fd_for` (below) raises
+    `ChannelNamespaceNotFound` for a channel-declaring jail whose in-jail PID 1
+    never appears (TASK-0001.27). `directories.create`'s own `OSError` (a full or
     read-only disk) propagates as-is: it is a host filesystem failure with no
     typed counterpart in `presentation/errors.py` yet. Nothing else in this
     function's own body raises, so nothing else is in this docstring.
@@ -560,6 +673,23 @@ def create_bwrap_jail(
     `remove` on a path `mkdir` already made still finds something to delete),
     before the original exception propagates. `Jail.channel_directory` is set only
     once `create` returned.
+
+    TASK-0001.27: for a jail that declares a channel, the jail's own PID namespace
+    is looked up here too, once the supervisor has actually started (`process.pid`
+    -- the *outer* bwrap process -- is what the scan is rooted at), inside the same
+    `try` and for the same leak reason as `directories.create`: a
+    `ChannelNamespaceNotFound` must not leave the channel directory or the script
+    behind either -- and should anything later in the same `try` raise, the
+    namespace fd this call already opened is closed on the way out, so a failure
+    here leaks neither a directory, nor a script, nor an fd.
+    `infra.sockets.jail_pid1_namespace` is called directly rather than through a
+    port (`ChannelReadinessPort`'s own docstring: nothing needs to fake "which pid
+    is bwrap's child"). The resulting fd is carried as `Jail.channel_namespace_fd`.
+
+    `proc_root` is `/proc` for every production caller, and is passed straight
+    through to `_namespace_fd_for`: it exists so a test can plant a directory tree
+    of its own rather than need a real bwrap jail underneath the scan, the same
+    parameter `infra.processes.group_alive` already carries (TASK-0016).
     """
     if supervisors is not None:
         resolved_supervisors: SupervisorPort = supervisors
@@ -572,27 +702,133 @@ def create_bwrap_jail(
         else None
     )
     created: Path | None = None
+    namespace_fd: int | None = None
     try:
         if channel_directory is not None:
             directories.create(str(channel_directory))
             created = channel_directory
         plan = bwrap.compile_run(command, env=env)
         process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
+        if channel_directory is not None:
+            namespace_fd = _namespace_fd_for(process, proc_root)
     except BaseException:
         if supervisor_script is not None:
             supervisor_script.unlink(missing_ok=True)
-        if channel_directory is not None:
+        if created is not None:
             try:
-                directories.remove(str(channel_directory))
+                directories.remove(str(created))
             except OSError:
                 pass
+        if namespace_fd is not None:
+            _close_namespace_fd(namespace_fd)
         raise
     return Jail(
         process=process,
         supervisors=resolved_supervisors,
         supervisor_script=supervisor_script,
         channel_directory=created,
+        channel_namespace_fd=namespace_fd,
     )
+
+
+def _namespace_fd_for(process: Process, proc_root: str = "/proc") -> int:
+    """The open fd on the jail's own PID namespace, found under `process` -- the
+    *outer* bwrap process `create_bwrap_jail` just started -- or
+    `ChannelNamespaceNotFound` once `infra.sockets.JAIL_PID1_TIMEOUT_S` passes.
+
+    `infra.sockets.jail_pid1_namespace` is called with a `time.monotonic()`
+    deadline computed here, never with that module's own constant: infra takes a
+    deadline rather than computing one, the same split `infra.processes.
+    reap_deadline` already has (rule 2: the module that decides what "too long"
+    means is presentation's, the one that waits is infra's).
+
+    That deadline (and so the frozen duration it is built from) is what this
+    function adds to `create_bwrap_jail`'s own documented failure set, alongside
+    the `OSError` its `directories.create` call can already raise.
+
+    Raises:
+        ChannelNamespaceNotFound: nothing under `process.pid` looked like the jail's
+            in-jail PID 1 before the deadline passed.
+
+    `proc_root` is `/proc` for every production caller; it exists so a test can plant
+    a directory tree of its own instead of a real bwrap jail, the same parameter
+    `infra.processes.group_alive` already carries for the same reason (TASK-0016).
+    """
+    outcome = _sockets.jail_pid1_namespace(
+        process.pid, time.monotonic() + _sockets.JAIL_PID1_TIMEOUT_S, proc_root
+    )
+    if isinstance(outcome, _sockets.JailPid1NotFound):
+        raise ChannelNamespaceNotFound(process.pid)
+    return outcome
+
+
+def _close_namespace_fd(fd: int) -> None:
+    """Close `fd`, swallowing `OSError`, the same way every other teardown cleanup
+    in this module does: an already-closed fd is fine, and nothing that runs after
+    teardown's own verify should raise over it.
+    """
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def await_channel_ready(
+    jail: Jail,
+    reservation: Reservation,
+    *,
+    timeout_s: float = _DEFAULT_CHANNEL_READY_TIMEOUT_S,
+    readiness: ChannelReadinessPort = _channel_readiness,
+) -> ChannelReady | ChannelNotReady | ChannelRefused:
+    """Poll until `reservation`'s channel in `jail` reads ready or refused, or
+    `timeout_s` passes -- and report which (decision-0002 item 2, decision-0005).
+
+    Each iteration asks `readiness.ready(reservation.bound_path,
+    jail.channel_namespace_fd)`: a *verified* connect, never a path check, so what
+    comes back is a statement about a peer that actually answered rather than about
+    a file that happens to exist (TASK-0001.24's probe measured what the path-based
+    alternative accepts -- a real socket inode with somebody else listening on it).
+
+    Two of the three outcomes are terminal, and the third is not. `ChannelReady` is
+    the answer being waited for; `ChannelRefused` is a security answer about *this*
+    connection and is returned at once, never retried -- decision-0005 item 1:
+    readiness is a property of that one connection, so a consumer that reconnects
+    must verify again, which is the caller's decision to make and not this loop's.
+    `ChannelNotReady` is the only transient one; once `timeout_s` passes with
+    nothing else seen, the last one is what this returns.
+
+    `timeout_s` defaults to `_DEFAULT_CHANNEL_READY_TIMEOUT_S`; the poll interval
+    balances a peer that is about to be ready against syscall cost. The deadline is
+    enforced between attempts, so one attempt that blocks does so for as long as the
+    connect itself takes -- a Unix socket connect is not something this layer can
+    bound from outside.
+
+    `jail.channel_namespace_fd` is `None` for a jail that declared no channel, and
+    that is a caller precondition violation rather than an outcome: there is no
+    namespace to verify against, and the reservation being asked about cannot have
+    come from that jail's `reserve_channels` call. Checked explicitly, rather than
+    left to whatever `readiness.ready` would do with a `None` fd (a real
+    `ChannelReadinessPort` would format it into a path string and read a confusing
+    `FileNotFoundError` back) -- mypy strict would refuse this call unchecked too,
+    since the port's own contract takes `int`, never `int | None`.
+
+    Raises:
+        ValueError: `jail.channel_namespace_fd` is `None`.
+    """
+    if jail.channel_namespace_fd is None:
+        raise ValueError(
+            "jail declared no channel: await_channel_ready has no namespace to "
+            "verify a peer against"
+        )
+    deadline = time.monotonic() + timeout_s
+    while True:
+        outcome = readiness.ready(reservation.bound_path, jail.channel_namespace_fd)
+        if not isinstance(outcome, ChannelNotReady):
+            return outcome
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return outcome
+        time.sleep(min(_CHANNEL_READY_POLL_INTERVAL_S, remaining))
 
 
 def run_jail(
@@ -691,6 +927,12 @@ def destroy_jail(
     ever ran, so a jail destroyed before it ever ran is cleaned up by this one call
     site, and the sockets the jailed command created inside are removed with it.
 
+    Closes `jail.channel_namespace_fd` too, if it names one (TASK-0001.27): the fd
+    `create_bwrap_jail` opened on the jail's own PID namespace, held open only so a
+    readiness check had something stable to compare against, and needed by nothing
+    once this jail is gone (`_close_namespace_fd` swallows `OSError`, the same as
+    the two removals above).
+
     Raises:
         JailTeardownFailed: the kill ladder's last verify still found the group alive.
     """
@@ -710,5 +952,7 @@ def destroy_jail(
             directories.remove(str(jail.channel_directory))
         except OSError:
             pass
+    if jail.channel_namespace_fd is not None:
+        _close_namespace_fd(jail.channel_namespace_fd)
     if state is not GroupState.GONE:
         raise JailTeardownFailed(jail.process)

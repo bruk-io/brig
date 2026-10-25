@@ -11,7 +11,7 @@ views {
       include effects, operations, teardown, plan, bwrapJailType
     }
     group 'infra' {
-      include processes
+      include processes, sockets
     }
     group 'presentation' {
       include api, errors, ports, bwrapDriver

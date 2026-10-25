@@ -150,6 +150,36 @@ class JailTeardownFailed(Exception):
         self.process = process
 
 
+class ChannelNamespaceNotFound(Exception):
+    """Raised when a jail that declared channels started, but no in-jail PID 1
+    could be found under the process `create_bwrap_jail` started, before
+    `infra.sockets.JAIL_PID1_TIMEOUT_S` passed (TASK-0001.27).
+
+    A creation failure, not a readiness result: readiness compares a peer against
+    the jail's own PID namespace (decision-0005 item 1), so a jail that cannot
+    offer one cannot answer "is this channel ready" at all, and the three
+    per-poll outcomes (`ChannelReady`/`ChannelNotReady`/`ChannelRefused`) would
+    have nothing to say about it.
+
+    Should not happen with `--as-pid-1`, which makes the jailed program PID 1
+    inside its own namespace by construction (`domain/jail_types/bwrap.py`'s own
+    docstring), and TASK-0001.24 measured bwrap forking into exactly that shape on
+    every run -- but nothing proves it cannot, so it is refused loudly here rather
+    than hanging `create_bwrap_jail` past its own deadline.
+
+    Args:
+        bwrap_pid: The outer bwrap process `create_bwrap_jail` started, whose
+            `/proc` children were scanned for the jail's own PID 1.
+    """
+
+    def __init__(self, bwrap_pid: int) -> None:
+        super().__init__(
+            f"no in-jail PID 1 found under the jail's own bwrap process {bwrap_pid}: "
+            f"readiness has no PID namespace to compare a peer against"
+        )
+        self.bwrap_pid = bwrap_pid
+
+
 class ChannelNameRefused(Exception):
     """Raised by `reserve_channels` when a declared channel's name would not name
     exactly one file inside the jail's channel directory -- empty, `.` or `..`,
