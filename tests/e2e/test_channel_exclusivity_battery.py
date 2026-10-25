@@ -73,7 +73,6 @@ from brig import (
     destroy_jail,
     grade,
     reserve_channels,
-    run_jail,
     writable_shared_paths,
 )
 from brig.infra import sockets
@@ -96,7 +95,7 @@ is never a guess.
 """
 
 _JAILED_PROGRAM = """
-import sys
+import sys, time
 
 channel_path, channel_content, extra_path, extra_content = sys.argv[1:5]
 
@@ -107,13 +106,31 @@ if extra_path != "-":  # "-" means this jail declares no extra writable bind
     with open(extra_path, "w") as handle:
         handle.write(extra_content)
 
-sys.exit(0)
+time.sleep(3600)
 """
 """The jailed command: write the control string inside its own channel directory, then
 -- only when the run actually plants one -- write the leak string through the extra
-bind. Exits 0 either way, so a probe that could not write at all is distinguishable
-from one that wrote exactly what it was asked to (`run_jail` returns the exit code, and
-the file contents on the host are the real measurement).
+bind, then sleep rather than exit.
+
+Measured, not a style choice: the real command exiting is what lets its own
+supervisor -- `program.py`, the jail's in-jail PID 1, decision-0002's own shape --
+exit too, immediately after (its own `_main` returns right after emitting the `done`
+event over the wire, with nothing left for it to wait on). `create_bwrap_jail` has
+already called `infra.sockets.jail_pid1_namespace` to find and hold that same PID 1's
+own namespace by the time this process could have written anything at all -- but a
+command fast enough to write two small files and exit (measured: real, on
+`ubuntu-latest`'s own unprivileged userns runner, never reproduced in a slower,
+emulated container) can finish, taking its own supervisor down with it, before that
+host-side `/proc` scan ever wins the race to find it -- `ChannelNamespaceNotFound`,
+deterministically, no matter how long the scan's own deadline is, since the process
+it is looking for is not merely slow to appear, it is already gone. Every other
+real-jail battery in this suite already avoids this by construction (a listener loop,
+a `time.sleep`, a fork-and-reap command that never finishes on its own) -- this one
+needs to avoid it the same way now that it declares channels and goes through the
+same `create_bwrap_jail` call that scan lives in. The underlying race is
+TASK-0001.27's own design gap, filed separately (its own board task) rather than
+"fixed" by a longer timeout here, which this task's own CI run already measured does
+not help: the process is gone, not merely late.
 """
 
 
@@ -181,6 +198,26 @@ def _jail_command(channel_path: Path, extra_path: Path | None) -> tuple[str, ...
     )
 
 
+def _wait_for(path: Path, *, timeout_s: float = 10.0) -> None:
+    """Poll until `path` exists, or raise once `timeout_s` passes.
+
+    The jailed command never exits on its own (`_JAILED_PROGRAM`'s own docstring), so
+    there is no `run_jail` wait to synchronize on here -- this is the substitute: the
+    write this function waits for happens, in the jailed program's own source, before
+    the `time.sleep` that keeps the supervisor alive for `_namespace_fd_for`'s scan,
+    so a file that exists at all means the write already landed, never a partial one
+    this function would need to guard against separately.
+
+    Raises:
+        TimeoutError: `path` never appeared before `timeout_s` passed.
+    """
+    deadline = time.monotonic() + timeout_s
+    while not path.exists():
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"{path} never appeared")
+        time.sleep(0.05)
+
+
 def _control_path(reserved: Reservations) -> Path:
     """Where a jailed command writes its control string: a file *inside* the channel
     directory the jail declared -- the one path the claim says is legitimately shared
@@ -214,17 +251,18 @@ def test_a_declared_channel_is_the_only_shared_writable_path_and_that_is_measure
         directories=run.directories(),
     )
     # The control's own file, written by the jailed command into the directory the
-    # claim says is legitimately shared. Read before `destroy_jail`: that call removes
-    # the whole channel directory (TASK-0001.26), so reading after would report
-    # nothing there for a reason that has nothing to do with this claim.
-    exit_code = run_jail(jail)
+    # claim says is legitimately shared. Waited for, not `run_jail`-synchronized --
+    # the command never exits on its own (`_JAILED_PROGRAM`'s own docstring) -- and
+    # read before `destroy_jail`: that call removes the whole channel directory
+    # (TASK-0001.26), so reading after would report nothing there for a reason that
+    # has nothing to do with this claim.
+    _wait_for(control_path)
     written = control_path.read_text()
     destroy_jail(jail, directories=run.directories())
 
     shared = writable_shared_paths(policy, state_dir, channels)
     declared = declared_channel_paths(channels)
 
-    assert exit_code == 0
     # The write reached the host, through the one path the claim says is shared.
     assert written == _PLANTED_CHANNEL_CONTENT
 
@@ -270,10 +308,12 @@ def test_an_undeclared_writable_bind_is_a_real_leak_and_grades_violated(run: _Ru
         channels=reserved,
         directories=run.directories(),
     )
-    exit_code = run_jail(jail)
+    # Waited for, not `run_jail`-synchronized -- the command never exits on its own.
     # Read before `destroy_jail` for the control's own reason (the channel directory is
     # removed there); the extra bind's directory survives that call, but is read here
     # too, so both reads happen at the same point in the jail's life.
+    _wait_for(control_path)
+    _wait_for(leak_path)
     control_written = control_path.read_text()
     leak_written = leak_path.read_text()
     destroy_jail(jail, directories=run.directories())
@@ -281,7 +321,6 @@ def test_an_undeclared_writable_bind_is_a_real_leak_and_grades_violated(run: _Ru
     shared = writable_shared_paths(policy, state_dir, channels)
     declared = declared_channel_paths(channels)
 
-    assert exit_code == 0
     # Both writes reached the host: the control inside the declared channel directory,
     # and the leak through the extra bind -- which is what makes this a real,
     # exploitable leak rather than a name in a policy.
