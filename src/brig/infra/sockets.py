@@ -46,9 +46,23 @@ than the single syscall `processes` polls with, and the window it waits on is wi
 (bwrap forking into a new PID namespace, not a signal landing).
 """
 
-JAIL_PID1_TIMEOUT_S = 5.0
+JAIL_PID1_TIMEOUT_S = 15.0
 """How long `jail_pid1_namespace` keeps looking for the jail's in-jail PID 1 before
 giving up.
+
+Raised from `5.0` (2026-10-25): TASK-0001.28's own battery measured two real,
+deterministic `ChannelNamespaceNotFound` failures against real bwrap on
+`ubuntu-latest`'s own unprivileged userns CI runner, both after the full original
+5-second deadline passed with nothing found -- reproduced on a rerun of the same
+job, never reproduced in a `--privileged` Docker container on different hardware
+(`brig-probe-amd64:latest`), and never hit by this same codepath's other real-jail
+batteries (`test_channel_readiness_battery.py`) in the identical CI run. The
+supervisor itself (program.py, the jail's own PID 1) does not exit early regardless
+of how fast the real command it forks finishes -- it stays running, reaping, until
+torn down -- so the slow part this measured is bwrap's own unshare/mount/exec
+startup under that specific unprivileged-userns runner, not anything about which
+command a caller asks it to run. Tripled rather than nudged, since the two
+measured failures gave no data on how much past 5 seconds it actually needed.
 
 TASK-0001.24's own probe as provenance, not a rounder number picked here: its
 `jail_pid_ns` helper used `deadline = time.monotonic() + 5`, measured sufficient on
