@@ -44,6 +44,40 @@ class StateDirectoryUnreachable(Exception):
         self.ancestor = ancestor
 
 
+class ChannelDirectoryUnreachable(Exception):
+    """Raised when a caller's own `FsPolicy` names a read-only ancestor bind of a
+    jail's per-jail channel directory that brig itself cannot repair by creating the
+    directory's leaf (TASK-0001.26) -- refused here, before anything starts or is
+    created, in place of letting this surface as `JailExitUnknown` once bwrap cannot
+    create the channel bind's mountpoint (the same `Can't mkdir ... Read-only file
+    system` shape `StateDirectoryUnreachable` documents).
+
+    `presentation/api.py`'s `_check_channel_directory_reachable` is the one place
+    this is raised: the same `covering_ancestor_bind` guard as
+    `_check_state_dir_reachable`, generalised by handing it `policy`'s binds plus
+    the unconditional `state_dir` bind `compile_supervisor_launch` adds. A channel
+    directory beneath `state_dir` is therefore never refused (brig creates its leaf
+    inside `state_dir` itself, which it owns); one outside it, under a read-only
+    ancestor bind of the policy's, is.
+
+    Args:
+        channel_dir: The channel directory's host path that the jail's policy would
+            leave unreachable.
+        ancestor: The bind whose read-only ancestor mount blocks it.
+    """
+
+    def __init__(self, channel_dir: str, ancestor: Bind) -> None:
+        super().__init__(
+            f"policy names a read-only ancestor bind of the channel directory "
+            f"({channel_dir!r}) at {ancestor.jail_path!r} (sourced from "
+            f"{ancestor.host_path!r}), which brig cannot create the directory's "
+            f"leaf in -- make that bind writable, or put the channel directory "
+            f"under brig's own state directory"
+        )
+        self.channel_dir = channel_dir
+        self.ancestor = ancestor
+
+
 class StateDirectoryInvalid(Exception):
     """Raised when `BRIG_HOME` names a value brig's own state directory cannot
     use (`infra/state_dir.py`'s `resolve`) -- translated here from infra's own

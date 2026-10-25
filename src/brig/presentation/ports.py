@@ -197,16 +197,36 @@ class SupervisorPort(Protocol):
 
 
 class ChannelDirectoryPort(Protocol):
-    """Where a jail's per-jail channel directory goes (TASK-0001.25): the one thing
-    `reserve_channels` needs from the world before it can derive any reservation.
+    """Where a jail's per-jail channel directory goes (TASK-0001.25), and its
+    lifecycle on the world `create_bwrap_jail`/`destroy_jail` actually run against
+    (TASK-0001.26).
 
     `presentation/api.py`'s default names a fresh path under brig's own state
-    directory and creates nothing; creating, privatising and removing the directory
-    is TASK-0001.26's (`infra/sockets.py`), which grows this port.
+    directory (`allocate`) and creates/removes it for real through `infra/sockets.py`;
+    a fake records all three calls instead of touching anything.
     """
 
     def allocate(self) -> str:
         """Name a new per-jail channel directory's host path, distinct from every
         other jail's.
+
+        Names only -- creates nothing (`reserve_channels`'s own docstring: a refused
+        channel name must never have created anything to clean up).
+        """
+        ...
+
+    def create(self, path: str) -> None:
+        """Make `path` exist, private to the owning user, and every missing parent
+        of it -- idempotent, a no-op where it already exists.
+        """
+        ...
+
+    def remove(self, path: str) -> None:
+        """Remove `path` and everything written inside it.
+
+        Raises `OSError` (`FileNotFoundError` where `path` is already gone) rather
+        than swallowing it: the caller decides, the same split as the supervisor
+        script's own `unlink` -- `destroy_jail` and `create_bwrap_jail`'s cleanup
+        swallow it, since an already-gone channel directory is fine there.
         """
         ...

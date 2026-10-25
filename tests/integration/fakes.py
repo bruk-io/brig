@@ -165,20 +165,31 @@ class FakeSupervisors:
     `exit_code`, `None` while `expires` is `True` (a test's way to arrange a
     deadline-bound wait that times out rather than resolving), or
     `SupervisorDoneUnknown` while `done_unknown` is `True` (a test's way to arrange
-    the supervisor's report being gone for good).
+    the supervisor's report being gone for good). `fail_start`, while `True`, has
+    `start` raise `OSError` after recording the call -- the fakes-only way to arrange
+    `create_bwrap_jail` failing once everything before the start already happened
+    (`presentation/drivers/bwrap.py`'s `run` turns it into `JailSpawnFailed`).
     """
 
     exit_code: int = 0
     expires: bool = False
     done_unknown: bool = False
+    fail_start: bool = False
     next_pid: int = 2000
     started: list[tuple[tuple[str, ...], tuple[tuple[str, str], ...]]] = field(default_factory=list)
     awaited: list[tuple[int, float]] = field(default_factory=list)
     closed: list[int] = field(default_factory=list)
 
     def start(self, argv: tuple[str, ...], env: tuple[tuple[str, str], ...]) -> _SupervisorIdentity:
-        """Record `(argv, env)` and hand back a fabricated supervisor identity."""
+        """Record `(argv, env)`; raise `OSError` while `fail_start`, else hand back a
+        fabricated supervisor identity.
+
+        Raises:
+            OSError: `fail_start` is set.
+        """
         self.started.append((argv, env))
+        if self.fail_start:
+            raise OSError("fake supervisor refused to start")
         pid = self.next_pid
         self.next_pid += 1
         return _SupervisorIdentity(pid=pid, pgid=pid)
@@ -200,14 +211,25 @@ class FakeSupervisors:
 @dataclass
 class FakeChannelDirectories:
     """A fake of the world `brig.presentation.ports.ChannelDirectoryPort` asks for
-    (TASK-0001.25): `allocate` hands back `path` and counts itself in `allocated`,
-    never touching the filesystem.
+    (TASK-0001.25, TASK-0001.26): `allocate` hands back `path` and counts itself in
+    `allocated`; `create` and `remove` record the path in `created`/`removed`.
+    Bookkeeping only -- never touches the filesystem.
     """
 
     path: str = "/fake/state/channels/0001"
     allocated: int = 0
+    created: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
 
     def allocate(self) -> str:
         """Count the call and hand back `path`."""
         self.allocated += 1
         return self.path
+
+    def create(self, path: str) -> None:
+        """Record `path`."""
+        self.created.append(path)
+
+    def remove(self, path: str) -> None:
+        """Record `path`."""
+        self.removed.append(path)

@@ -38,7 +38,8 @@ from brig.domain.channels import (
 from brig.domain.effects import ExitCodeUnknown, GroupState, Process
 from brig.domain.jail_types import bwrap
 from brig.domain.policy.env import DENY_ALL, EnvPolicy
-from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, FsPolicy
+from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, Bind, FsPolicy
+from brig.infra import sockets as _sockets
 from brig.infra import state_dir as _state_dir_mod
 from brig.infra.processes import ProcessUnknown as _InfraProcessUnknown
 from brig.infra.processes import SpawnedProcess
@@ -53,6 +54,7 @@ from brig.infra.processes import spawn as _spawn
 from brig.infra.supervisor import assemble, link
 from brig.presentation.drivers.bwrap import run
 from brig.presentation.errors import (
+    ChannelDirectoryUnreachable,
     ChannelNameRefused,
     JailExitUnknown,
     JailTeardownFailed,
@@ -181,6 +183,37 @@ def _check_state_dir_reachable(policy: FsPolicy, state_dir: str) -> None:
     host_equivalent = ancestor.host_path.rstrip("/") + suffix
     if not Path(host_equivalent).is_dir():
         raise StateDirectoryUnreachable(state_dir, ancestor)
+
+
+def _check_channel_directory_reachable(policy: FsPolicy, state_dir: str, channel_dir: str) -> None:
+    """Refuse, before anything starts or is created, a `policy` that would leave a
+    jail's per-jail channel directory unreachable (TASK-0001.26): the same guard as
+    `_check_state_dir_reachable`, generalised rather than copied -- it calls the
+    same, unchanged `bwrap.covering_ancestor_bind` on a richer input.
+
+    That input is `policy`'s binds plus the unconditional read-only bind of
+    `state_dir` that `compile_supervisor_launch` appends after them (its argv order:
+    policy binds, then the `state_dir` bind, then the channel bind), so the synthetic
+    bind here is always the *last* ancestor of any path nested under `state_dir` and
+    always wins over whatever `policy` names on its own. If that winning ancestor is
+    writable, or is `state_dir` itself (host path `state_dir`), nothing is refused:
+    brig creates the channel directory's leaf inside `state_dir` before bwrap runs
+    (`create_bwrap_jail`), so bwrap never has to make a mountpoint in a read-only
+    mount -- no filesystem check is needed here, unlike `_check_state_dir_reachable`.
+    The one case brig cannot repair is a channel directory outside `state_dir` under
+    a read-only ancestor bind of `policy`'s own, whose host directory is not one brig
+    owns or writes to. This relies on `compile_supervisor_launch`'s argv order
+    holding; a reordering there would silently break this guard rather than loudly.
+
+    Raises:
+        ChannelDirectoryUnreachable: the winning ancestor is read-only and its host
+            path is not `state_dir`.
+    """
+    augmented = FsPolicy(binds=(*policy.binds, Bind(host_path=state_dir, jail_path=state_dir)))
+    ancestor = bwrap.covering_ancestor_bind(augmented, channel_dir)
+    if ancestor is None or ancestor.writable or ancestor.host_path == state_dir:
+        return
+    raise ChannelDirectoryUnreachable(channel_dir, ancestor)
 
 
 def _supervisor_path() -> tuple[str, ...]:
@@ -338,9 +371,15 @@ def _supervisors_for(
 
     `channels` (TASK-0001.25) reaches `compile_supervisor_launch` unchanged, which
     binds its channel directory writable when it declares any channel.
+    `_check_channel_directory_reachable` (TASK-0001.26) runs right after the
+    state-directory check, and only when `channels` declares one: it raises
+    `ChannelDirectoryUnreachable` before the script write below, so nothing is
+    left behind to clean up.
     """
     state_dir = _resolved_state_dir()
     _check_state_dir_reachable(policy, state_dir)
+    if channels is not None and channels.reservations:
+        _check_channel_directory_reachable(policy, state_dir, channels.directory.host_path)
     supervisor_path = _supervisor_path()
     supervisor_argv = bwrap.compile_supervisor_launch(
         supervisor_path, state_dir=state_dir, policy=policy, channels=channels
@@ -351,8 +390,8 @@ def _supervisors_for(
 def _allocate_channel_directory() -> str:
     """Name a fresh per-jail channel directory under brig's own state directory
     (`_resolved_state_dir`), never `/tmp` -- a random component per call, so no two
-    jails share one. Creates nothing: TASK-0001.26 (`infra/sockets.py`) creates,
-    privatises and removes it. `_resolved_state_dir` raises `StateDirectoryInvalid`
+    jails share one. Creates nothing -- `_RealChannelDirectories.create` does, later,
+    in `create_bwrap_jail` (TASK-0001.26). `_resolved_state_dir` raises `StateDirectoryInvalid`
     should `BRIG_HOME` name a value brig cannot use.
     """
     return f"{_resolved_state_dir()}/channels/{secrets.token_hex(8)}"
@@ -365,6 +404,8 @@ class _RealChannelDirectories:
     """
 
     allocate: Callable[[], str] = _allocate_channel_directory
+    create: Callable[[str], None] = _sockets.create
+    remove: Callable[[str], None] = _sockets.remove
 
 
 _channel_directories: ChannelDirectoryPort = _RealChannelDirectories()
@@ -427,11 +468,18 @@ class Jail:
     `supervisors` of its own (`create_bwrap_jail` never wrote a file for it in the
     first place) or built directly, outside `create_bwrap_jail`, the same as the
     gateway test above.
+
+    `channel_directory` is the per-jail channel directory `create_bwrap_jail`
+    created for this jail (TASK-0001.26), for `destroy_jail` to remove -- `None`
+    when the jail declares no channel, or for a `Jail` built directly. Set only
+    once `directories.create` has actually returned, so a `Jail` that exists never
+    names a directory its creation did not finish.
     """
 
     process: Process
     supervisors: SupervisorPort
     supervisor_script: Path | None = None
+    channel_directory: Path | None = None
 
 
 def create_bwrap_jail(
@@ -443,6 +491,7 @@ def create_bwrap_jail(
     channels: Reservations | None = None,
     processes: ProcessPort = _processes,
     supervisors: SupervisorPort | None = None,
+    directories: ChannelDirectoryPort = _channel_directories,
 ) -> Jail:
     """Compile `command` into a bwrap jail and start its supervisor running it,
     seeing exactly the paths `policy` names (TASK-0001.16) and exactly the
@@ -467,7 +516,11 @@ def create_bwrap_jail(
     channel. It reaches the jailed command only through `command` -- the caller has
     already written each endpoint there -- and never through `env`, which this
     function neither reads nor extends with it (old SPEC decision-184/186). The
-    directory itself is not created here yet (TASK-0001.26).
+    directory itself is created here (TASK-0001.26), through `directories`, when
+    `channels` declares any channel: private to the owning user, under brig's own
+    state directory, before the jail starts (bwrap would otherwise fail to make
+    its mountpoint beneath the read-only state-directory bind). It is carried on
+    the returned `Jail` as `channel_directory` for `destroy_jail` to remove.
 
     `supervisors`, left unset, is resolved from `policy` (`_supervisors_for`),
     which also writes this jail's own fresh supervisor script file and hands
@@ -483,9 +536,12 @@ def create_bwrap_jail(
     (`_resolved_state_dir`, above) raises `StateDirectoryInvalid` should
     `BRIG_HOME` name a value it cannot use. `_supervisors_for` raises
     `StateDirectoryUnreachable` should `policy` name a read-only ancestor bind
-    of that state directory whose own source lacks its leaf (TASK-0001.22).
-    Nothing else in this function's own body raises, so nothing else is in this
-    docstring.
+    of that state directory whose own source lacks its leaf (TASK-0001.22), and
+    `ChannelDirectoryUnreachable` should it leave the channel directory
+    unreachable (TASK-0001.26). `directories.create`'s own `OSError` (a full or
+    read-only disk) propagates as-is: it is a host filesystem failure with no
+    typed counterpart in `presentation/errors.py` yet. Nothing else in this
+    function's own body raises, so nothing else is in this docstring.
 
     TASK-0012: once `_supervisors_for` has written `supervisor_script`, no `Jail`
     exists yet to carry that path to a later `destroy_jail` call -- this is the
@@ -495,21 +551,47 @@ def create_bwrap_jail(
     is never a second leak to rediscover), the just-written file is deleted here
     before the exception propagates unchanged: a side effect alongside the raise,
     never a replacement for it.
+
+    TASK-0001.26: `directories.create` runs inside that same `try`, not before it,
+    because it can itself fail partway (`mkdir` succeeds, `chmod` does not) -- a
+    directory created outside the `try` would leak exactly like the script did.
+    The `except` therefore removes the channel directory too, swallowing `OSError`
+    the same way `destroy_jail` does (and safe when `create` never finished:
+    `remove` on a path `mkdir` already made still finds something to delete),
+    before the original exception propagates. `Jail.channel_directory` is set only
+    once `create` returned.
     """
     if supervisors is not None:
         resolved_supervisors: SupervisorPort = supervisors
         supervisor_script: Path | None = None
     else:
         resolved_supervisors, supervisor_script = _supervisors_for(policy, channels)
-    plan = bwrap.compile_run(command, env=env)
+    channel_directory = (
+        Path(channels.directory.host_path)
+        if channels is not None and channels.reservations
+        else None
+    )
+    created: Path | None = None
     try:
+        if channel_directory is not None:
+            directories.create(str(channel_directory))
+            created = channel_directory
+        plan = bwrap.compile_run(command, env=env)
         process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
     except BaseException:
         if supervisor_script is not None:
             supervisor_script.unlink(missing_ok=True)
+        if channel_directory is not None:
+            try:
+                directories.remove(str(channel_directory))
+            except OSError:
+                pass
         raise
     return Jail(
-        process=process, supervisors=resolved_supervisors, supervisor_script=supervisor_script
+        process=process,
+        supervisors=resolved_supervisors,
+        supervisor_script=supervisor_script,
+        channel_directory=created,
     )
 
 
@@ -561,6 +643,7 @@ def destroy_jail(
     kill_grace_s: float = _DEFAULT_KILL_GRACE_S,
     processes: ProcessPort = _processes,
     supervisors: SupervisorPort | None = None,
+    directories: ChannelDirectoryPort = _channel_directories,
 ) -> None:
     """Tear `jail` down, verified: no process of its group is left when this returns.
 
@@ -600,6 +683,14 @@ def destroy_jail(
     verify -- the same way `Supervisor.close` swallows a close failure during
     teardown (`infra/supervisor/link.py`'s own docstring).
 
+    Removes `jail.channel_directory` the same way, if it names one (TASK-0001.26):
+    after the script, whether or not teardown found `GroupState.GONE`, swallowing
+    `OSError` for the same reasons (an already-gone directory, or a repeated
+    `destroy_jail`, is fine; nothing escapes a teardown that already ran its own
+    verify). `channel_directory` rides on `Jail` regardless of whether `run_jail`
+    ever ran, so a jail destroyed before it ever ran is cleaned up by this one call
+    site, and the sockets the jailed command created inside are removed with it.
+
     Raises:
         JailTeardownFailed: the kill ladder's last verify still found the group alive.
     """
@@ -612,6 +703,11 @@ def destroy_jail(
     if jail.supervisor_script is not None:
         try:
             jail.supervisor_script.unlink(missing_ok=True)
+        except OSError:
+            pass
+    if jail.channel_directory is not None:
+        try:
+            directories.remove(str(jail.channel_directory))
         except OSError:
             pass
     if state is not GroupState.GONE:

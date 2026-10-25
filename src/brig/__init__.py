@@ -23,6 +23,7 @@ from brig.presentation.api import (
     run_jail,
 )
 from brig.presentation.errors import (
+    ChannelDirectoryUnreachable,
     ChannelNameRefused,
     JailExitUnknown,
     JailSpawnFailed,
@@ -39,6 +40,7 @@ __all__ = [
     "Channel",
     "ChannelDirectory",
     "ChannelDirectoryPort",
+    "ChannelDirectoryUnreachable",
     "ChannelNameRefused",
     "Claim",
     "DENY_ALL",
