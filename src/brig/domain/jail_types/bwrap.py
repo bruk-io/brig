@@ -78,9 +78,22 @@ contains ``state_dir``'s leaf) this module's own purity rule (rule 2) keeps
 out of here, and raises ``StateDirectoryUnreachable`` before bwrap is ever
 invoked, rather than letting this surface as ``JailExitUnknown`` ->
 ``JailTeardownFailed``.
+
+TASK-0001.28: this module also *states* the `channel_exclusivity` claim (old SPEC law 9:
+nothing crosses the boundary anonymously) as `CHANNEL_EXCLUSIVITY_CLAIM` below, together with
+the two pure functions that say what the claim is about --
+`writable_shared_paths`, the enumeration AC#2 asks for, and
+`declared_channel_paths`, what that enumeration is compared against. Nothing here grades
+anything (decision-0001 rule 11): `domain/grades.py`'s `grade` is the one producer of a
+report, fed by `Evidence` an e2e battery measured. The claim lives here rather than in a
+battery because AC#1 says bwrap's compile is what states it -- the same place
+`compile_supervisor_launch` already states every other property of the jail it builds --
+and because `domain/claims.py`'s own docstring asks a jail type's compile to be the
+source of its own claims.
 """
 
 from brig.domain.channels import Reservations
+from brig.domain.claims import Claim
 from brig.domain.plan import Plan
 from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, Bind, FsPolicy
 
@@ -260,6 +273,150 @@ def covering_ancestor_bind(policy: FsPolicy, state_dir: str) -> Bind | None:
         if bind.jail_path != state_dir and state_dir.startswith(bind.jail_path.rstrip("/") + "/")
     )
     return ancestor_binds[-1] if ancestor_binds else None
+
+
+CHANNEL_EXCLUSIVITY_CLAIM = Claim(
+    name="channel_exclusivity",
+    description=(
+        "the only paths this jail can write that the host can also reach are the "
+        "channels it declared: every writable bind compiled for it is the per-jail "
+        "channel directory, and nothing else the host shares with it is writable "
+        "(old SPEC law 9: nothing crosses the boundary anonymously)"
+    ),
+)
+"""What `compile_supervisor_launch` claims about the paths it compiles (TASK-0001.28
+AC#1, decision-0002 items 3 and 4; old SPEC law 9).
+
+Stated here, by the module that actually compiles the jail's own argv, rather than
+invented by a battery -- `domain/claims.py`'s own docstring asks for exactly that, and
+`tests/e2e/test_claims_wiring.py`'s own `FD_INHERITANCE_CLAIM`/`TIOCSTI_CLOSURE_CLAIM`
+are the weaker pattern (a battery naming a claim in for the first time) that
+decision-0002 item 4 tolerates but AC#1 does not ask for. Public (exported from
+`brig/__init__.py`) because an embedder reading a report needs the same `Claim` value
+the compile states, not a second one that merely looks like it.
+
+A claim, never a grade: this says what the jail's own compiled argv asserts, and
+nothing about whether it holds -- `domain/grades.py`'s `grade` decides that from
+`Evidence` an e2e battery measured against a real jail.
+"""
+
+
+def writable_shared_paths(
+    policy: FsPolicy, state_dir: str, channels: Reservations | None
+) -> tuple[str, ...]:
+    """Every path a jail compiled from `policy`/`state_dir`/`channels` can write that
+    the host can also reach (TASK-0001.28 AC#2): the enumeration
+    `CHANNEL_EXCLUSIVITY_CLAIM` above is graded from.
+
+    **Not** a filter over `policy.binds` on `Bind.writable` -- that predicate is wrong,
+    and measured so. `compile_supervisor_launch` emits its own two binds *outside*
+    `policy.binds` entirely (the unconditional read-only `state_dir` bind, and the
+    writable channel-directory bind nested inside it, in that order), and bwrap applies
+    overlapping binds in argv order, later wins -- so what governs any given location is
+    the *last* bind in the compiled sequence whose own `jail_path` equals that location
+    or is a strict ancestor of it, exactly the "later wins, nested or exact, argv order"
+    reasoning `covering_ancestor_bind` above already encodes for the strict-ancestor
+    case. A bare `.writable` filter would miss the channel bind (never in
+    `policy.binds`) and would wrongly report a writable policy bind that a later
+    read-only ancestor shadowed.
+
+    The compiled sequence is reconstructed from `policy`/`state_dir`/`channels` here,
+    in the same order `compile_supervisor_launch` builds it, rather than by calling that
+    function and parsing its own rendered `--bind`/`--ro-bind` argv back apart: parsing
+    flags out would couple this to exact flag text and break the moment
+    `_VIRTUAL_FS_FLAGS` or anything else shifts position in that argv. The ordering fact
+    is stated once, in `compile_supervisor_launch`'s own body; this function and
+    `_check_channel_directory_reachable` (`presentation/api.py`) are the two readers that
+    depend on it, and either reordering there silently invalidates both.
+
+    Candidates are identified in *jail-path* space (which is what "which bind governs
+    this location" is about), but each one that comes out writable is returned as its
+    *host-side* location under whatever bind governs it: `g.host_path` for the suffix
+    the candidate has past `g.jail_path` -- the same "host equivalent" formula
+    `presentation/api.py`'s `_check_state_dir_reachable` already computes for a nested
+    path. For every shape this codebase produces today (`ChannelDirectory`'s own
+    docstring: `host_path == jail_path` for bwrap binds, and every `Bind` an embedder
+    writes binds a path at its own name) the suffix is empty and the two spaces
+    coincide; the formula is written in general rather than assumed, the same discipline
+    `covering_ancestor_bind`'s own docstring states for itself. Only a candidate whose
+    governing bind is writable is translated -- an excluded candidate's host-side
+    location is never needed. Distinct paths only, in compiled order.
+
+    Pure (rule 2): a path-string computation over plain data, touching no filesystem.
+    """
+    candidates = (
+        *policy.binds,
+        Bind(host_path=state_dir, jail_path=state_dir),
+        *(
+            (
+                Bind(
+                    host_path=channels.directory.host_path,
+                    jail_path=channels.directory.jail_path,
+                    writable=True,
+                ),
+            )
+            if channels is not None and channels.reservations
+            else ()
+        ),
+    )
+    shared: list[str] = []
+    for candidate in candidates:
+        governing = _governing_bind(candidates, candidate.jail_path)
+        if governing is None or not governing.writable:
+            continue
+        suffix = candidate.jail_path[len(governing.jail_path.rstrip("/")) :]
+        host_equivalent = governing.host_path.rstrip("/") + suffix
+        if host_equivalent not in shared:
+            shared.append(host_equivalent)
+    return tuple(shared)
+
+
+def _governing_bind(binds: tuple[Bind, ...], jail_path: str) -> Bind | None:
+    """The last of `binds`, in argv order, whose own `jail_path` is `jail_path` itself
+    or a strict ancestor of it -- which is what actually governs that location inside
+    the jail once bwrap has applied every bind, since a later mount at a path replaces
+    the whole view beneath it.
+
+    `covering_ancestor_bind` above generalised to include the exact-match case rather
+    than the strict-ancestor one alone: that function answers "what governs this
+    path's *parent*", because the bind it was written for (`state_dir`'s own
+    unconditional bind) is always mounted last and so never has to be found in the
+    sequence at all. Here the path being asked about is a bind's own `jail_path`, so
+    that bind is itself the last match unless something later covers it.
+
+    `None` only for an empty `binds`, which cannot happen for the sequence
+    `writable_shared_paths` builds -- it always contains at least the unconditional
+    `state_dir` bind -- but is stated rather than assumed.
+
+    Compares `jail_path`/`bind.jail_path` as literal strings, not normalized paths, the
+    same way `covering_ancestor_bind` and `FsPolicy`/`Bind` themselves do.
+    """
+    matches = tuple(
+        bind
+        for bind in binds
+        if bind.jail_path == jail_path or jail_path.startswith(bind.jail_path.rstrip("/") + "/")
+    )
+    return matches[-1] if matches else None
+
+
+def declared_channel_paths(channels: Reservations | None) -> tuple[str, ...]:
+    """The host paths of the channels a jail declared (TASK-0001.28 AC#2): what
+    `CHANNEL_EXCLUSIVITY_CLAIM` says the jail's writable, host-shared paths are allowed
+    to be, so a caller can compare it against `writable_shared_paths` and see the
+    difference.
+
+    The channel *directory* is what `_compile_channel_bind` above actually binds
+    writable -- one bind for the directory, never one per reservation inside it -- so
+    that is what this names, not each reservation's own file. Host-path space, matching
+    what `writable_shared_paths` returns, so the two compare directly with no second
+    translation anywhere.
+
+    `()` for `channels is None` or a set declaring nothing: `_compile_channel_bind`
+    binds nothing in either case, so the jail claims no writable path of its own.
+    """
+    if channels is None or not channels.reservations:
+        return ()
+    return (channels.directory.host_path,)
 
 
 def _compile_channel_bind(channels: Reservations | None) -> tuple[str, ...]:
