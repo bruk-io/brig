@@ -56,6 +56,7 @@ from brig.infra.processes import spawn as _spawn
 from brig.infra.supervisor import assemble, link
 from brig.presentation.drivers.bwrap import run
 from brig.presentation.errors import (
+    ChannelDirectoryCreateFailed,
     ChannelDirectoryUnreachable,
     ChannelNameRefused,
     ChannelNamespaceNotFound,
@@ -67,6 +68,7 @@ from brig.presentation.errors import (
 )
 from brig.presentation.ports import (
     ChannelDirectoryPort,
+    ChannelJailFinished,
     ChannelNotReady,
     ChannelReadinessPort,
     ChannelReadinessRefusal,
@@ -578,7 +580,10 @@ class Jail:
     `channel_namespace_fd` is an open fd on this jail's own PID namespace
     (TASK-0001.27), which `await_channel_ready` compares a channel peer against;
     `destroy_jail` closes it. `None` when the jail declares no channel: no
-    namespace was ever looked up, and there is nothing to compare. The fd is the
+    namespace was ever looked up, and there is nothing to compare -- *or*, with
+    `channel_directory` set, when the jail's command had already finished by the
+    time it was looked up (TASK-0001.30): its namespace was gone, so there is none
+    to hold, and `await_channel_ready` answers `ChannelJailFinished`. The fd is the
     *namespace*, not a pid -- decision-0005 item 1 holds the nsfs inode open for
     the jail's whole lifetime so it cannot be recycled under a later check -- and
     it is deliberately not the bwrap process's own namespace, which is the host's
@@ -651,9 +656,11 @@ def create_bwrap_jail(
     `ChannelDirectoryUnreachable` should it leave the channel directory
     unreachable (TASK-0001.26), while `_namespace_fd_for` (below) raises
     `ChannelNamespaceNotFound` for a channel-declaring jail whose in-jail PID 1
-    never appears (TASK-0001.27). `directories.create`'s own `OSError` (a full or
-    read-only disk) propagates as-is: it is a host filesystem failure with no
-    typed counterpart in `presentation/errors.py` yet. Nothing else in this
+    never appears while its outer process still runs (TASK-0001.27); one whose
+    command already finished returns a `Jail` with no namespace fd instead
+    (TASK-0001.30). `directories.create`'s own `OSError` (a full or
+    read-only disk) is raised as `ChannelDirectoryCreateFailed`, with the
+    `OSError` as its `__cause__` (TASK-0001.29). Nothing else in this
     function's own body raises, so nothing else is in this docstring.
 
     TASK-0012: once `_supervisors_for` has written `supervisor_script`, no `Jail`
@@ -690,6 +697,10 @@ def create_bwrap_jail(
     through to `_namespace_fd_for`: it exists so a test can plant a directory tree
     of its own rather than need a real bwrap jail underneath the scan, the same
     parameter `infra.processes.group_alive` already carries (TASK-0016).
+
+    Raises:
+        ChannelDirectoryCreateFailed: the host refused to create the channel
+            directory.
     """
     if supervisors is not None:
         resolved_supervisors: SupervisorPort = supervisors
@@ -705,7 +716,10 @@ def create_bwrap_jail(
     namespace_fd: int | None = None
     try:
         if channel_directory is not None:
-            directories.create(str(channel_directory))
+            try:
+                directories.create(str(channel_directory))
+            except OSError as error:
+                raise ChannelDirectoryCreateFailed(str(channel_directory)) from error
             created = channel_directory
         plan = bwrap.compile_run(command, env=env)
         process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
@@ -731,10 +745,14 @@ def create_bwrap_jail(
     )
 
 
-def _namespace_fd_for(process: Process, proc_root: str = "/proc") -> int:
+def _namespace_fd_for(process: Process, proc_root: str = "/proc") -> int | None:
     """The open fd on the jail's own PID namespace, found under `process` -- the
-    *outer* bwrap process `create_bwrap_jail` just started -- or
-    `ChannelNamespaceNotFound` once `infra.sockets.JAIL_PID1_TIMEOUT_S` passes.
+    *outer* bwrap process `create_bwrap_jail` just started -- or `None` when the
+    jail's command had already finished and taken that namespace with it
+    (TASK-0001.30: `infra.sockets.JailPid1Exited`, which the scan reports as soon as
+    `process` itself is gone, without waiting out its deadline), or
+    `ChannelNamespaceNotFound` once `infra.sockets.JAIL_PID1_TIMEOUT_S` passes with
+    `process` still running and no in-jail PID 1 in sight.
 
     `infra.sockets.jail_pid1_namespace` is called with a `time.monotonic()`
     deadline computed here, never with that module's own constant: infra takes a
@@ -744,7 +762,8 @@ def _namespace_fd_for(process: Process, proc_root: str = "/proc") -> int:
 
     That deadline (and so the frozen duration it is built from) is what this
     function adds to `create_bwrap_jail`'s own documented failure set, alongside
-    the `OSError` its `directories.create` call can already raise.
+    the `ChannelDirectoryCreateFailed` its `directories.create` call can already
+    raise.
 
     Raises:
         ChannelNamespaceNotFound: nothing under `process.pid` looked like the jail's
@@ -759,6 +778,8 @@ def _namespace_fd_for(process: Process, proc_root: str = "/proc") -> int:
     )
     if isinstance(outcome, _sockets.JailPid1NotFound):
         raise ChannelNamespaceNotFound(process.pid)
+    if isinstance(outcome, _sockets.JailPid1Exited):
+        return None
     return outcome
 
 
@@ -779,7 +800,7 @@ def await_channel_ready(
     *,
     timeout_s: float = _DEFAULT_CHANNEL_READY_TIMEOUT_S,
     readiness: ChannelReadinessPort = _channel_readiness,
-) -> ChannelReady | ChannelNotReady | ChannelRefused:
+) -> ChannelReady | ChannelNotReady | ChannelRefused | ChannelJailFinished:
     """Poll until `reservation`'s channel in `jail` reads ready or refused, or
     `timeout_s` passes -- and report which (decision-0002 item 2, decision-0005).
 
@@ -803,7 +824,14 @@ def await_channel_ready(
     connect itself takes -- a Unix socket connect is not something this layer can
     bound from outside.
 
-    `jail.channel_namespace_fd` is `None` for a jail that declared no channel, and
+    A jail whose command had already finished when `create_bwrap_jail` looked for its
+    namespace (`channel_directory` set, `channel_namespace_fd` `None`, TASK-0001.30)
+    answers `ChannelJailFinished` at once, before any connect: nothing in it can
+    listen, and a connect with no namespace to verify against would trust whatever
+    host process answered at that path.
+
+    `jail.channel_namespace_fd` is `None` with no `channel_directory` for a jail that
+    declared no channel, and
     that is a caller precondition violation rather than an outcome: there is no
     namespace to verify against, and the reservation being asked about cannot have
     come from that jail's `reserve_channels` call. Checked explicitly, rather than
@@ -813,8 +841,11 @@ def await_channel_ready(
     since the port's own contract takes `int`, never `int | None`.
 
     Raises:
-        ValueError: `jail.channel_namespace_fd` is `None`.
+        ValueError: the jail declared no channel (`channel_namespace_fd` and
+            `channel_directory` are both `None`).
     """
+    if jail.channel_namespace_fd is None and jail.channel_directory is not None:
+        return ChannelJailFinished()
     if jail.channel_namespace_fd is None:
         raise ValueError(
             "jail declared no channel: await_channel_ready has no namespace to "

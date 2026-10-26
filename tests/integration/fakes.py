@@ -223,10 +223,13 @@ class FakeChannelDirectories:
     """A fake of the world `brig.presentation.ports.ChannelDirectoryPort` asks for
     (TASK-0001.25, TASK-0001.26): `allocate` hands back `path` and counts itself in
     `allocated`; `create` and `remove` record the path in `created`/`removed`.
+    `fail_create`, while `True`, has `create` raise `OSError` *instead of* recording
+    (a host filesystem failure leaves nothing created -- TASK-0001.29).
     Bookkeeping only -- never touches the filesystem.
     """
 
     path: str = "/fake/state/channels/0001"
+    fail_create: bool = False
     allocated: int = 0
     created: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
@@ -237,7 +240,13 @@ class FakeChannelDirectories:
         return self.path
 
     def create(self, path: str) -> None:
-        """Record `path`."""
+        """Record `path`; raise `OSError` while `fail_create`, recording nothing.
+
+        Raises:
+            OSError: `fail_create` is set.
+        """
+        if self.fail_create:
+            raise OSError(28, "fake host: no space left on device")
         self.created.append(path)
 
     def remove(self, path: str) -> None:
@@ -275,7 +284,9 @@ class FakeChannelReadiness:
         return self.outcomes[index]
 
 
-def plant_fake_proc(root: str, entries: dict[int, tuple[int, str]]) -> None:
+def plant_fake_proc(
+    root: str, entries: dict[int, tuple[int, str]], zombies: frozenset[int] = frozenset()
+) -> None:
     """Build a fake procfs tree under the real directory `root`, one entry per
     `pid: (ppid, nspid)` in `entries`, so a `/proc`-scanning code path can be driven
     with real files and real I/O rather than a patched `open` (TASK-0016's own
@@ -285,12 +296,18 @@ def plant_fake_proc(root: str, entries: dict[int, tuple[int, str]]) -> None:
     Each entry gets a `status` carrying the `PPid:` and `NSpid:` lines the scan
     reads, and an `ns/pid` leaf for `os.open` to succeed on -- a real empty file
     stands in for the nsfs inode, since nothing under test reads its contents, only
-    holds the fd open.
+    holds the fd open. Every entry also carries a `State:` line -- zombie (`Z`) for
+    each pid in `zombies`, sleeping (`S`) otherwise -- which `infra.sockets._gone`
+    reads to tell an exited jail (TASK-0001.30) from one still running.
     """
+    os.makedirs(root, exist_ok=True)
     for pid, (ppid, nspid) in entries.items():
+        state = "Z (zombie)" if pid in zombies else "S (sleeping)"
         entry = os.path.join(root, str(pid))
         os.makedirs(os.path.join(entry, "ns"), exist_ok=True)
         with open(os.path.join(entry, "status"), "w") as handle:
-            handle.write(f"Name:\tfake\nPid:\t{pid}\nPPid:\t{ppid}\nNSpid:\t{nspid}\n")
+            handle.write(
+                f"Name:\tfake\nState:\t{state}\nPid:\t{pid}\nPPid:\t{ppid}\nNSpid:\t{nspid}\n"
+            )
         with open(os.path.join(entry, "ns", "pid"), "w") as handle:
             handle.write("")

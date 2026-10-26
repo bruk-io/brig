@@ -75,6 +75,21 @@ class JailPid1NotFound:
 
 
 @dataclass(frozen=True)
+class JailPid1Exited:
+    """Sentinel `jail_pid1_namespace` returns when no in-jail PID 1 was found and
+    the outer process it was looked for under is itself gone (or a zombie): the
+    jail's whole namespace is gone with it, so nothing will ever appear
+    (TASK-0001.30).
+
+    Distinct from `JailPid1NotFound`, which is the outer process still running but
+    no PID 1 showing up before the deadline -- a creation failure. This is not a
+    failure of the lookup: a supervised command that finishes in milliseconds takes
+    its supervisor (the in-jail PID 1) and so bwrap down with it, before any
+    host-side scan can win the race to it.
+    """
+
+
+@dataclass(frozen=True)
 class ChannelReady:
     """A channel is ready: this connect reached a socket whose listening process is
     inside the jail's own PID namespace (decision-0005 item 4 -- it proves a
@@ -171,13 +186,29 @@ def _nspid(pid: int, proc_root: str = "/proc") -> str:
         return next(line.split(":", 1)[1].strip() for line in handle if line.startswith("NSpid:"))
 
 
+def _gone(pid: int, proc_root: str = "/proc") -> bool:
+    """Whether `pid` has exited: no `/proc` entry for it, or one whose `State:` is
+    zombie (`Z`) -- a child of this process stays one until it is reaped, and a jail's
+    outer process is exactly that. Any other failure to read it (a permission error,
+    say) is *not* evidence it is gone, so it reads as still running.
+    """
+    try:
+        with open(f"{proc_root}/{pid}/status") as handle:
+            return any(line.startswith("State:") and line.split()[1] == "Z" for line in handle)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+
+
 def jail_pid1_namespace(
     bwrap_pid: int,
     deadline: float,
     proc_root: str = "/proc",
-) -> int | JailPid1NotFound:
+) -> int | JailPid1NotFound | JailPid1Exited:
     """Find the jail's own PID namespace -- the one its in-jail PID 1 lives in -- and
-    hand back an open fd on it, or `JailPid1NotFound` once `deadline` passes first.
+    hand back an open fd on it, or `JailPid1NotFound` once `deadline` passes first,
+    or `JailPid1Exited` as soon as `bwrap_pid` itself is gone with no PID 1 found.
 
     `bwrap_pid` is the *outer* bwrap process, which is what `create_bwrap_jail`
     already tracks as `Jail.process.pid` (`infra.processes.spawn` exec'd
@@ -203,6 +234,14 @@ def jail_pid1_namespace(
     the scan and the read, or its `ns/pid` is not readable by this uid) is skipped;
     an `OSError` from `_children` listing `proc_root` at all (no procfs, or no
     permission on it) propagates, since nothing about the jail can be learned then.
+
+    `JailPid1Exited` (TASK-0001.30): a candidate is looked for *before* `bwrap_pid`
+    is checked, on every pass, and never the other way round. A PID 1 that exists
+    when the scan runs is therefore always found; one that is not found, with
+    `bwrap_pid` gone by the time of the check, can only be a jail whose whole
+    command finished first -- bwrap outlives its in-jail PID 1 and never the
+    reverse, so there is no PID 1 left to wait for, and no reason to wait out
+    `deadline` for one.
     """
     while True:
         for child in _children(bwrap_pid, proc_root):
@@ -212,6 +251,8 @@ def jail_pid1_namespace(
                 return os.open(f"{proc_root}/{child}/ns/pid", os.O_RDONLY)
             except OSError:
                 continue
+        if _gone(bwrap_pid, proc_root):
+            return JailPid1Exited()
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return JailPid1NotFound()

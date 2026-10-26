@@ -26,6 +26,7 @@ from tests.integration.fakes import (
 
 from brig import (
     Channel,
+    ChannelDirectoryCreateFailed,
     JailSpawnFailed,
     create_bwrap_jail,
     destroy_jail,
@@ -135,5 +136,30 @@ def test_a_jail_declaring_no_channel_creates_and_removes_nothing() -> None:
 
     destroy_jail(jail, processes=processes, directories=directories)
 
+    assert directories.created == []
+    assert directories.removed == []
+
+
+def test_a_host_failure_creating_the_channel_directory_is_a_typed_brig_error() -> None:
+    """The host refuses `directories.create` (a full disk, say): `create_bwrap_jail`
+    raises `ChannelDirectoryCreateFailed` naming the directory, with the host's own
+    `OSError` as its cause, and nothing was started (TASK-0001.29).
+    """
+    directories = FakeChannelDirectories(fail_create=True)
+    reserved = reserve_channels((Channel("ctl"),), directories=directories)
+    supervisors = FakeSupervisors()
+
+    with pytest.raises(ChannelDirectoryCreateFailed) as raised:
+        create_bwrap_jail(
+            ("server",),
+            channels=reserved,
+            processes=FakeProcesses(),
+            supervisors=supervisors,
+            directories=directories,
+        )
+
+    assert raised.value.channel_dir == directories.path
+    assert isinstance(raised.value.__cause__, OSError)
+    assert supervisors.started == []
     assert directories.created == []
     assert directories.removed == []

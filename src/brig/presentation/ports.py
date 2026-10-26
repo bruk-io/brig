@@ -254,6 +254,21 @@ class ChannelNotReady:
 
 
 @dataclass(frozen=True)
+class ChannelJailFinished:
+    """The jail's command had already finished, and taken the jail's namespace with
+    it, by the time `create_bwrap_jail` looked for it (TASK-0001.30): nothing inside
+    can be listening, and none ever will be.
+
+    Terminal, unlike `ChannelNotReady`, so `await_channel_ready` returns it at once
+    rather than polling. Never a path check or an unverified connect in its place:
+    with no namespace to compare against, whatever answered at the channel's path
+    could only be a host process squatting on it (decision-0005's confused deputy).
+    What the finished command wrote to the channel directory is still there to read,
+    until `destroy_jail` removes it.
+    """
+
+
+@dataclass(frozen=True)
 class ChannelRefused:
     """A connection reached a peer, and readiness refused it: `reason` says why
     (`ChannelReadinessRefusal`).

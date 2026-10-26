@@ -78,6 +78,26 @@ class ChannelDirectoryUnreachable(Exception):
         self.ancestor = ancestor
 
 
+class ChannelDirectoryCreateFailed(Exception):
+    """Raised when the host refused to create a jail's per-jail channel directory
+    (TASK-0001.29): a full disk, a permissions change under brig's own state
+    directory, or a `chmod` that failed after its `mkdir` had succeeded.
+
+    The host filesystem's own `OSError` is the `__cause__`, so the reason is
+    never lost, but an embedder handles this one type and never sees `infra`'s
+    exception (the driver exception boundary, decision-0001 rules 9 and 13).
+    Whatever had been started or written before the failure is cleaned up first,
+    the same as for every other failure out of `create_bwrap_jail`.
+
+    Args:
+        channel_dir: The channel directory's host path that could not be created.
+    """
+
+    def __init__(self, channel_dir: str) -> None:
+        super().__init__(f"could not create the channel directory {channel_dir!r}")
+        self.channel_dir = channel_dir
+
+
 class StateDirectoryInvalid(Exception):
     """Raised when `BRIG_HOME` names a value brig's own state directory cannot
     use (`infra/state_dir.py`'s `resolve`) -- translated here from infra's own

@@ -48,6 +48,7 @@ from brig.presentation.api import (
     run_jail,
 )
 from brig.presentation.errors import (
+    ChannelDirectoryCreateFailed,
     ChannelDirectoryUnreachable,
     ChannelNameRefused,
     ChannelNamespaceNotFound,
@@ -60,6 +61,7 @@ from brig.presentation.errors import (
 )
 from brig.presentation.ports import (
     ChannelDirectoryPort,
+    ChannelJailFinished,
     ChannelNotReady,
     ChannelReadinessPort,
     ChannelReadinessRefusal,
@@ -76,7 +78,9 @@ __all__ = [
     "Channel",
     "ChannelDirectory",
     "ChannelDirectoryPort",
+    "ChannelDirectoryCreateFailed",
     "ChannelDirectoryUnreachable",
+    "ChannelJailFinished",
     "ChannelNameRefused",
     "ChannelNamespaceNotFound",
     "ChannelNotReady",
