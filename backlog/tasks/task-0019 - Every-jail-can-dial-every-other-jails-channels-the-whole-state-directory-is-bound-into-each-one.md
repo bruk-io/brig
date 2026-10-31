@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-31T11:00:00Z'
-updated_date: '2026-10-31T14:50:00Z'
+updated_date: '2026-10-31T14:51:00Z'
 labels:
   - size-3
   - finish-moved
@@ -221,4 +221,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review (philosophy:reviewer, 2026-10-31): not closed, only because the close needs a recorded repro. Both criteria are met and ticked: the battery passes; by hand, a jail with no declared channel, under policies adding a writable bind of ~/.brig, of its parent, and of ~/.brig/channels, listed only its own supervisor script and got ENOENT dialling jail A's endpoint. The full gate passed (recorded above). The repro is missing: record-check --repro needs a run that fails, which means the battery run against a7e7f45's src. The review hook would not let me swap that code in or extract it, so I could not run it, and the worker's pasted failure is not a recorded repro. To close: with a7e7f45's bwrap.py and api.py in place, run record-check TASK-0019 --repro -- uv run pytest tests/e2e/test_cross_jail_channel_battery.py -q, put the files back, then close-task. Moving AC #3 to DRAFT-0012 is justified. The docstrings are corrected.
 <!-- SECTION:NOTES:END -->
