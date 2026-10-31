@@ -76,6 +76,7 @@ import os
 import pty
 import shutil
 import sys
+import tempfile
 import termios
 import threading
 from collections.abc import Callable
@@ -141,12 +142,12 @@ def _resolved_state_dir() -> str:
     return str(state_dir.ensure(state_dir.resolve()))
 
 
-def _bwrap_argv_prefix(state_dir: str) -> tuple[str, ...]:
+def _bwrap_argv_prefix(state_dir: str, supervisor_script: str) -> tuple[str, ...]:
     """Mirrors `domain/jail_types/bwrap.py`'s own `_NAMESPACE_FLAGS` (namespace-
     isolation flags) plus `_compile_binds`'s output for the default
     `WHOLE_HOST_READ_ONLY` policy (the `--ro-bind / /` triple), TASK-0006's own
-    unconditional state-dir bind, and TASK-0015's own unconditional
-    `_VIRTUAL_FS_FLAGS` (`--proc /proc --dev /dev --tmpfs /sys`), built here
+    unconditional state-dir mount (a mask since TASK-0019), and TASK-0015's own
+    unconditional `_VIRTUAL_FS_FLAGS` (`--proc /proc --dev /dev --tmpfs /sys`), built here
     rather than imported: decision-0001
     rule 4 lets an e2e test import the public API, or one `brig.infra` module for a
     gateway test, never a `domain` module directly, and this differential needs a
@@ -206,8 +207,12 @@ def _bwrap_argv_prefix(state_dir: str) -> tuple[str, ...]:
         "--ro-bind",
         "/",
         "/",
-        "--ro-bind",
+        "--tmpfs",
         state_dir,
+        "--ro-bind",
+        supervisor_script,
+        supervisor_script,
+        "--remount-ro",
         state_dir,
         "--proc",
         "/proc",
@@ -223,7 +228,9 @@ def _bwrap_argv_prefix(state_dir: str) -> tuple[str, ...]:
     )
 
 
-def _bwrap_argv_prefix_without_new_session(state_dir: str) -> tuple[str, ...]:
+def _bwrap_argv_prefix_without_new_session(
+    state_dir: str, supervisor_script: str
+) -> tuple[str, ...]:
     """The same prefix with `--new-session` removed -- derived from
     `_bwrap_argv_prefix()` by filtering, rather than retyped as a second literal,
     so the two can only ever differ by that one flag. That is the entire point of
@@ -231,7 +238,9 @@ def _bwrap_argv_prefix_without_new_session(state_dir: str) -> tuple[str, ...]:
     the real argv is denied; this argv injects again) and this is that same
     negative half, committed for real.
     """
-    return tuple(flag for flag in _bwrap_argv_prefix(state_dir) if flag != "--new-session")
+    return tuple(
+        flag for flag in _bwrap_argv_prefix(state_dir, supervisor_script) if flag != "--new-session"
+    )
 
 
 def _bwrap_differential_probe(argv_prefix: tuple[str, ...]) -> Callable[[], int]:
@@ -504,13 +513,16 @@ def test_new_session_is_the_sole_closer_of_tiocsti_when_infra_detaches_no_sessio
     _skip_if_tiocsti_unavailable()
 
     resolved_state_dir = _resolved_state_dir()
-
-    with_new_session = _run_in_pty_session(
-        _bwrap_differential_probe(_bwrap_argv_prefix(resolved_state_dir))
-    )
+    # The prefix binds one file of the state directory back inside its mask (TASK-0019),
+    # which bwrap needs to exist; nothing runs it, since the probe follows the prefix.
+    with tempfile.NamedTemporaryFile(dir=resolved_state_dir, suffix=".py") as script:
+        with_new_session = _run_in_pty_session(
+            _bwrap_differential_probe(_bwrap_argv_prefix(resolved_state_dir, script.name))
+        )
+        without_new_session = _run_in_pty_session(
+            _bwrap_differential_probe(
+                _bwrap_argv_prefix_without_new_session(resolved_state_dir, script.name)
+            )
+        )
     assert with_new_session == _ERRNO_EXIT_OFFSET + _DENIED_ERRNO
-
-    without_new_session = _run_in_pty_session(
-        _bwrap_differential_probe(_bwrap_argv_prefix_without_new_session(resolved_state_dir))
-    )
     assert without_new_session == 0

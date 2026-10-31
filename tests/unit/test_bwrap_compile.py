@@ -25,6 +25,12 @@ does no I/O to resolve or create one itself), so any string proves the same thin
 a real resolved path would about where the unconditional bind's triple lands.
 """
 
+_SCRIPT_PLACEHOLDER = _STATE_DIR_PLACEHOLDER + "/brig-supervisor-placeholder.py"
+"""A plain string stand-in for the supervisor script presentation writes into the
+state directory: the one file of it the compile binds back inside its mask (TASK-0019),
+opaque to the compile the same way `_STATE_DIR_PLACEHOLDER` is.
+"""
+
 
 def test_bwrap_compile_run_names_the_real_command() -> None:
     """`compile_run` no longer wraps `command` in bwrap's own flags -- the jail's
@@ -46,13 +52,17 @@ def test_bwrap_compile_supervisor_launch_wraps_the_given_path() -> None:
     namespace-isolation flags -- the job `compile_run` did for the real command
     directly before the supervisor existed to run it instead.
 
-    TASK-0006: also asserts the unconditional `state_dir` bind lands right after
-    the (default) policy's own one bind and before the namespace-isolation
+    TASK-0006: also asserts the unconditional state-directory mount lands right
+    after the (default) policy's own one bind and before the namespace-isolation
     flags -- the exact position that lets it win over an overlapping policy bind
     (bwrap applies binds in argv order) without being part of the policy itself.
+    TASK-0019: that mount is a mask (a tmpfs, this jail's own script bound back
+    read-only, then the tmpfs remounted read-only), not the whole directory.
     """
     argv = bwrap.compile_supervisor_launch(
-        ("python3", "/path/to/program.py"), state_dir=_STATE_DIR_PLACEHOLDER
+        ("python3", "/path/to/program.py"),
+        state_dir=_STATE_DIR_PLACEHOLDER,
+        supervisor_script=_SCRIPT_PLACEHOLDER,
     )
 
     assert argv == (
@@ -60,8 +70,12 @@ def test_bwrap_compile_supervisor_launch_wraps_the_given_path() -> None:
         "--ro-bind",
         "/",
         "/",
-        "--ro-bind",
+        "--tmpfs",
         _STATE_DIR_PLACEHOLDER,
+        "--ro-bind",
+        _SCRIPT_PLACEHOLDER,
+        _SCRIPT_PLACEHOLDER,
+        "--remount-ro",
         _STATE_DIR_PLACEHOLDER,
         "--proc",
         "/proc",
@@ -126,9 +140,12 @@ def test_e2e_tiocsti_battery_bwrap_argv_prefix_matches_compile_supervisor_launch
     is the open board question for exactly this gap; this test stands on it,
     unresolved, the same as TASK-0009's original version did.
     """
-    prefix = _bwrap_argv_prefix(_STATE_DIR_PLACEHOLDER)
+    prefix = _bwrap_argv_prefix(_STATE_DIR_PLACEHOLDER, _SCRIPT_PLACEHOLDER)
     argv = bwrap.compile_supervisor_launch(
-        ("supervisor-placeholder",), state_dir=_STATE_DIR_PLACEHOLDER, policy=WHOLE_HOST_READ_ONLY
+        ("supervisor-placeholder",),
+        state_dir=_STATE_DIR_PLACEHOLDER,
+        supervisor_script=_SCRIPT_PLACEHOLDER,
+        policy=WHOLE_HOST_READ_ONLY,
     )
 
     assert argv[: len(prefix)] == prefix
@@ -150,7 +167,10 @@ def test_bwrap_compile_supervisor_launch_translates_a_custom_policys_binds() -> 
     )
 
     argv = bwrap.compile_supervisor_launch(
-        ("python3", "/path/to/program.py"), state_dir=_STATE_DIR_PLACEHOLDER, policy=policy
+        ("python3", "/path/to/program.py"),
+        state_dir=_STATE_DIR_PLACEHOLDER,
+        supervisor_script=_SCRIPT_PLACEHOLDER,
+        policy=policy,
     )
 
     assert argv == (
@@ -161,8 +181,12 @@ def test_bwrap_compile_supervisor_launch_translates_a_custom_policys_binds() -> 
         "--bind",
         "/scratch",
         "/scratch",
-        "--ro-bind",
+        "--tmpfs",
         _STATE_DIR_PLACEHOLDER,
+        "--ro-bind",
+        _SCRIPT_PLACEHOLDER,
+        _SCRIPT_PLACEHOLDER,
+        "--remount-ro",
         _STATE_DIR_PLACEHOLDER,
         "--proc",
         "/proc",
@@ -189,9 +213,9 @@ def test_bwrap_compile_supervisor_launch_binds_the_channel_directory_for_declare
     None
 ):
     """TASK-0001.25 AC#2: a declared channel adds exactly one writable `--bind` of the
-    per-jail channel directory, host path to jail path, right after the read-only
-    `state_dir` bind (the channel directory lives beneath it, and bwrap's later bind
-    wins) and before the virtual-fs flags.
+    per-jail channel directory, host path to jail path, inside the state directory's
+    mask: after its tmpfs (the channel directory lives beneath it, and bwrap's later
+    mount wins) and before the seal that remounts it read-only (TASK-0019).
     """
     channels = Reservations(
         directory=ChannelDirectory(host_path=_CHANNEL_DIR, jail_path="/jail/side"),
@@ -201,7 +225,10 @@ def test_bwrap_compile_supervisor_launch_binds_the_channel_directory_for_declare
     )
 
     argv = bwrap.compile_supervisor_launch(
-        ("python3", "/path/to/program.py"), state_dir=_STATE_DIR_PLACEHOLDER, channels=channels
+        ("python3", "/path/to/program.py"),
+        state_dir=_STATE_DIR_PLACEHOLDER,
+        supervisor_script=_SCRIPT_PLACEHOLDER,
+        channels=channels,
     )
 
     assert argv == (
@@ -209,12 +236,16 @@ def test_bwrap_compile_supervisor_launch_binds_the_channel_directory_for_declare
         "--ro-bind",
         "/",
         "/",
+        "--tmpfs",
+        _STATE_DIR_PLACEHOLDER,
         "--ro-bind",
-        _STATE_DIR_PLACEHOLDER,
-        _STATE_DIR_PLACEHOLDER,
+        _SCRIPT_PLACEHOLDER,
+        _SCRIPT_PLACEHOLDER,
         "--bind",
         _CHANNEL_DIR,
         "/jail/side",
+        "--remount-ro",
+        _STATE_DIR_PLACEHOLDER,
         "--proc",
         "/proc",
         "--dev",
@@ -237,11 +268,14 @@ def test_bwrap_compile_supervisor_launch_adds_no_bind_when_no_channel_is_declare
     the channel directory named nowhere.
     """
     without = bwrap.compile_supervisor_launch(
-        ("python3", "/path/to/program.py"), state_dir=_STATE_DIR_PLACEHOLDER
+        ("python3", "/path/to/program.py"),
+        state_dir=_STATE_DIR_PLACEHOLDER,
+        supervisor_script=_SCRIPT_PLACEHOLDER,
     )
     empty = bwrap.compile_supervisor_launch(
         ("python3", "/path/to/program.py"),
         state_dir=_STATE_DIR_PLACEHOLDER,
+        supervisor_script=_SCRIPT_PLACEHOLDER,
         channels=Reservations(
             directory=ChannelDirectory(host_path=_CHANNEL_DIR, jail_path=_CHANNEL_DIR),
             reservations=(),
@@ -251,6 +285,49 @@ def test_bwrap_compile_supervisor_launch_adds_no_bind_when_no_channel_is_declare
     assert empty == without
     assert "--bind" not in empty
     assert _CHANNEL_DIR not in empty
+
+
+def _mount_targets_under(argv: tuple[str, ...], directory: str) -> tuple[str, ...]:
+    """Every destination a `--bind`/`--ro-bind` in `argv` mounts at or beneath
+    `directory`: what of that directory a jail compiled from `argv` sees from the host.
+    """
+    targets = (
+        argv[index + 2] for index, flag in enumerate(argv[:-2]) if flag in {"--bind", "--ro-bind"}
+    )
+    return tuple(
+        target
+        for target in targets
+        if target == directory or target.startswith(directory.rstrip("/") + "/")
+    )
+
+
+def test_bwrap_compile_shows_a_jail_only_its_own_script_and_channels_of_the_state_dir() -> None:
+    """TASK-0019 AC#1: of brig's state directory, which holds every jail's supervisor
+    script and channel directory, the compile mounts this jail's own script and its own
+    channel directory from the host, nothing wider -- and masks the directory first, so
+    an ancestor bind in the policy (`WHOLE_HOST_READ_ONLY`'s `/`) shows nothing of it
+    either.
+    """
+    channels = Reservations(
+        directory=ChannelDirectory(host_path=_CHANNEL_DIR, jail_path=_CHANNEL_DIR),
+        reservations=(
+            Reservation(
+                name="ctl", bound_path=_CHANNEL_DIR + "/ctl", endpoint=_CHANNEL_DIR + "/ctl"
+            ),
+        ),
+    )
+
+    argv = bwrap.compile_supervisor_launch(
+        ("python3", _SCRIPT_PLACEHOLDER),
+        state_dir=_STATE_DIR_PLACEHOLDER,
+        supervisor_script=_SCRIPT_PLACEHOLDER,
+        channels=channels,
+    )
+
+    assert _mount_targets_under(argv, _STATE_DIR_PLACEHOLDER) == (_SCRIPT_PLACEHOLDER, _CHANNEL_DIR)
+    mask = argv.index("--tmpfs", argv.index("bwrap"))
+    assert argv[mask + 1] == _STATE_DIR_PLACEHOLDER
+    assert mask < argv.index(_SCRIPT_PLACEHOLDER) < argv.index("--remount-ro")
 
 
 def test_bwrap_create_true_generator() -> None:

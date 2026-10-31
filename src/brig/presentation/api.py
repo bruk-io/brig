@@ -220,13 +220,14 @@ def _check_channel_directory_reachable(policy: FsPolicy, state_dir: str, channel
     `_check_state_dir_reachable`, generalised rather than copied -- it calls the
     same, unchanged `bwrap.covering_ancestor_bind` on a richer input.
 
-    That input is `policy`'s binds plus the unconditional read-only bind of
-    `state_dir` that `compile_supervisor_launch` appends after them (its argv order:
-    policy binds, then the `state_dir` bind, then the channel bind), so the synthetic
-    bind here is always the *last* ancestor of any path nested under `state_dir` and
-    always wins over whatever `policy` names on its own, when `channel_dir` is
-    nested under `state_dir` at all (a custom `ChannelDirectoryPort` need not put it
-    there, `ports.py`'s own docstring).
+    That input is `policy`'s binds plus a read-only bind of `state_dir` standing for the
+    unconditional mask `compile_supervisor_launch` appends after them (its argv order: policy binds,
+    then the state directory's tmpfs, then the channel bind; a tmpfs never blocks a mountpoint
+    beneath it, and this synthetic bind's `host_path == state_dir` gives the same answer for a
+    channel directory there, as below, TASK-0019), so the synthetic bind here is always the *last*
+    ancestor of any path nested under `state_dir` and always wins over whatever `policy` names on
+    its own, when `channel_dir` is nested under `state_dir` at all (a custom `ChannelDirectoryPort`
+    need not put it there, `ports.py`'s own docstring).
 
     A winning ancestor is safe -- nothing is refused -- when it is writable (TASK-
     0001.22's own finding, unchanged by anything here), *or* when `channel_dir`'s
@@ -294,15 +295,14 @@ def _supervisor_path() -> tuple[str, ...]:
     second, decoy file and leak the first one forever once `destroy_jail`
     deletes the wrong path instead.
 
-    Reachable inside a bwrap jail under most of the caller's own `policy`
-    shapes (TASK-0006): `compile_supervisor_launch` binds `_resolved_state_dir()`
-    unconditionally, so wherever `tempfile.NamedTemporaryFile`'s own
-    collision-safe random suffix actually placed this file stays reachable
-    even under a policy that excludes everything else this file used to
-    depend on (`/tmp`, before this task; the whole host root, under
-    `WHOLE_HOST_READ_ONLY`, incidentally covered it too). A jail created with
-    a narrower `policy` of its own no longer has to also happen to cover this
-    path -- that was exactly TASK-0006's bug.
+    Reachable inside a bwrap jail under most of the caller's own `policy` shapes (TASK-0006):
+    `compile_supervisor_launch` masks `_resolved_state_dir()` unconditionally and binds this one
+    file back inside it (TASK-0019), so wherever `tempfile.NamedTemporaryFile`'s own collision-safe
+    random suffix actually placed this file stays reachable even under a policy that excludes
+    everything else this file used to depend on (`/tmp`, before this task; the whole host root,
+    under `WHOLE_HOST_READ_ONLY`, incidentally covered it too). A jail created with a narrower
+    `policy` of its own no longer has to also happen to cover this path -- that was exactly
+    TASK-0006's bug.
 
     Not reachable under every policy, though: measured against real bwrap
     (adversarial review of TASK-0006/0009), a policy naming a *read-only*
@@ -441,7 +441,11 @@ def _supervisors_for(
         _check_channel_directory_reachable(policy, state_dir, channels.directory.host_path)
     supervisor_path = _supervisor_path()
     supervisor_argv = bwrap.compile_supervisor_launch(
-        supervisor_path, state_dir=state_dir, policy=policy, channels=channels
+        supervisor_path,
+        state_dir=state_dir,
+        supervisor_script=supervisor_path[-1],
+        policy=policy,
+        channels=channels,
     )
     return _real_supervisor_port(link.LiveSupervisors(supervisor_argv)), Path(supervisor_path[-1])
 
@@ -634,8 +638,8 @@ def create_bwrap_jail(
     function neither reads nor extends with it (old SPEC decision-184/186). The
     directory itself is created here (TASK-0001.26), through `directories`, when
     `channels` declares any channel: private to the owning user, under brig's own
-    state directory, before the jail starts (bwrap would otherwise fail to make
-    its mountpoint beneath the read-only state-directory bind). It is carried on
+    state directory, before the jail starts (it is the channel bind's source;
+    the jail sees it through the state directory's mask, TASK-0019). It is carried on
     the returned `Jail` as `channel_directory` for `destroy_jail` to remove.
 
     `supervisors`, left unset, is resolved from `policy` (`_supervisors_for`),

@@ -34,15 +34,14 @@ TASK-0006: ``compile_supervisor_launch`` also takes ``state_dir`` -- the already
 resolved directory presentation found the assembled supervisor script written
 into (`infra/state_dir.py`; locating and creating it is I/O, rule 2, so domain
 only ever receives the plain string presentation hands in, the same pattern
-``supervisor_path`` itself already follows). It adds one unconditional
-``--ro-bind state_dir state_dir``, after ``policy``'s own binds and before
-``_NAMESPACE_FLAGS``: structural, like ``_NAMESPACE_FLAGS``/``_INHERITABLE_FDS``
-below, never part of the caller's own ``FsPolicy``, and bwrap applies overlapping
-binds in argv order (later wins), so placing it after the policy's own binds
-means a policy bind at *exactly* this same path can never shadow it first
-(``tests/e2e/test_fs_policy_battery.py``'s
-``test_a_policy_bind_at_the_state_dirs_own_jail_path_does_not_shadow_it``,
-verified against real bwrap).
+``supervisor_path`` itself already follows). It adds one unconditional ``--ro-bind state_dir
+state_dir`` (since TASK-0019, a mask in its place: see below), after ``policy``'s own binds and
+before ``_NAMESPACE_FLAGS``: structural, like ``_NAMESPACE_FLAGS``/``_INHERITABLE_FDS`` below, never
+part of the caller's own ``FsPolicy``, and bwrap applies overlapping binds in argv order (later
+wins), so placing it after the policy's own binds means a policy bind at *exactly* this same path
+can never shadow it first (``tests/e2e/test_fs_policy_battery.py``'s
+``test_a_policy_bind_at_the_state_dirs_own_jail_path_does_not_shadow_it``, verified against real
+bwrap).
 
 That is a narrower guarantee than "reachable regardless of the caller's own
 policy", which an earlier revision of this docstring claimed. Measured against
@@ -78,6 +77,15 @@ contains ``state_dir``'s leaf) this module's own purity rule (rule 2) keeps
 out of here, and raises ``StateDirectoryUnreachable`` before bwrap is ever
 invoked, rather than letting this surface as ``JailExitUnknown`` ->
 ``JailTeardownFailed``.
+
+TASK-0019: the state directory is no longer bound whole. It holds every jail's
+supervisor script and channel directory, and a Unix socket accepts a connect through a
+read-only mount (measured: one jail dialled another's reserved channel through that
+bind). In its place: ``--tmpfs state_dir``, a read-only bind of this jail's own
+supervisor script, the channel directory's bind when channels are declared, then
+``--remount-ro state_dir`` (``_compile_state_dir_mask``, ``_compile_state_dir_seal``).
+A tmpfs needs its mountpoint exactly as the bind did, so everything measured above about
+which ancestor binds reach it holds unchanged, and the shadowing guarantee with it.
 
 TASK-0001.28: this module also *states* the `channel_exclusivity` claim (old SPEC law 9:
 nothing crosses the boundary anonymously) as `CHANNEL_EXCLUSIVITY_CLAIM` below, together with
@@ -117,8 +125,8 @@ namespace-scoped equivalent -- unlike procfs, sysfs has no per-namespace scoping
 to offer instead, so absent is the only safe default; an embedder whose own policy
 genuinely needs hardware introspection adds their own `/sys` bind back explicitly.
 
-Unconditional, placed after `state_dir`'s own bind and before `_NAMESPACE_FLAGS`,
-the same way `state_dir`'s own bind already is: never part of the caller's own
+Unconditional, placed after the state directory's mask and before `_NAMESPACE_FLAGS`,
+the same way that mask already is: never part of the caller's own
 `FsPolicy`, since an embedder narrowing or widening their own policy has no
 business accidentally re-exposing or hiding these.
 """
@@ -309,8 +317,8 @@ def writable_shared_paths(
     `CHANNEL_EXCLUSIVITY_CLAIM` above is graded from.
 
     **Not** a filter over `policy.binds` on `Bind.writable` -- that predicate is wrong,
-    and measured so. `compile_supervisor_launch` emits its own two binds *outside*
-    `policy.binds` entirely (the unconditional read-only `state_dir` bind, and the
+    and measured so. `compile_supervisor_launch` emits its own mounts *outside*
+    `policy.binds` entirely (the unconditional read-only mask over `state_dir`, and the
     writable channel-directory bind nested inside it, in that order), and bwrap applies
     overlapping binds in argv order, later wins -- so what governs any given location is
     the *last* bind in the compiled sequence whose own `jail_path` equals that location
@@ -346,6 +354,9 @@ def writable_shared_paths(
     """
     candidates = (
         *policy.binds,
+        # The mask over `state_dir` (TASK-0019): a tmpfs, so nothing the host shares and
+        # never writable once sealed. A non-writable entry governs exactly as it does, and
+        # the supervisor script bound back inside it is read-only too, so neither counts.
         Bind(host_path=state_dir, jail_path=state_dir),
         *(
             (
@@ -432,16 +443,48 @@ def _compile_channel_bind(channels: Reservations | None) -> tuple[str, ...]:
     return ("--bind", directory.host_path, directory.jail_path)
 
 
+def _compile_state_dir_mask(state_dir: str, supervisor_script: str) -> tuple[str, ...]:
+    """Mask brig's state directory with an empty tmpfs and bind back only this jail's
+    own supervisor script, read-only (TASK-0019) -- the opening half of the mask;
+    `_compile_state_dir_seal` is the closing half, after the channel directory's bind.
+
+    The state directory holds every jail's supervisor script and channel directory, and a
+    Unix socket accepts a connect through a read-only mount, so what of it a jail sees it
+    can dial (measured at a7e7f45: one jail dialled another's reserved channel through the
+    `--ro-bind <state_dir> <state_dir>` this replaced). The tmpfs comes after `policy`'s
+    own binds, so it also covers a policy that binds an ancestor of the state directory
+    (`WHOLE_HOST_READ_ONLY`'s `/`): later wins, as for every bind here. It needs its
+    mountpoint exactly as that bind did, so `covering_ancestor_bind`'s refusal still
+    applies unchanged.
+    """
+    return ("--tmpfs", state_dir, "--ro-bind", supervisor_script, supervisor_script)
+
+
+def _compile_state_dir_seal(state_dir: str) -> tuple[str, ...]:
+    """Remount the state directory's tmpfs read-only once everything inside it is bound
+    (TASK-0019), so the jail cannot write there either -- the same read-only view the
+    whole-directory bind gave before.
+
+    bwrap's `--remount-ro` is not recursive (measured against bubblewrap 0.9.0): the
+    channel directory's own writable bind inside the tmpfs stays writable. It has to come
+    after that bind, since the bind's mountpoint is created in the tmpfs while it is still
+    writable.
+    """
+    return ("--remount-ro", state_dir)
+
+
 def compile_supervisor_launch(
     supervisor_path: tuple[str, ...],
     *,
     state_dir: str,
+    supervisor_script: str,
     policy: FsPolicy = WHOLE_HOST_READ_ONLY,
     channels: Reservations | None = None,
 ) -> tuple[str, ...]:
     """Wrap `supervisor_path` in this jail type's own bwrap flags, so bwrap starts
     the supervisor named there as the jail's one process, seeing exactly the paths
-    `policy` names, plus `state_dir`, and nothing else (TASK-0001.16, TASK-0006) --
+    `policy` names, plus, of `state_dir`, its own `supervisor_script` and channel
+    directory, and nothing else (TASK-0001.16, TASK-0006, TASK-0019) --
     this function's own job before TASK-0001.15 step 4 pointed it at the real
     command directly, now aimed at the supervisor instead (decision-0002).
 
@@ -454,8 +497,10 @@ def compile_supervisor_launch(
 
     `state_dir` has no default: every caller passes the state directory it
     actually resolved (`infra/state_dir.py`) and wrote the supervisor's own script
-    into, bound unconditionally in the compiled argv -- always present, always
-    after `policy`'s own binds, so a same-path policy bind can never shadow it
+    into, masked unconditionally in the compiled argv (`_compile_state_dir_mask`) --
+    always present, always after `policy`'s own binds, so a same-path policy bind can
+    never shadow it, and an ancestor bind (`WHOLE_HOST_READ_ONLY`'s `/`) does not
+    expose the other jails' scripts and channels beneath it
     (this module's own docstring has the measured limits of that guarantee: it
     does not make every ancestor bind a policy might name safe -- a `policy`
     naming a *read-only* ancestor bind of `state_dir` whose own source lacks
@@ -465,6 +510,11 @@ def compile_supervisor_launch(
     `supervisor_path` already crosses from presentation into domain (rule 2:
     domain does no I/O to locate either).
 
+    `supervisor_script` is the file `supervisor_path` runs, inside `state_dir`: the one
+    file of that directory the mask binds back, read-only (TASK-0019). Named on its own
+    rather than read off `supervisor_path`'s last element, so the compile does not
+    depend on how that argv is spelled.
+
     `supervisor_path` is presentation's own concern: this jail type's driver finds
     wherever the file `infra/supervisor/wire.py` and `program.py` assemble into
     actually lives (`domain/jail_types/bwrap.py`'s module docstring) and hands the
@@ -473,22 +523,20 @@ def compile_supervisor_launch(
     no I/O of its own to locate anything (rule 2).
 
     `channels` (TASK-0001.25), when it declares at least one channel, adds one
-    writable `--bind` of its per-jail channel directory, right after the `state_dir`
-    bind: the channel directory lives beneath brig's state directory, and bwrap
-    applies binds in argv order (later wins), so it has to come after that read-only
-    bind to stay writable inside it. Declaring none adds nothing, so the argv is
-    exactly what it was before the parameter existed. The host directory must exist
-    before bwrap runs -- bwrap would otherwise try to create its mountpoint beneath
-    the read-only `state_dir` bind and fail with EROFS (TASK-0001.22's measured
-    shape); creating it is `infra/sockets.py`'s (TASK-0001.26), not this function's.
+    writable `--bind` of its per-jail channel directory, between the state
+    directory's mask and its seal: the channel directory lives beneath brig's state
+    directory, bwrap applies binds in argv order (later wins), so it has to come after
+    the tmpfs to show through it, and before `--remount-ro`, which needs the bind's
+    mountpoint already made in the tmpfs. Declaring none adds nothing there. The host
+    directory must exist before bwrap runs, as the bind's source; creating it is
+    `infra/sockets.py`'s (TASK-0001.26), not this function's.
     """
     return (
         "bwrap",
         *_compile_binds(policy),
-        "--ro-bind",
-        state_dir,
-        state_dir,
+        *_compile_state_dir_mask(state_dir, supervisor_script),
         *_compile_channel_bind(channels),
+        *_compile_state_dir_seal(state_dir),
         *_VIRTUAL_FS_FLAGS,
         *_NAMESPACE_FLAGS,
         *supervisor_path,

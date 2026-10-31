@@ -55,7 +55,7 @@ class ChannelDirectoryUnreachable(Exception):
     `presentation/api.py`'s `_check_channel_directory_reachable` is the one place
     this is raised: the same `covering_ancestor_bind` guard as
     `_check_state_dir_reachable`, generalised by handing it `policy`'s binds plus
-    the unconditional `state_dir` bind `compile_supervisor_launch` adds. A channel
+    the unconditional mask over `state_dir` `compile_supervisor_launch` adds. A channel
     directory beneath `state_dir` is therefore never refused (brig creates its leaf
     inside `state_dir` itself, which it owns); one outside it, under a read-only
     ancestor bind of the policy's, is.
