@@ -137,4 +137,22 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Worker's report (Claude, 2026-10-31).
+
+Done: `compile_supervisor_launch` no longer binds the state directory whole. After the policy's binds it mounts `--tmpfs <state_dir>`, binds this jail's own supervisor script back read-only, binds the channel directory when channels are declared, then `--remount-ro <state_dir>` (`_compile_state_dir_mask`, `_compile_state_dir_seal`). It takes the script as a new keyword, `supervisor_script`, which `_supervisors_for` passes (`supervisor_path[-1]`, the file it already hands back for cleanup). `writable_shared_paths` keeps its non-writable entry at `state_dir`, which now stands for the sealed mask, so its result is unchanged for every shape. The reachability checks' logic is unchanged: a tmpfs needs its mountpoint exactly as the bind did, and a channel directory beneath the state directory is never blocked by either. Docstrings that said the whole directory is bound read-only are corrected (bwrap.py, api.py, errors.py, the TIOCSTI copy's).
+
+Tests: `tests/e2e/test_cross_jail_channel_battery.py` (new) runs two jails under `WHOLE_HOST_READ_ONLY`, the hard case, since the policy itself binds the state directory's ancestor. Jail B is handed jail A's endpoint and dials it; the host dials the same endpoint while B runs (positive control); B lists what it sees of the state directory. `tests/unit/test_bwrap_compile.py`'s byte-exact argv assertions follow the new sequence, and a new unit test pins that the compile mounts nothing of the state directory but this jail's script and channel directory, after the mask. `tests/e2e/test_tiocsti_battery.py`'s hand copy of the argv takes the script path, and its differential binds a real temporary file in the state directory (the differential ran and passed here).
+
+Before the fix (a7e7f45), the new battery failed as the bug predicts:
+```
+E       AssertionError: {'dial': 'connected:jail-a-answers', 'state_dir': ['brig-supervisor-beyzh56g.py', 'brig-supervisor-cqlsni7j.py', 'brig...74f93371c25', '69b0e2daf33253e1', '7ed1f8af6aca0a21', ...]}
+tests/e2e/test_cross_jail_channel_battery.py:184: AssertionError
+1 failed in 0.42s
+```
+After: passes, 10 runs out of 10 (0.17-0.29s each). `uv run just done` passes, recorded above (88 e2e passed, 3 skipped, each skip named with its reason; none is a test this change touches).
+
+Measured by hand first (bubblewrap 0.9.0, before any code): under `--ro-bind / /` and under a narrow policy, the jail lists only its own script and `channels/<own>` in the state directory, cannot write the directory or the script, writes its own channel directory, and sees no other jail's socket. `--remount-ro` is not recursive there, so the channel directory stays writable.
+
+Not done here: AC #3 as first written, moved to DRAFT-0012 (see the note above).
 <!-- SECTION:NOTES:END -->
