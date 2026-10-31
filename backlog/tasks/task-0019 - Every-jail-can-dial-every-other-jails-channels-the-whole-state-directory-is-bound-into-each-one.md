@@ -3,7 +3,7 @@ id: TASK-0019
 title: >-
   Every jail can dial every other jail's channels: the whole state directory is
   bound into each one
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-31T11:00:00Z'
@@ -241,4 +241,6 @@ tests/e2e/test_cross_jail_channel_battery.py:181: AssertionError
 FAILED tests/e2e/test_cross_jail_channel_battery.py::test_a_jail_cannot_dial_another_jails_channel_and_sees_only_its_own_state
 1 failed in 0.24s
 ```
+
+Reviewed by philosophy:reviewer, 2026-10-31. Closed. AC #1 and #2 met: the battery passes, and by hand a dialer jail with no declared channel, under policies adding a writable bind of ~/.brig, of its parent, and of ~/.brig/channels, saw only its own supervisor script and got ENOENT dialling jail A's endpoint. The repro recorded by the worker against a7e7f45's bwrap.py and api.py exits 1 on the battery's own assertion (dial 'connected:jail-a-answers', every jail's entries visible), so the battery catches a regression. src and tests match the reviewed commit 95cfc21 and the battery passes again at HEAD. Full gate (uv run just done) passed, recorded above. AC #3's move to DRAFT-0012 is justified (an owner decision on the claim's definition). Docstrings corrected. Findings: none outstanding; the earlier unverified-regression finding is settled by the recorded repro.
 <!-- SECTION:NOTES:END -->
