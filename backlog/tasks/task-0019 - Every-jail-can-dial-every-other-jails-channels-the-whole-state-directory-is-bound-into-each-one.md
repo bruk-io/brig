@@ -75,8 +75,8 @@ The listener survives brig's own readiness dial-and-leave first, so B's connect 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A bwrap jail sees no other jail's channel directory or supervisor script: of brig's state directory, at most its own channel directory and its own supervisor's file
-- [ ] #2 An e2e battery plants the attempt above (a second jail dials the first's reserved endpoint) and fails if the connect succeeds, with a positive control that shows the same dial succeeds from the host
+- [x] #1 A bwrap jail sees no other jail's channel directory or supervisor script: of brig's state directory, at most its own channel directory and its own supervisor's file
+- [x] #2 An e2e battery plants the attempt above (a second jail dials the first's reserved endpoint) and fails if the connect succeeds, with a positive control that shows the same dial succeeds from the host
 <!-- AC:END -->
 
 ## Implementation Plan
