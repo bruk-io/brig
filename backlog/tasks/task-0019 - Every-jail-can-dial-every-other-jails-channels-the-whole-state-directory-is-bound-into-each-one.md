@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-31T11:00:00Z'
-updated_date: '2026-10-31T14:48:00Z'
+updated_date: '2026-10-31T14:50:00Z'
 labels:
   - size-3
   - finish-moved
@@ -155,4 +155,70 @@ After: passes, 10 runs out of 10 (0.17-0.29s each). `uv run just done` passes, r
 Measured by hand first (bubblewrap 0.9.0, before any code): under `--ro-bind / /` and under a narrow policy, the jail lists only its own script and `channels/<own>` in the state directory, cannot write the directory or the script, writes its own channel directory, and sees no other jail's socket. `--remount-ro` is not recursive there, so the channel directory stays writable.
 
 Not done here: AC #3 as first written, moved to DRAFT-0012 (see the note above).
+
+Check `uv run just done` exited 0
+
+(238 earlier lines omitted)
+```text
+[2m14:50:26.148[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:react/[39m[95marchitecture[39m[0m
+[2m14:50:26.149[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:model/[39m[95marchitecture[39m[0m
+[2m14:50:26.176[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:icons/[39m[95marchitecture[39m[0m
+[2m14:50:28.027[0m [1m[32mINFO [0m [1m[36mlikec4.vite.webcomponent[0m ✓ built in 1.96s
+[2m14:50:28.042[0m [1m[32mINFO [0m [1m[36mlikec4.c4:codegen[0m [2mgenerated[22m /home/user/brig/site/assets/mkdocs_likec4/likec4_views.js[0m
+[2m14:50:28.045[0m [1m[32mINFO [0m [1m[36mlikec4.c4:codegen[0m [32mdone in 2.5s[39m[0m
+
+   ┌───────────────────────────────────────────────────────────────┐
+   │                                                               │
+   │                                                               │
+   │   [2mWebcomponents generated to:[22m                                 │
+   │    site/assets/mkdocs_likec4/likec4_views.js                  │
+   │                                                               │
+   │   [2mSetup and usage instructions:[22m                               │
+   │    [34mhttps://likec4.dev/tooling/code-generation/webcomponent/[39m   │
+   │                                                               │
+   │                                                               │
+   └───────────────────────────────────────────────────────────────┘
+
+uv run mkdocs build --strict
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+
+[31m │  ⚠  Warning from the Material for MkDocs team[0m
+[31m │[0m
+[31m │[0m  MkDocs 2.0, the underlying framework of Material for MkDocs,
+[31m │[0m  will introduce backward-incompatible changes, including:
+[31m │[0m
+[31m │  × [0mAll plugins will stop working – the plugin system has been removed
+[31m │  × [0mAll theme overrides will break – the theming system has been rewritten
+[31m │  × [0mNo migration path exists – existing projects cannot be upgraded
+[31m │  × [0mClosed contribution model – community members can't report bugs
+[31m │  × [0mCurrently unlicensed – unsuitable for production use
+[31m │[0m
+[31m │[0m  Our full analysis:
+[31m │[0m
+[31m │[0m  [4mhttps://squidfunk.github.io/mkdocs-material/blog/2026/02/18/mkdocs-2.0/[0m
+[0m
+INFO    -  mkdocs-likec4: No projects discovered, using default root project
+INFO    -  Cleaning site directory
+INFO    -  Building documentation to directory: /home/user/brig/site
+INFO    -  mkdocs-likec4: Generating web component for default project from /home/user/brig/docs
+INFO    -  Documentation built in 4.72 seconds
+
+== architecture validate: PASS ==
+[2m14:50:29.504[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mlayout[22m wasm[0m
+[2m14:50:29.523[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m /home/user/brig/docs/architecture[0m
+[2m14:50:29.558[0m [1m[32mINFO [0m [1m[36mlikec4.server.projects[0m add [32m'architecture'[39m
+[2m14:50:29.559[0m [1m[32mINFO [0m [1m[36mlikec4.server.workspace[0m loaded [33m1[39m projects
+[2m14:50:29.956[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m found 27 source files[0m
+[2m14:50:30.151[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32m✓ Valid[39m[2m (27 files)[22m[0m
+[2m14:50:30.152[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32mvalidate 649ms[39m[0m
+npx -y likec4@1.60.0 validate docs/architecture
+
+== architecture lint: PASS ==
+
+c4lint: 0 error(s), 0 warning(s) across 20 elements, 20 relationships, 5 views
+uv run python3 scripts/c4lint.py docs/architecture
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+
+done: all steps passed
+```
 <!-- SECTION:NOTES:END -->
