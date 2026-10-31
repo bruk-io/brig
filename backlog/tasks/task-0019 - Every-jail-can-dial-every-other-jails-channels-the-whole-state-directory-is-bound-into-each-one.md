@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-31T11:00:00Z'
-updated_date: '2026-10-31T14:51:00Z'
+updated_date: '2026-10-31T14:55:00Z'
 labels:
   - size-3
   - finish-moved
@@ -223,4 +223,22 @@ done: all steps passed
 ```
 
 Review (philosophy:reviewer, 2026-10-31): not closed, only because the close needs a recorded repro. Both criteria are met and ticked: the battery passes; by hand, a jail with no declared channel, under policies adding a writable bind of ~/.brig, of its parent, and of ~/.brig/channels, listed only its own supervisor script and got ENOENT dialling jail A's endpoint. The full gate passed (recorded above). The repro is missing: record-check --repro needs a run that fails, which means the battery run against a7e7f45's src. The review hook would not let me swap that code in or extract it, so I could not run it, and the worker's pasted failure is not a recorded repro. To close: with a7e7f45's bwrap.py and api.py in place, run record-check TASK-0019 --repro -- uv run pytest tests/e2e/test_cross_jail_channel_battery.py -q, put the files back, then close-task. Moving AC #3 to DRAFT-0012 is justified. The docstrings are corrected.
+
+Repro at 59e999488da9, test files: tests/e2e/test_cross_jail_channel_battery.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_cross_jail_channel_battery.py` exited 1
+
+(35 earlier lines omitted)
+```text
+                destroy_jail(jail_b)
+        finally:
+            destroy_jail(jail_a)
+    
+>       assert outcome["dial"] in {"FileNotFoundError", "ConnectionRefusedError"}, outcome
+E       AssertionError: {'dial': 'connected:jail-a-answers', 'state_dir': ['brig-supervisor-2ev3d_fc.py', 'brig-supervisor-beyzh56g.py', 'brig...74f93371c25', '7ed1f8af6aca0a21', 'a91c59349656bf5a', 'aae36774e61a42d8', 'b09a984577302a83', 'b6245aa290241b80', ...]}
+E       assert 'connected:jail-a-answers' in {'ConnectionRefusedError', 'FileNotFoundError'}
+
+tests/e2e/test_cross_jail_channel_battery.py:181: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_cross_jail_channel_battery.py::test_a_jail_cannot_dial_another_jails_channel_and_sees_only_its_own_state
+1 failed in 0.24s
+```
 <!-- SECTION:NOTES:END -->
