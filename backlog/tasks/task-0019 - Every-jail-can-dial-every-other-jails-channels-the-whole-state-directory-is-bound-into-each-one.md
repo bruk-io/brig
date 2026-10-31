@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-31T11:00:00Z'
-updated_date: '2026-10-31T14:41:00Z'
+updated_date: '2026-10-31T14:48:00Z'
 labels:
   - size-3
   - finish-moved
@@ -101,4 +101,40 @@ The new battery fails on a7e7f45 (B's dial connects) and passes after; `just don
 
 <!-- SECTION:NOTES:BEGIN -->
 AC #3 ("channel_exclusivity's enumeration counts a dialable shared medium, read-only or not") moved out, 2026-10-31, before any code: the claim is defined over writable shared paths, so counting read-only dialable media redefines old SPEC law 9's claim, and under WHOLE_HOST_READ_ONLY the default would then grade violated. That is a design decision for the owner, filed as a draft ("channel_exclusivity counts only writable shared paths, but a read-only bind of a host directory holding a socket is dialable"). This task removes the one such medium brig adds itself.
+
+Check `uv run just done` exited 0
+
+(268 earlier lines omitted)
+```text
+[31m │  × [0mClosed contribution model – community members can't report bugs
+[31m │  × [0mCurrently unlicensed – unsuitable for production use
+[31m │[0m
+[31m │[0m  Our full analysis:
+[31m │[0m
+[31m │[0m  [4mhttps://squidfunk.github.io/mkdocs-material/blog/2026/02/18/mkdocs-2.0/[0m
+[0m
+INFO    -  mkdocs-likec4: No projects discovered, using default root project
+INFO    -  Cleaning site directory
+INFO    -  Building documentation to directory: /home/user/brig/site
+INFO    -  mkdocs-likec4: Generating web component for default project from /home/user/brig/docs
+INFO    -  Documentation built in 4.70 seconds
+
+== architecture validate: PASS ==
+[2m14:48:20.782[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mlayout[22m wasm[0m
+[2m14:48:20.799[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m /home/user/brig/docs/architecture[0m
+[2m14:48:20.844[0m [1m[32mINFO [0m [1m[36mlikec4.server.projects[0m add [32m'architecture'[39m
+[2m14:48:20.845[0m [1m[32mINFO [0m [1m[36mlikec4.server.workspace[0m loaded [33m1[39m projects
+[2m14:48:21.208[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m found 27 source files[0m
+[2m14:48:21.402[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32m✓ Valid[39m[2m (27 files)[22m[0m
+[2m14:48:21.403[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32mvalidate 622ms[39m[0m
+npx -y likec4@1.60.0 validate docs/architecture
+
+== architecture lint: PASS ==
+
+c4lint: 0 error(s), 0 warning(s) across 20 elements, 20 relationships, 5 views
+uv run python3 scripts/c4lint.py docs/architecture
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+
+done: all steps passed
+```
 <!-- SECTION:NOTES:END -->
