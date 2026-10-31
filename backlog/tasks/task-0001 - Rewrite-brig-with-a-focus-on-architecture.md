@@ -4,8 +4,8 @@ title: Rewrite brig with a focus on architecture
 status: To Do
 assignee:
   - '@bruk'
-created_date: '2026-10-17 19:05'
-updated_date: '2026-10-26 02:34'
+created_date: 2026-10-17 19:05
+updated_date: '2026-10-31T11:00:00Z'
 labels:
   - brig
   - size-8
@@ -58,7 +58,7 @@ I would prefer all logs to be JSON-shaped and consistent.
 
 - [x] Reservations (`.reserve(`): carry over the per-jail socket directory an embedder can reserve before the jail starts, or drop it? Settled by decision-0002: carry it over, as a request channel (name, bound_path, endpoint reservation against a per-jail channel directory, readiness a verified connect, never path existence). Full implementation is a later slice; the shape is decided.
 - [ ] Egress: cooperative as today (the workload is pointed at the proxy and may ignore it), or enforced, by relaying the jail's only route out through the supervisor to the proxy? Carried forward: decision-0002 resequenced this to be designed after the supervisor lands (egress's own open question names the supervisor), not before; the cooperative-vs-enforced choice itself is still open.
-- [ ] Seatbelt: build its slice before a Mac run proves it, or wait for a Mac run? Carried forward: bwrap comes first; this is decided before the Seatbelt work starts. Per decision-0002, Seatbelt can start once the supervisor's wire shape (not full implementation) is settled, since program.py/wire.py are meant to be jail-type-agnostic.
+- [x] Seatbelt: build its slice before a Mac run proves it, or wait for a Mac run? Settled by the owner, 2026-10-31: wait for a Mac run.
 - [ ] The log envelope: its fields (time, level, source, event, then the event's own fields?), and whether "all logs JSON-shaped and consistent" becomes a rule in the philosophy plugin for every repository. Carried forward: decision-0002 resequenced this to be designed after the supervisor lands (the envelope's own open question names the supervisor's first log line), not before; the fields themselves are still open.
 - [x] The docs theme: bh-01's components or Material for MkDocs? Settled by TASK-0001.02: Material for MkDocs; bh-01 is a UI/artifact design system, not an MkDocs theme, and Material integrates natively with mkdocstrings and mkdocs-likec4.
 - [x] The ruff hook that formats every file an agent edits: add it to `.claude/settings.json`, or run ruff only in `just done`? Settled by TASK-0001.01: no hook. Ruff runs only in `just done`, matching this intent's own words above ("ruff ... run only when the work is done").
