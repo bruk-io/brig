@@ -5,7 +5,7 @@ status: To Do
 assignee:
   - '@bruk'
 created_date: 2026-10-17 19:05
-updated_date: '2026-10-31T11:00:00Z'
+updated_date: '2026-11-02T17:23:00Z'
 labels:
   - brig
   - size-8
@@ -138,4 +138,6 @@ Net: the channels vertical slice (decision-0002 item 2, through TASK-0001.28) is
 genuinely done. The egress proxy, the Seatbelt jail type, and systematic law-by-law
 test coverage are the real remaining chunks of this intent -- not administrative
 catch-up.
+
+Architecture review, 2026-11-02: the ten laws are carried verbatim and still name things cut or never built here (law 2's mechanism/stack/launcher, law 7's Process.stop/control, law 9's EnvPolicy.set; laws 5-6's inbound messages and provenance). They need restating against this design before criterion #17's tests can mean anything.
 <!-- SECTION:NOTES:END -->
