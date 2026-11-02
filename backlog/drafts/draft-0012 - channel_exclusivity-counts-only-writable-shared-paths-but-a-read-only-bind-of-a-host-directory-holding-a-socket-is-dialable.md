@@ -6,6 +6,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-10-31T14:41:00Z'
+updated_date: '2026-11-02T17:23:00Z'
 labels:
   - size-3
 dependencies: []
@@ -24,3 +25,9 @@ Measured: TASK-0019's reproduction dialled through brig's read-only state-direct
 <!-- AC:BEGIN -->
 - [ ] #1 Decision recorded: whether channel_exclusivity (old SPEC law 9) covers dialable read-only media, and if so how they are enumerated and what the default policy then grades
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Architecture review, 2026-11-02, measured under the shipped default (no policy given): a host listener at /run/brig_review_host.sock, and the jail dialled it and read its answer (JAIL-DIALED-HOST b'HOST-SECRET'). So under WHOLE_HOST_READ_ONLY a jailed command can reach the session bus, a container runtime's socket, anything under /run or /tmp, while channel_exclusivity grades enforced. Severity: high.
+<!-- SECTION:NOTES:END -->
