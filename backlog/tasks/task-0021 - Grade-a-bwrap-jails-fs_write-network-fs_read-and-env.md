@@ -5,6 +5,7 @@ status: To Do
 assignee:
   - '@claude'
 created_date: '2026-10-31T11:00:00Z'
+updated_date: '2026-11-02T17:23:00Z'
 labels:
   - size-5
 dependencies: []
@@ -30,3 +31,9 @@ Each claim's grade must come from evidence, never be stated ahead of it (law: gr
 - [ ] #2 Each claim is graded from evidence an e2e battery produces against real bwrap, and none grades stronger than that battery shows
 - [ ] #3 With no evidence, each grades unenforced (TASK-0001.18's default)
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Architecture review, 2026-11-02: there is no runtime report today. Grade and Evidence exist only inside e2e tests, and only one Claim is in src (fd_inheritance and tiocsti_closure are defined in tests/e2e/test_claims_wiring.py). An embedder needs a call that returns a jail's claims and grades at runtime (something like claims_for(jail) or report(policy)), built from claims the compile states for that policy and evidence that ships with the commit. Include a claim for a read-only bind nested in a writable one, which the host can undo by replacing the entry, computed from the binds. The claims must also measure what TASK-0022 and DRAFT-0012 found, or they will overstate.
+<!-- SECTION:NOTES:END -->
