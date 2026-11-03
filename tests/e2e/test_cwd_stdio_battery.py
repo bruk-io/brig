@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import brig
 from brig import FsPolicy, PolicyCwdOutsideRoots, Stdio, create_bwrap_jail, destroy_jail, run_jail
 
 pytestmark = pytest.mark.skipif(
@@ -69,3 +70,38 @@ def test_a_cwd_outside_every_root_is_refused_before_anything_starts() -> None:
             create_bwrap_jail(
                 (sys.executable, "-c", "pass"), policy=FsPolicy(readable=("/usr",)), cwd=root
             )
+
+
+def test_a_stdio_path_inside_a_writable_root_is_refused() -> None:
+    """TASK-0031: a jail may write there, so it could swap the file for a link and have the next
+    jail's output appended to any file the embedder can write. Refused before anything starts,
+    and the file the link points at is untouched."""
+    with (
+        tempfile.TemporaryDirectory(dir="/tmp") as root,
+        tempfile.TemporaryDirectory(dir="/tmp") as elsewhere,
+    ):
+        victim = Path(elsewhere) / "victim"
+        victim.write_text("before")
+        (Path(root) / "out.txt").symlink_to(victim)
+        with pytest.raises(brig.PolicyStdioInWritableRoot) as refused:
+            create_bwrap_jail(
+                (sys.executable, "-I", "-c", "print('appended')"),
+                policy=FsPolicy(readable=("/",), writable=(root,)),
+                stdio=Stdio(stdout=f"{root}/out.txt"),
+            )
+        assert refused.value.path == f"{root}/out.txt"
+        assert victim.read_text() == "before"
+
+
+def test_a_policy_that_does_not_reach_the_supervisors_interpreter_is_refused() -> None:
+    """TASK-0029: the supervisor runs under the embedder's own interpreter, so the policy must
+    mount it and every link on the way to it. A policy of the system tree alone, without the
+    interpreter's own (wherever it lives), is refused naming the first path it misses."""
+    system = tuple(p for p in ("/usr", "/bin", "/lib", "/lib64", "/etc") if Path(p).exists())
+    if any(sys.executable.startswith(p + "/") for p in system):
+        pytest.skip(
+            "this interpreter lives under the system tree, so no system-only policy misses it"
+        )
+    with pytest.raises(brig.PolicyInterpreterUnreachable) as refused:
+        create_bwrap_jail((sys.executable, "-c", "pass"), policy=FsPolicy(readable=system))
+    assert refused.value.path == sys.executable
