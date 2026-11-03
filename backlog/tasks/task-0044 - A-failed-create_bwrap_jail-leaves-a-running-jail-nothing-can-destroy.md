@@ -1,7 +1,7 @@
 ---
-id: DRAFT-0023
+id: TASK-0044
 title: A failed create_bwrap_jail leaves a running jail nothing can destroy
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T17:47:00Z'
 labels:
