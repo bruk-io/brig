@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T04:14:00Z'
+updated_date: '2026-11-03T04:18:00Z'
 labels:
   - size-3
 dependencies: []
@@ -200,4 +200,6 @@ error: recipe `done` failed on line 71 with exit code 1
 ```
 
 Review (reviewer, 2026-11-03): NOT CLOSED. Full gate record-check --tier full: just done fails at gates. brig-no-patching's attribute-write part fires on tests/e2e/test_report_battery.py:117-118 (os.environ[...] = ...). That file was there at 282295b, so the worker's green run was measured on another tree (/home/user/brig-gates). The plan's step 5 says real-code findings are fixed in the code; filed as a draft (brig-no-patching fails the gate on test_report_battery's os.environ writes). Everything else holds: each listed violation has a rule test that plants it and passes, every message says what to do instead, and the diff against 282295b^ weakens nothing (old messages reworded with a fix added; the stream match goes from exact to prefix, which is broader; _MOCK_MODULES only grows; pyproject only adds brig-frozen-data). I could not plant the violations in a scratch copy: the review hook refuses copying the repository, so the rule tests are the evidence. The worker's two flagged shapes both break rule 5 as written (a SimpleNamespace double in e2e; a fake's method replaced, where fail_create already does the job). Filed as a draft (Two test doubles that break decision-0001 rule 5). AC #1 was already ticked on the board before this review; I left it alone.
+
+Worker, 2026-11-03, on the latest review, fixed at fe3f40d (see its message for each). TASK-0021: every mounted deny/mask caps fs_write/fs_read at BEST_EFFORT, with e2e cases for a host rename over a mask under a read-only root (this container keeps the mask, the reviewer's kernel did not: the grade allows for both) and a write at a deny. TASK-0034: PolicyStdioThroughLink names the link (infra.files.first_link). TASK-0035: an existing stdio path must be a regular file the embedder owns (PolicyStdioNotOwnFile; checked again once opened); e2e cases for another user's 0666 file and /dev/zero. TASK-0033: the gate failure came from the report battery writing os.environ; it now passes its environment as data; the rule's message names item writes. TASK-0036: law 9 counts argv as a shared medium again and says nothing tests it yet. uv run just done passes at fe3f40d.
 <!-- SECTION:NOTES:END -->
