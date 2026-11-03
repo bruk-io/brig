@@ -54,12 +54,14 @@ from brig.presentation.errors import (
     PolicyMaskHides,
     PolicyPathNotAbsolute,
     PolicyPathThroughLink,
+    PolicyPathUninspectable,
     PolicyRootAbsent,
     PolicyStdioHardLinked,
     PolicyStdioInWritableRoot,
     PolicyStdioNotOwnFile,
     PolicyStdioThroughLink,
     StateDirectoryWriteFailed,
+    SupervisorSourceUnreadable,
 )
 from brig.presentation.jail import (
     CHANNEL_DIRECTORIES,
@@ -88,10 +90,19 @@ def _supervisor_path(state_dir: str) -> tuple[str, ...]:
     `link.py` giving it no environment of the caller's; it does nothing for `LD_PRELOAD`, which
     only the environment split keeps out.
 
+    The source is read before the file is made, outside the write's error handling, so a broken
+    install is never reported as a state directory the host refused (TASK-0047).
+
     Raises:
+        SupervisorSourceUnreadable: brig's own supervisor source could not be read; nothing was
+            written (TASK-0047).
         StateDirectoryWriteFailed: the host refused the file or its write; a file written in
             part is removed first (TASK-0046).
     """
+    try:
+        source = assemble.assembled_source()
+    except OSError as error:
+        raise SupervisorSourceUnreadable() from error
     written: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -102,12 +113,42 @@ def _supervisor_path(state_dir: str) -> tuple[str, ...]:
             dir=state_dir,
         ) as handle:
             written = handle.name
-            handle.write(assemble.assembled_source())
+            handle.write(source)
     except OSError as error:
         if written is not None:
             Path(written).unlink(missing_ok=True)
         raise StateDirectoryWriteFailed(state_dir) from error
     return (sys.executable, "-I", handle.name)
+
+
+def _facts(paths: tuple[str, ...]) -> dict[str, tuple[str, str]]:
+    """`infra.files.facts` of each of `paths`, one at a time so a refusal names its own path.
+
+    Raises:
+        PolicyPathUninspectable: the host refused to say what is at a path (a directory on the
+            way the embedder's user cannot search, a symbolic link loop); the `OSError` is the
+            `__cause__` (TASK-0047).
+    """
+    found: dict[str, tuple[str, str]] = {}
+    for path in paths:
+        try:
+            found |= _files.facts((path,))
+        except OSError as error:
+            raise PolicyPathUninspectable(path) from error
+    return found
+
+
+def _link_chain(path: str) -> tuple[str, ...]:
+    """`infra.files.link_chain` of `path`.
+
+    Raises:
+        PolicyPathUninspectable: a link on the way could not be read, or changed while it was
+            read; the `OSError` is the `__cause__` (TASK-0047).
+    """
+    try:
+        return _files.link_chain(path)
+    except OSError as error:
+        raise PolicyPathUninspectable(path) from error
 
 
 def _supervisors_for(
@@ -118,7 +159,11 @@ def _supervisors_for(
 ) -> tuple[SupervisorPort, Path, tuple[bwrap.Mount, ...], tuple[str, ...]]:
     """Refuse or compile `policy` for one jail, and return its `SupervisorPort` (a fresh
     `LiveSupervisor`), the supervisor script written for it, its mounts, and the absent paths
-    it holds placeholders for. Nothing is written before every refusal has passed.
+    it holds placeholders for. Nothing is written before every refusal has passed. Beside what is
+    listed below, `PolicyPathUninspectable` from `_facts` and `_link_chain` (the host refused to
+    say what is at a policy path, a stdio path or the interpreter, or where a link on the way to
+    one leads) and `SupervisorSourceUnreadable` from `_supervisor_path` (brig's own supervisor
+    source could not be read) propagate (TASK-0047).
 
     Raises:
         PolicyPathNotAbsolute: a path in `policy` is not absolute and normalised.
@@ -147,8 +192,7 @@ def _supervisors_for(
     )
     every = (*policy.readable, *policy.writable, *policy.write_denies, *policy.masks)
     host = {
-        path: HostPath(PathKind(kind), resolved)
-        for path, (kind, resolved) in _files.facts(every).items()
+        path: HostPath(PathKind(kind), resolved) for path, (kind, resolved) in _facts(every).items()
     }
     match refusal(policy, needed, host):
         case PathNotAbsolute(path=path):
@@ -177,7 +221,7 @@ def _supervisors_for(
                 assert_never(unreachable)
     streams = (stdio.stdin, stdio.stdout, stdio.stderr)
     named = tuple(path for path in streams if path is not None and path != "/dev/null")
-    chains = {path: _files.link_chain(path) for path in named}
+    chains = {path: _link_chain(path) for path in named}
     counts = {path: _files.link_count(path) for path in named}
     first = {path: _files.first_link(path) for path in named}
     own = {path: _files.own_regular_file(path) for path in named}
@@ -196,7 +240,7 @@ def _supervisors_for(
             pass
         case _ as unreachable:
             assert_never(unreachable)
-    match interpreter_refusal(policy, _files.link_chain(sys.executable)):
+    match interpreter_refusal(policy, _link_chain(sys.executable)):
         case InterpreterUnreachable(path=path):
             raise PolicyInterpreterUnreachable(path)
         case None:
@@ -204,7 +248,7 @@ def _supervisors_for(
         case _ as unreachable:
             assert_never(unreachable)
     kinds = {path: found.kind for path, found in host.items()}
-    for path, (kind, _) in _files.facts(bwrap.pin_candidates(policy)).items():
+    for path, (kind, _) in _facts(bwrap.pin_candidates(policy)).items():
         kinds.setdefault(path, PathKind(kind))
     try:
         empty_dir = str(_state_dir_mod.ensure_empty(Path(state_dir)))
@@ -284,7 +328,10 @@ def create_bwrap_jail(
     supervisor's close raised is added to that error as a note (TASK-0046). Beside what is
     listed below, the policy refusals of `_supervisors_for`, `StateDirectoryInvalid`,
     `StateDirectoryWriteFailed` (the host refused to make brig's state directory or its empty
-    directory, or to write the supervisor script, before anything started; TASK-0046), and
+    directory, or to write the supervisor script, before anything started; TASK-0046),
+    `PolicyPathUninspectable` (the host refused to say what is at a path the policy or stdio
+    names, or at the interpreter; TASK-0047), `SupervisorSourceUnreadable` (brig's own install
+    is broken; TASK-0047), and
     `ChannelNamespaceNotFound` from `_namespace_fd_for` propagate. A jail whose command finished
     before its namespace was found has no namespace fd (TASK-0001.30).
 

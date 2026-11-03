@@ -231,7 +231,12 @@ reads not ready until the deadline instead of holding the embedder (TASK-0045). 
 link never dialled) and `tests/e2e/test_channel_readiness_beneath.py`. `errors.py` names
 every exception an embedder can see, one per failure, so an embedder handles brig's own types
 and never infra's: a host that refuses brig's own state directory, its empty directory or the
-supervisor script before a jail starts is `StateDirectoryWriteFailed` (TASK-0046). `src/brig/__init__.py` re-exports exactly this layer's surface and the
+supervisor script before a jail starts is `StateDirectoryWriteFailed` (TASK-0046), a path the
+policy or stdio names (or the interpreter) that the host will not let brig inspect is
+`PolicyPathUninspectable`, and brig's own supervisor source it cannot read is
+`SupervisorSourceUnreadable`, read before the script is made so a broken install is never
+reported as the state directory (TASK-0047). *Held by*
+`tests/integration/test_create_inspection_errors.py`. `src/brig/__init__.py` re-exports exactly this layer's surface and the
 domain's plain data, nothing from infra.
 
 Not yet built: `drivers/seatbelt.py` and `proxy_main.py`.

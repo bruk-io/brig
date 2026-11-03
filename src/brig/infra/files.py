@@ -9,7 +9,9 @@ def facts(paths: tuple[str, ...]) -> dict[str, tuple[str, str]]:
     """Each of `paths` as `(kind, resolved)`: `kind` is `"file"`, `"directory"` or `"absent"`,
     following links (a link is what it leads to, a dangling one is absent), and `resolved` is where
     the path leads once every link on the way is followed (`os.path.realpath`), so a caller can
-    tell a path reached through a link from one that is not."""
+    tell a path reached through a link from one that is not. Any other `OSError` from the
+    `stat` propagates, such as `PermissionError` for a directory on the way this process cannot
+    search, or `ELOOP` for a symbolic link loop: the path's kind is then unknown, not absent."""
     found: dict[str, tuple[str, str]] = {}
     for path in paths:
         try:
@@ -29,7 +31,9 @@ _MAX_LINKS = 40
 def link_chain(path: str) -> tuple[str, ...]:
     """Every path a lookup of `path` passes through: `path` itself, then, each time a component
     on the way is a symbolic link, the path with that link replaced by its target, until none
-    is. Absolute and normalised; stops after `_MAX_LINKS` links, as the kernel does."""
+    is. Absolute and normalised; stops after `_MAX_LINKS` links, as the kernel does. An
+    `OSError` from reading a link propagates: one this process may not read (another user's
+    `/proc/<pid>/cwd`), or one replaced or removed between finding it and reading it."""
     chain = [os.path.normpath(path)]
     for _ in range(_MAX_LINKS):
         current = chain[-1]

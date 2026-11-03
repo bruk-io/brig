@@ -121,6 +121,26 @@ class PolicyRootAbsent(Exception):
         self.path = path
 
 
+class PolicyPathUninspectable(Exception):
+    """Raised when brig could not inspect a path it must judge before a jail starts: an entry of
+    a caller's `FsPolicy`, a stdio path, or the interpreter the supervisor runs under. The host
+    refused to say what is there or where a link on the way leads (a directory the embedder's
+    user cannot search, a symbolic link loop, a link it cannot read or that changed while brig
+    read it). The host's `OSError` is the `__cause__`; nothing was made or started (TASK-0047).
+
+    Args:
+        path: The path as the caller named it.
+    """
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"could not inspect {path!r} on the host, so brig cannot tell what a jail would see "
+            "there -- make every directory on the way searchable by this process's user and "
+            "every link on it readable and not a loop, or leave the path out"
+        )
+        self.path = path
+
+
 class PolicyPathThroughLink(Exception):
     """Raised when an entry in a caller's `FsPolicy` is reached through a symbolic link inside a
     writable root: the command may replace that link, and a mount follows it, so the entry would
@@ -200,6 +220,20 @@ class StateDirectoryWriteFailed(Exception):
             "nothing, or set BRIG_HOME to an absolute path brig can write"
         )
         self.path = path
+
+
+class SupervisorSourceUnreadable(Exception):
+    """Raised when brig could not read its own supervisor program's source, which it assembles
+    into each jail's supervisor script: brig's install is incomplete or unreadable, not its
+    state directory. The host's `OSError` is the `__cause__` and names the file; nothing was
+    written or started (TASK-0047)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "could not read brig's own supervisor source (brig.infra.supervisor's wire.py and "
+            "program.py) -- brig's install is incomplete or unreadable by this process's user; "
+            "reinstall brig"
+        )
 
 
 class JailSpawnFailed(Exception):

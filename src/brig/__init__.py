@@ -40,6 +40,7 @@ from brig.presentation.errors import (
     PolicyMaskHides,
     PolicyPathNotAbsolute,
     PolicyPathThroughLink,
+    PolicyPathUninspectable,
     PolicyRootAbsent,
     PolicyStdioHardLinked,
     PolicyStdioInWritableRoot,
@@ -47,6 +48,7 @@ from brig.presentation.errors import (
     PolicyStdioThroughLink,
     StateDirectoryInvalid,
     StateDirectoryWriteFailed,
+    SupervisorSourceUnreadable,
 )
 from brig.presentation.jail import Jail
 from brig.presentation.ports import (
@@ -96,6 +98,7 @@ __all__ = [
     "PolicyMaskHides",
     "PolicyPathNotAbsolute",
     "PolicyPathThroughLink",
+    "PolicyPathUninspectable",
     "PolicyRootAbsent",
     "PolicyStdioHardLinked",
     "PolicyStdioInWritableRoot",
@@ -107,6 +110,7 @@ __all__ = [
     "StateDirectoryInvalid",
     "StateDirectoryWriteFailed",
     "Stdio",
+    "SupervisorSourceUnreadable",
     "WHOLE_HOST_READ_ONLY",
     "at_most",
     "await_channel_ready",
