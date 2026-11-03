@@ -191,3 +191,76 @@ def test_channel_exclusivity_a_host_socket_in_a_socket_place_is_reached_only_whe
             code, jail = _exit(_DIAL, path, policy=narrow)
             _held_to(jail, CHANNEL_EXCLUSIVITY_CLAIM, control=True, blocked=code == 7)
             assert jail.report[CHANNEL_EXCLUSIVITY_CLAIM] is Grade.ENFORCED
+
+
+_READ_AFTER_GO = (
+    "import os, sys, time\n"
+    "secret, go = sys.argv[1:3]\n"
+    "try:\n"
+    "    before = open(secret).read()\n"
+    "except OSError:\n"
+    "    before = ''\n"
+    "while not os.path.exists(go):\n"
+    "    time.sleep(0.02)\n"
+    "try:\n"
+    "    after = open(secret).read()\n"
+    "except OSError:\n"
+    "    after = ''\n"
+    "sys.exit((1 if 'old' in before else 0) + (2 if 'NEW' in after else 0))\n"
+)
+
+
+def test_fs_read_a_mask_the_host_renames_over_is_undone_so_the_report_says_best_effort() -> None:
+    """A mask is a mount on the host's directory entry, and the host replacing that entry (an
+    editor saving by rename) can detach it in the jail, wherever the mask is: the command alone
+    cannot read the secret, and the report says no more than BEST_EFFORT."""
+    with (
+        tempfile.TemporaryDirectory(dir="/tmp") as root,
+        tempfile.TemporaryDirectory(dir="/tmp") as side,
+    ):
+        secret = Path(root) / "secret"
+        secret.write_text("old")
+        go = Path(side) / "go"
+        jail = create_bwrap_jail(
+            (sys.executable, "-I", "-c", _READ_AFTER_GO, str(secret), str(go)),
+            policy=FsPolicy(readable=("/",), masks=(str(secret),)),
+        )
+        try:
+            replacement = Path(root) / "secret.new"
+            replacement.write_text("NEW")
+            os.replace(replacement, secret)
+            go.write_text("")
+            code = run_jail(jail, timeout_s=15)
+        finally:
+            destroy_jail(jail)
+    assert not code & 1, "the command read the masked secret before the host touched it"
+    # Whether the host's rename detaches the mask depends on the kernel and filesystem (an
+    # architecture review measured it reading the new file; this container keeps the mask), so
+    # the report must allow for it: never ENFORCED for a mask over a host entry.
+    assert jail.report[FS_READ_CLAIM] is Grade.BEST_EFFORT
+
+
+def test_fs_write_a_write_at_a_deny_is_refused_and_a_host_rename_undoes_it() -> None:
+    """A write deny inside a writable root refuses the command's write (measured ENFORCED for
+    the command alone), and the report says BEST_EFFORT, since the host replacing the denied
+    entry detaches its mount."""
+    with tempfile.TemporaryDirectory(dir="/tmp") as root:
+        hooks = Path(root) / "hooks"
+        hooks.mkdir()
+        program = (
+            "import sys\n"
+            "open(sys.argv[1] + '/beside', 'w').write('x')\n"
+            "try:\n"
+            "    open(sys.argv[1] + '/hooks/pre-commit', 'w').write('x')\n"
+            "except OSError:\n"
+            "    sys.exit(7)\n"
+        )
+        code, jail = _exit(
+            program,
+            root,
+            policy=FsPolicy(readable=("/",), writable=(root,), write_denies=(str(hooks),)),
+        )
+        control = (Path(root) / "beside").exists()
+        blocked = code == 7 and not (hooks / "pre-commit").exists()
+    _held_to(jail, FS_WRITE_CLAIM, control, blocked)
+    assert jail.report[FS_WRITE_CLAIM] is Grade.BEST_EFFORT
