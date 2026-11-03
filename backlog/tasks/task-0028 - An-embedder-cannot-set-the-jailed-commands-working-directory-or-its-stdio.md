@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T03:29:00Z'
+updated_date: '2026-11-03T03:31:00Z'
 labels:
   - size-3
   - finish-moved
@@ -21,8 +21,8 @@ Found by an architecture review, 2026-11-02, at 739dd94. Measured: the command s
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 create takes a working directory for the command, and an stdio policy (at least: stdout and stderr to a file brig returns, or to nothing)
-- [ ] #2 The fd allow-list the supervisor and its command start with comes from the embedder's Stdio, not a constant in infra or bwrap; Plan.inheritable_fds, which reached no effect, is gone
+- [x] #1 create takes a working directory for the command, and an stdio policy (at least: stdout and stderr to a file brig returns, or to nothing)
+- [x] #2 The fd allow-list the supervisor and its command start with comes from the embedder's Stdio, not a constant in infra or bwrap; Plan.inheritable_fds, which reached no effect, is gone
 <!-- AC:END -->
 
 ## Implementation Notes
