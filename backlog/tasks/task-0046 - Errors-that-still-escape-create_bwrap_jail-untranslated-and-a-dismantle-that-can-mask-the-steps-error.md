@@ -3,10 +3,10 @@ id: TASK-0046
 title: >-
   Errors that still escape create_bwrap_jail untranslated, and a dismantle that
   can mask the step's error
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-11-03T18:58:00Z'
-updated_date: '2026-11-03T19:17:00Z'
+updated_date: '2026-11-03T19:18:00Z'
 labels:
   - brig
   - errors
@@ -165,4 +165,20 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Worker, 2026-11-03: repro e14be84, fix 7ecff69 (branch claude/error-edges). Criteria left unticked for the reviewer.
+
+**Repro.** `tests/integration/test_create_error_edges.py`, recorded failing above, each on an assertion about what crossed. The fakes gained the failures it needs (a refused TERM, a close that raises, a start that spawns then fails). Today's port had no way to say "I spawned this, then failed", so in the repro commit `FakeSupervisors(fail_after_start=True)` records the spawn and raises `OSError`, as the real port did. The fix changes only the fake's way of reporting (`JailSpawnFailed` carrying the `Process`, the new port contract). The repro file is unchanged. Edge 1 can't be faked in-process: nothing sits between the driver and the state directory, root ignores permissions, and `resolved_state_dir` is cached per process and shared with every jail on the host. So each host failure is real, in a child Python with its own `BRIG_HOME`, using the fakes: the state directory under a regular file, an `empty` directory that holds a file, and a 1 KiB `RLIMIT_FSIZE` that stops the script's write (`EFBIG`).
+
+**#1 (bare OSErrors before the start).** New type `StateDirectoryWriteFailed(path)`, exported from `brig`. No existing type fit. `StateDirectoryInvalid` is a refused `BRIG_HOME` value, found before any I/O. `ChannelDirectoryCreateFailed` and `PlaceholdersFailed` name other things. Wrapped: `ensure_empty` (path `<state>/empty`), the script write (path: the state directory; a part-written script is unlinked), and `resolved_state_dir`'s own `ensure`, which also prepares the state directory and raised bare too. `reserve_channels` now raises the typed error there as well.
+
+**#2 (dismantle hides the step's error).** `dismantle` returns `_Dismantled(state, ladder_error, close_error)` and raises nothing. It catches `Exception` from the kill ladder and from `supervisors.close`. A ladder that raised reads as `ALIVE`, since the group was never verified gone, so placeholders are kept. A failed create adds each error to the step's error with `add_note`, and raises `JailTeardownFailed` from that step error on `ALIVE`. `destroy_jail` raises `JailTeardownFailed` from the ladder's error (it used to let a bare OSError out), and swallows a close failure as it swallows every other cleanup's. The docstrings say which.
+
+**#3 (spawned, never stopped).** I took the simplest shape: the start hands back what it spawned. `link.SupervisorSpawnError.spawned` is `(pid, pgid)` when the start failed after the spawn (pumps that could not start, or a request write that hit `EPIPE`). `link` no longer blocks in `waitpid` on a supervisor it never signalled; it hands it over unsignalled and unreaped. The driver turns that into `JailSpawnFailed(argv, process)`, and a port may raise that itself. `create_bwrap_jail` takes `error.process` and tears it down through the verified ladder. The other option, the port reaping its own child, would put an unverified kill in infra, beside the domain's verified ladder (decision-0001 rule 10). E2e gateway `tests/e2e/test_supervisor_link_spawned_then_failed.py` pins the infra half with a stand-in supervisor that closes `REQUEST_FD` and sleeps. Before the fix it blocked 30 s in `waitpid`, then failed.
+
+**Public API changes.** `StateDirectoryWriteFailed` (new). `JailSpawnFailed(argv, process=None)` gains `.process`. `Process` is exported. `SupervisorPort.start` documents raising `JailSpawnFailed` with `process` set. `destroy_jail` raises `JailTeardownFailed` (not a bare OSError) when the ladder raises.
+
+**Later tests.** `tests/integration/test_create_error_edges_types.py` pins the exact type, the path it names, and that no partial script is left. It also covers a spawned-then-failed start whose teardown fails (`JailTeardownFailed` from `JailSpawnFailed`, placeholders kept), and both `destroy_jail` paths.
+
+**Found, not fixed (follow-up?).** Other pre-start OSErrors can still escape `create_bwrap_jail` bare. `_files.facts` calls `os.stat`, which raises `PermissionError` or `ELOOP` for a policy path the embedder cannot search; only not-found is caught. `_files.link_chain` calls `os.readlink`, which can lose a race. And `assemble.assembled_source()` reading brig's own installed sources is inside the script write's `try`, so a broken install would read as `StateDirectoryWriteFailed`. A `KeyboardInterrupt` between the spawn and the end of `link._start` is still not handed back (only `OSError` and `RuntimeError` are).
 <!-- SECTION:NOTES:END -->
