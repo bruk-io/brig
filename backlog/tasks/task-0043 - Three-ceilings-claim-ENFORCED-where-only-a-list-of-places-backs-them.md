@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T18:04:00Z'
+updated_date: '2026-11-03T18:17:00Z'
 labels:
   - brig
   - grades
@@ -27,6 +27,26 @@ Architecture review 2026-11-03. (a) fs_write is ENFORCED with a readable root ne
 - [x] #3 network is never stronger than channel_exclusivity, since a dialable host socket can carry the network; a unit test pins the ordering
 - [x] #4 decision-0008 is amended (a dated note) with the rule that ENFORCED needs a kernel mechanism, and a draft names the mechanism that could earn channel_exclusivity and network back (Landlock here is ABI 7: abstract sockets only; a supervisor-held listening fd plus a seccomp filter on socket(AF_UNIX) is the candidate)
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Written after the change, as built (the brief from the owner was the plan).
+
+### Order of work
+1. Repro battery tests/e2e/test_ceiling_host_change_battery.py (fs_write host rename, socket outside the listed places, socket relaying to TCP), committed and recorded failing.
+2. ceilings in src/brig/domain/jail_types/bwrap.py: fs_write from the compiled mounts, channel_exclusivity BEST_EFFORT for any root, network capped by channel_exclusivity; claim texts.
+3. Hold the existing batteries to the new ceilings (test_report_battery, test_report_ceilings), add the ordering unit test.
+4. decision-0008 dated note, the design draft, spec laws 1 and 9 and the domain section.
+5. just done through record-check --tier full.
+
+### Risks
+- Embedders see network VIOLATED wherever channel_exclusivity is, a writable project included.
+- The host-rename behaviour is kernel and filesystem dependent; the battery holds the report to what it measures either way.
+
+### Proof
+The repro passes after the fix; just done passes (recorded on this task).
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
