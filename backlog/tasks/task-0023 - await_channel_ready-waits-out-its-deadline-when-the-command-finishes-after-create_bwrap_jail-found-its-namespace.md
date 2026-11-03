@@ -3,11 +3,11 @@ id: TASK-0023
 title: >-
   await_channel_ready waits out its deadline when the command finishes after
   create_bwrap_jail found its namespace
-status: To Do
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T02:42:00Z'
-updated_date: '2026-11-03T02:45:00Z'
+updated_date: '2026-11-03T02:46:00Z'
 labels:
   - size-2
 dependencies: []
@@ -45,4 +45,6 @@ tests/e2e/test_channel_jail_finished.py:85: AssertionError
 FAILED tests/e2e/test_channel_jail_finished.py::test_a_jail_whose_command_exits_at_once_is_created_and_reads_as_finished
 1 failed in 10.15s
 ```
+
+Worker's report (Claude, 2026-11-03). await_channel_ready takes a processes port and, after every not-ready attempt, peeks the jail's own process (decision-0003: never reaped); once it has exited it answers ChannelJailFinished. tests/e2e/test_channel_jail_finished.py's first test asserts the outcome and that it comes within 2s instead of which side of the scan's race it landed on (committed alone first, 0f0ac9d; the repro above failed there, on the second of two runs, the race being a race). A new integration test (fakes) asserts a peek after one not-ready attempt, ChannelJailFinished at once, nothing reaped or released; the four existing readiness integration tests pass a FakeProcesses whose process is running. With TASK-0022's supervisor the e2e test passed 10 runs in 10. uv run just done passes at 08aaf4a (recorded on TASK-0022, same tree).
 <!-- SECTION:NOTES:END -->
