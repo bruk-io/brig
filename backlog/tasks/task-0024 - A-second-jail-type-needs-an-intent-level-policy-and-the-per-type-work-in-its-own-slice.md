@@ -7,7 +7,7 @@ status: To Do
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T03:06:00Z'
+updated_date: '2026-11-03T03:16:00Z'
 labels:
   - size-8
 dependencies: []
@@ -33,7 +33,7 @@ Proposed shape, for the decision: an intent policy (writable roots; read roots o
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Decision recorded: the policy type an embedder writes, how each jail type compiles it, and where per-type orchestration lives
+- [x] #1 Decision recorded: the policy type an embedder writes, how each jail type compiles it, and where per-type orchestration lives
 <!-- AC:END -->
 
 ## Implementation Notes
