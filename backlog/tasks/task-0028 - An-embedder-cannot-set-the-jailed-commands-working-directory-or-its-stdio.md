@@ -1,7 +1,7 @@
 ---
 id: TASK-0028
 title: An embedder cannot set the jailed command's working directory or its stdio
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
@@ -95,4 +95,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review (reviewer, not the worker): closed. Full gate (uv run just done) passes, recorded above; the cwd/stdio, fd-inheritance and interrupt batteries passed 8 runs in 8. The finish-moved restatement of #2 is justified: Plan.inheritable_fds reached no effect, and making Stdio the allow-list (unnamed streams inherited, named ones dup2'd in, everything else closed) is what the original criterion was after. Fds: opened O_CLOEXEC, handed over only through spawn's dup2 actions, closed in brig's process in a finally after the spawn, so they leak neither into another process nor stay open here. An unnamed stream is the embedder's own (capfd test), and the fd battery still shows no other embedder fd reaching the jail. Finding (medium, filed as a draft: stdio path opened through a symlink): _open_stdio follows a symlink and O_CREAT's 0600 applies only to a new file, so a stdio path inside a writable root can be turned by one jail into an append to any file the embedder can write; O_NOFOLLOW on the last component, or refusing a stdio path under a writable root, is warranted. It does not block the criteria as written.
 <!-- SECTION:NOTES:END -->
