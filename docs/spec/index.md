@@ -82,7 +82,18 @@ tuples (decision-0001 rule 8).
 
 `jail_types/bwrap.py` is bwrap's slice: `compile_run` makes the plan, `compile_mounts` turns the
 policy into one ordered tuple of mounts, from which `compile_supervisor_launch`'s argv,
-`writable_shared_paths` and `ceilings` are all read. `channels.py` reserves each declared channel
+`writable_shared_paths` and `ceilings` are all read. A deny or a mask is a mount on the entry it
+names, and a mount moves with its parent, so among the mounts are the pins (TASK-0001.31, old SPEC
+decision-168): each directory strictly between a writable root and a deny or mask, where the jail
+shows it writable and it is no entry of the policy, is bound writable over itself before the deny
+or mask it leads to. A mount point refuses `rename(2)` inside the jail's mount namespace (`EBUSY`,
+measured), so the command cannot move `W/a` away, taking the deny at `W/a/b/f` with it, and make
+its own `W/a/b/f` for the host to read. Which of `pin_candidates` are directories is a host fact
+presentation looks up; the directories brig makes for an absent deny or mask (its placeholders)
+are made before the jail starts, so they are pinned too. What the pins cover is a rename from
+inside the jail of a directory that was there when it started; what they do not is a directory
+the host itself creates, removes or renames on the way while the jail runs. The cost: a rename
+between a pinned directory and the rest of its root crosses a mount and fails with `EXDEV`. `channels.py` reserves each declared channel
 in the jail's channel directory before the jail starts (decision-0002). `claims.py` and
 `grades.py` hold the claims a compile states and `grade`, the one function that grades them
 from evidence. A jail's runtime report is the ceiling its compile states per claim (`fs_write`,
