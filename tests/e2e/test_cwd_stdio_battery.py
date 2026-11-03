@@ -83,14 +83,18 @@ def test_a_stdio_path_inside_a_writable_root_is_refused() -> None:
         victim = Path(elsewhere) / "victim"
         victim.write_text("before")
         (Path(root) / "out.txt").symlink_to(victim)
-        with pytest.raises(brig.PolicyStdioInWritableRoot) as refused:
-            create_bwrap_jail(
+        refused: Exception | None = None
+        try:
+            _run(
                 (sys.executable, "-I", "-c", "print('appended')"),
                 policy=FsPolicy(readable=("/",), writable=(root,)),
                 stdio=Stdio(stdout=f"{root}/out.txt"),
             )
-        assert refused.value.path == f"{root}/out.txt"
-        assert victim.read_text() == "before"
+        except Exception as error:  # noqa: BLE001 -- the type is asserted below
+            refused = error
+        assert victim.read_text() == "before", "the jail's output went through the link"
+        assert type(refused).__name__ == "PolicyStdioInWritableRoot", refused
+        assert getattr(refused, "path", None) == f"{root}/out.txt"
 
 
 def test_a_policy_that_does_not_reach_the_supervisors_interpreter_is_refused() -> None:
