@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0021
+id: TASK-0042
 title: >-
   A jail reopens its stdio files through /proc/self/fd with more rights than
   brig granted
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T17:47:00Z'
 labels:
