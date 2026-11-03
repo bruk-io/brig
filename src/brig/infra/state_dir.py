@@ -1,5 +1,5 @@
 """Brig's own runtime-state directory: where brig keeps artifacts it writes for
-itself -- currently just the assembled supervisor script (`presentation/api.py`'s
+itself -- currently just the assembled supervisor script (`presentation/drivers/bwrap.py`'s
 `_supervisor_path`) -- instead of the caller-controlled, shared `/tmp`
 (TASK-0006).
 

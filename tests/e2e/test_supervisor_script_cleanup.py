@@ -155,7 +155,7 @@ def test_a_run_that_fails_before_a_jail_is_ever_returned_does_not_leak_its_scrip
     `bwrap` is not installed, so the supervisor's own spawn fails with a real
     `FileNotFoundError`, wrapped by `infra.processes.spawn` into `SpawnError`, by
     `infra.supervisor.link._start` into `SupervisorSpawnError`, and by
-    `presentation/drivers/bwrap.py`'s own driver into `JailSpawnFailed` -- all
+    `presentation/driver.py`'s `run` into `JailSpawnFailed` -- all
     before `create_bwrap_jail` ever constructs the `Jail` it would otherwise
     return.
     """

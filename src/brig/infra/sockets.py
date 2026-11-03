@@ -53,7 +53,7 @@ giving up.
 TASK-0001.24's own probe as provenance, not a rounder number picked here: its
 `jail_pid_ns` helper used `deadline = time.monotonic() + 5`, measured sufficient on
 real bwrap for an `--as-pid-1` jail to produce its in-jail PID 1. Change it only
-against a fresh measurement. Public because `presentation/api.py` is what computes
+against a fresh measurement. Public because `presentation/drivers/bwrap.py` is what computes
 the deadline it is handed (`jail_pid1_namespace` takes a deadline, never reads this
 itself -- rule 2: infra waits, presentation decides how long).
 """
@@ -67,7 +67,7 @@ class JailPid1NotFound:
 
     Infra hands back plain data and never raises a `brig` type (decision-0001
     rules 1 and 9), the same reasoning `infra/processes.py`'s own `ProcessUnknown`
-    sentinel gives; `presentation/api.py` is the one place that turns this into a
+    sentinel gives; `presentation/jail.py` is the one place that turns this into a
     typed exception (`ChannelNamespaceNotFound`), because a jail that cannot offer
     the namespace readiness compares against is a creation failure, never a
     per-poll result.
@@ -114,7 +114,7 @@ class ChannelRefused:
     Three plain module-level string constants, not an `Enum`: `Enum` is a `brig`
     concept for values that cross into domain and presentation, and this module
     imports nothing from `brig`. `presentation/ports.py`'s `ChannelReadinessRefusal`
-    is the `Enum` an embedder matches on, and `presentation/api.py` translates the
+    is the `Enum` an embedder matches on, and `presentation/jail.py` translates the
     two by value -- exactly the split `ProcessUnknown` already has between
     `infra/processes.py`'s own dataclass and `presentation/ports.py`'s.
     """

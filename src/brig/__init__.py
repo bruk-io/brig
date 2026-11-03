@@ -13,13 +13,12 @@ from brig.domain.jail_types.bwrap import (
 from brig.domain.policy.env import DENY_ALL, EnvPolicy
 from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, FsPolicy
 from brig.presentation.api import (
-    Jail,
     await_channel_ready,
-    create_bwrap_jail,
     destroy_jail,
     reserve_channels,
     run_jail,
 )
+from brig.presentation.drivers.bwrap import create_bwrap_jail
 from brig.presentation.errors import (
     ChannelDirectoryCreateFailed,
     ChannelNameRefused,
@@ -32,6 +31,7 @@ from brig.presentation.errors import (
     PolicyPathNotAbsolute,
     StateDirectoryInvalid,
 )
+from brig.presentation.jail import Jail
 from brig.presentation.ports import (
     ChannelDirectoryPort,
     ChannelJailFinished,

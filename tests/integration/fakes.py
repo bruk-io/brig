@@ -178,7 +178,7 @@ class FakeSupervisors:
     the supervisor's report being gone for good). `fail_start`, while `True`, has
     `start` raise `OSError` after recording the call -- the fakes-only way to arrange
     `create_bwrap_jail` failing once everything before the start already happened
-    (`presentation/drivers/bwrap.py`'s `run` turns it into `JailSpawnFailed`).
+    (`presentation/driver.py`'s `run` turns it into `JailSpawnFailed`).
     """
 
     exit_code: int = 0

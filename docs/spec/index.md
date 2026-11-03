@@ -105,15 +105,19 @@ package — decision-0001's layout for this directory, built out as later slices
 `src/brig/presentation/` is the only layer that knows both of the others, and the only one that
 raises. `src/brig/presentation/ports.py` states what a driver needs from infra as a `Protocol`,
 never the concrete infra module by name, so a driver can be run against a fake of the same shape
-in a test. `src/brig/presentation/drivers/bwrap.py` is the one module that translates between
-domain's effects and a port's plain-data calls for bwrap's jail type — the one place that knows
-both, by design (decision-0001 rule 1): an infra sentinel is translated into domain's own
-equivalent here, and never crosses this boundary unchanged.
+in a test. `src/brig/presentation/driver.py` is the one module that translates between domain's
+effects and a port's plain-data calls, for every jail type — the one place that knows both, by
+design (decision-0001 rule 1): an infra sentinel is translated into domain's own equivalent here,
+and never crosses this boundary unchanged.
 
-`src/brig/presentation/api.py` wires a jail type's domain operations through its driver into the
-real `brig.infra.processes` functions by default, and is brig's public entry point —
-`src/brig/__init__.py` re-exports exactly this layer's surface, nothing from `domain` or `infra`
-directly. `src/brig/presentation/errors.py` is where every raise an embedder can see is named: one
+Each jail type's own presentation is its slice (decision-0007 item 5):
+`src/brig/presentation/drivers/bwrap.py` refuses and compiles the policy, writes the supervisor
+script, starts the jail through the driver and holds its PID namespace for readiness, and exports
+`create_bwrap_jail`. What every jail type shares is beside it: `src/brig/presentation/jail.py`
+(the `Jail`, brig's state directory, and the real ports' default wiring onto infra) and
+`src/brig/presentation/api.py` (reserving channels, readiness, waiting, teardown).
+`src/brig/__init__.py` re-exports exactly this layer's surface and the domain's plain data, nothing
+from infra directly. `src/brig/presentation/errors.py` is where every raise an embedder can see is named: one
 exception per failure, so an embedder handles brig's own types and never infra's.
 
 Reserved, not yet built: `report.py`, a `drivers/seatbelt.py` beside `drivers/bwrap.py`, and

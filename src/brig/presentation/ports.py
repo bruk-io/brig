@@ -1,13 +1,13 @@
 """Protocols the presentation layer asks infra to satisfy (decision-0001 rule 7).
 
 A jail type's driver takes its infra calls through a port like this one, never the
-concrete module by name in its own signatures; `presentation/api.py` wires the real
+concrete module by name in its own signatures; `presentation/jail.py` wires the real
 `brig.infra.processes` module in by default, and a test passes a fake of the same shape
 instead (rule 5) -- nothing here needs to know which.
 
 `ProcessUnknown` below mirrors `infra.processes`'s own sentinel of the same name the
 way `_ProcessIdentity` mirrors `SpawnedProcess`, rather than importing it: a real
-`ProcessPort` (`presentation/api.py`'s wiring) translates infra's version into this
+`ProcessPort` (`presentation/jail.py`'s wiring) translates infra's version into this
 one, so this module -- and everything that imports `ProcessUnknown` from it, down to
 `brig`'s public API that `tests/integration/fakes.py` reaches it through (rule 4) --
 never names infra's own type (rule 13: an embedder handles brig's types, never
@@ -60,7 +60,7 @@ class ProcessPort(Protocol):
     """What a jail type's driver needs from infra to run its one process.
 
     Matches `brig.infra.processes`'s own functions one for one in shape, though not
-    quite verbatim: `presentation/api.py`'s default wiring wraps `reap` and
+    quite verbatim: `presentation/jail.py`'s default wiring wraps `reap` and
     `reap_deadline` just enough to translate infra's own `ProcessUnknown` into this
     module's, so no infra type ever reaches a driver through this port.
     """
@@ -124,7 +124,7 @@ class ProcessPort(Protocol):
         as "this group is still alive" (decision-0003). No default here (unlike
         `infra.processes.group_alive`'s own): a driver always computes and passes
         `held` explicitly, and a `Callable`-typed field (`_RealProcesses`, in
-        `presentation/api.py`) cannot express an optional parameter a Protocol
+        `presentation/jail.py`) cannot express an optional parameter a Protocol
         method can.
         """
         ...
@@ -148,7 +148,7 @@ class SupervisorDoneUnknown:
     decoding it failed outright. Mirrors `infra.supervisor.link`'s own sentinel of
     the same name the way `ProcessUnknown` above already mirrors
     `infra.processes`'s (this module's own docstring), rather than importing it; a
-    real `SupervisorPort` (`presentation/api.py`'s wiring) translates infra's
+    real `SupervisorPort` (`presentation/jail.py`'s wiring) translates infra's
     version into this one.
 
     Distinct from `None`, which `await_done` returns instead when `deadline` passes
@@ -202,7 +202,7 @@ class ChannelReadinessRefusal(Enum):
     (decision-0005 items 2, 5 and 6, TASK-0001.27 AC#1).
 
     A closed set of three names, mirroring the three reasons
-    `infra.sockets.channel_ready` can refuse for -- `presentation/api.py`'s default
+    `infra.sockets.channel_ready` can refuse for -- `presentation/jail.py`'s default
     wiring translates infra's own string constants into these, the same way its
     `_reap` translates infra's `ProcessUnknown`. An embedder matches on these;
     nothing under `infra/` is named here (rule 13).
@@ -286,7 +286,7 @@ class ChannelReadinessPort(Protocol):
     verified rather than by path existence (decision-0002 item 2, decision-0005).
 
     Matches `brig.infra.sockets.channel_ready`'s own shape one for one, the same way
-    `ProcessPort` mirrors `brig.infra.processes`: `presentation/api.py`'s default
+    `ProcessPort` mirrors `brig.infra.processes`: `presentation/jail.py`'s default
     wiring translates infra's own `ChannelRefusalReason` strings and its `ChannelReady`/
     `ChannelNotReady` sentinels into this module's values, so no infra type crosses
     this port.
@@ -318,7 +318,7 @@ class ChannelDirectoryPort(Protocol):
     lifecycle on the world `create_bwrap_jail`/`destroy_jail` actually run against
     (TASK-0001.26).
 
-    `presentation/api.py`'s default names a fresh path under brig's own state
+    `presentation/jail.py`'s default names a fresh path under brig's own state
     directory (`allocate`) and creates/removes it for real through `infra/sockets.py`;
     a fake records all three calls instead of touching anything.
     """

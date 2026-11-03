@@ -3,7 +3,7 @@
 Each operation decides what should happen next and yields an `Effect` from
 `domain/effects.py` for a driver to perform, resuming with whatever the driver sends
 back. Nothing here does I/O (rule 2); the driver that performs these effects for bwrap
-lives in `presentation/drivers/bwrap.py`.
+lives in `presentation/driver.py`.
 
 TASK-0001.15 step 4: `create`/`start` yield `StartSupervisedCommand`/
 `AwaitSupervisorDone` now, in place of the direct `Spawn`/`Reap` shape the walking

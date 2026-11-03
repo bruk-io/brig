@@ -91,7 +91,7 @@ class StartSupervisedCommand:
 
     `operations.create()` is this effect's real caller as of TASK-0001.15 step 4
     (decision-0001 rule 6's `under-exposed-access`/`over-exposed-module-symbol`);
-    `presentation/drivers/bwrap.py` performs it, through `presentation/ports.py`'s
+    `presentation/driver.py` performs it, through `presentation/ports.py`'s
     `SupervisorPort`.
 
     Unresolved here: `Spawn`'s `inheritable_fds` names the jail type's complete fd

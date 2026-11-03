@@ -2,7 +2,7 @@
 
 Starts the file `wire.py` and `program.py` assemble into -- dropped as PID 1 inside
 the jail's own namespace, by whatever argv a jail type's driver built to get it
-running there (TASK-0001.15 step 4's own wiring, `presentation/api.py`; this module
+running there (TASK-0001.15 step 4's own wiring, `presentation/jail.py`; this module
 is jail-type-agnostic and takes that argv as given) -- as this process's own child,
 through `infra.processes.spawn` rather than a `posix_spawn` call of its own: every
 hardening `spawn` already carries (the `setsid`/`setpgroup` fallback, the `EBADF`
@@ -30,13 +30,13 @@ shape, through `presentation/ports.py`'s `SupervisorPort`.
 
 `LiveSupervisors` is this module's one stateful class (decision-0001 rule 7: "a class
 holding changing state only in infra/", its invariant in its own docstring below) --
-the real `SupervisorPort` `presentation/api.py` wires in by default. It exists because
+the real `SupervisorPort` `presentation/jail.py` wires in by default. It exists because
 `presentation/ports.py`'s `SupervisorPort.await_done`/`close` take only the pid
 `start` handed back (the one thing a `Process` carries between `operations.create()`'s
 and `operations.start()`'s separate driver calls, decision-0002), never the open
 `Supervisor` object itself -- something has to remember which `Supervisor` a pid
 still names, between those two calls, and rule 7 says that something lives here, not
-in `presentation/api.py`.
+in `presentation/jail.py`.
 
 `_start` no longer hands one `env` mapping to both sides of the spawn it performs
 (corrected here, TASK-0001.15/.17 adversarial review): the supervisor process itself
@@ -70,7 +70,7 @@ docstring carries the rest; the broader question it does not answer --
 predates and outlives this one disclosure -- is `WHOLE_HOST_READ_ONLY`'s own, still
 open (tracked as a draft, not fixed here).
 
-`presentation/api.py` additionally runs the supervisor's own interpreter with `-I`
+`presentation/jail.py` additionally runs the supervisor's own interpreter with `-I`
 (isolated mode), so a `PYTHONPATH` surviving in `_SUPERVISOR_ENV` for some unrelated
 reason still cannot reach the supervisor either -- belt and braces with the split
 above, not a substitute for it: `-I` does nothing for `LD_PRELOAD`, which never goes
@@ -148,7 +148,7 @@ class SupervisorDoneUnknown:
     still succeed there, unlike this one. Mirrored, not imported, by
     `presentation/ports.py`'s own sentinel of the same name, the way
     `infra.processes.ProcessUnknown` already mirrors into `ports.ProcessUnknown`
-    (`ports.py`'s own module docstring) -- the real wiring (`presentation/api.py`)
+    (`ports.py`'s own module docstring) -- the real wiring (`presentation/jail.py`)
     is the one place that translates this module's value into that one.
     """
 
@@ -400,7 +400,7 @@ class LiveSupervisors:
     Decision-0001 rule 7's stateful class, confined to infra/: its invariant is that
     every pid in `_open` names a `Supervisor` whose `events_fd` is still open, until
     `await_done` sees it done (or gone for good) or `close` removes it -- `start`
-    adds the entry `await_done`/`close` later look back up, since `presentation/api.py`
+    adds the entry `await_done`/`close` later look back up, since `presentation/jail.py`
     passes this same instance to every one of a jail's `create`/`start`/`destroy`
     driver calls, and a `Process` only ever carries a pid/pgid between them
     (decision-0002), never the open pipe itself.
@@ -409,7 +409,7 @@ class LiveSupervisors:
     def __init__(self, supervisor_argv: tuple[str, ...]) -> None:
         """`supervisor_argv` is the jail type's own bwrap-wrapped (or equivalent)
         launch line for the supervisor's file -- fixed for the lifetime of this
-        instance, computed once by whoever wires this in (`presentation/api.py`),
+        instance, computed once by whoever wires this in (`presentation/jail.py`),
         never varying per `start` call the way the supervised command itself does.
         """
         self._supervisor_argv = supervisor_argv

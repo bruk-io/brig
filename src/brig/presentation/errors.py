@@ -1,8 +1,8 @@
 """Exceptions brig's public API can raise for the bwrap walking skeleton (decision-0001
 rule 13).
 
-One subclass per failure. `presentation/drivers/bwrap.py` and `presentation/api.py` (the
-real wiring, by that module's own docstring) are the only modules that call infra, so
+One subclass per failure. `presentation/driver.py`, `presentation/drivers/bwrap.py`,
+`presentation/jail.py` and `presentation/api.py` are the only modules that call infra, so
 they are the only ones that catch an infra exception and raise one of these in its
 place -- an embedder handles brig's own types without ever needing infra's.
 """

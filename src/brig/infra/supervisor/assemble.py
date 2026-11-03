@@ -1,5 +1,5 @@
 """Assembles `wire.py` and `program.py` into the one stdlib-only file
-decision-0001 rule 17 requires: whatever `presentation/api.py` drops as PID 1
+decision-0001 rule 17 requires: whatever `presentation/drivers/bwrap.py` drops as PID 1
 inside the jail's own namespace (decision-0002) must be exactly those two
 files' own source, nothing else, and must refuse to run under an interpreter
 older than this project's own floor (3.15) -- naming it, rather than failing
@@ -24,7 +24,7 @@ directly as a string literal would have to escape around; a base64 blob has
 no quoting of its own to escape.
 
 This module itself is not part of what gets assembled -- it runs on the host,
-building the artifact `presentation/api.py` drops into the jail, never inside
+building the artifact `presentation/drivers/bwrap.py` drops into the jail, never inside
 one -- but stays stdlib-only regardless: reading `wire.__file__`/
 `program.__file__` plus `base64`/`pathlib` is the whole of what it touches.
 """
