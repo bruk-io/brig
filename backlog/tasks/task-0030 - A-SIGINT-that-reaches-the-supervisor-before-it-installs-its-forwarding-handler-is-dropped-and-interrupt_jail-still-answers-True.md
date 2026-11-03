@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:21:00Z'
-updated_date: '2026-11-03T03:28:00Z'
+updated_date: '2026-11-03T03:31:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -21,8 +21,8 @@ Found reviewing TASK-0020 (e87d194). infra/supervisor/program.py _main starts th
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A SIGINT or SIGTERM sent to the supervisor at any moment after the jail exists reaches the command, or interrupt_jail does not answer True
-- [ ] #2 A test sends SIGINT before the supervisor reports started and shows it delivered
+- [x] #1 A SIGINT or SIGTERM sent to the supervisor at any moment after the jail exists reaches the command, or interrupt_jail does not answer True
+- [x] #2 A test sends SIGINT before the supervisor reports started and shows it delivered
 <!-- AC:END -->
 
 ## Implementation Notes
