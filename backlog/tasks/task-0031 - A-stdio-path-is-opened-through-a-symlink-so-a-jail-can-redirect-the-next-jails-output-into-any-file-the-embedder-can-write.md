@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0020
+id: TASK-0031
 title: >-
   A stdio path is opened through a symlink, so a jail can redirect the next
   jail's output into any file the embedder can write
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T03:31:00Z'
 labels: []
