@@ -1,10 +1,11 @@
 ---
 id: TASK-0027
 title: Mountpoints for absent paths are left on the host after destroy_jail
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T03:48:00Z'
+updated_date: '2026-11-03T03:53:00Z'
 labels:
   - size-3
 dependencies: []
@@ -41,4 +42,6 @@ tests/e2e/test_placeholders_battery.py:94: AssertionError
 FAILED tests/e2e/test_placeholders_battery.py::test_placeholders_outlive_no_jail_and_none_is_removed_under_another
 1 failed in 0.17s
 ```
+
+Accepted 2026-11-03. Worker's report (Claude): fixed at 9d9671e. infra/placeholders.py: hold() makes every directory missing on the way to each absent deny/mask target the compile mounts, records them with (st_dev, st_ino), and records which paths this jail holds (those it made, and any another jail's record says that jail made, so a placeholder still mounted by another jail is held too: found while building, when the second jail classed the first's placeholder as present and held nothing); attach() records the jail's bwrap by pid and start time; release(), under one per-user flock, drops this record and every dead one (alive while its bwrap, or before it starts its embedder, is the same process), removing each made directory no live record holds, still the same inode and empty, deepest first, and keeping a dead record's directories a live jail still holds for a later release. create_bwrap_jail holds before the supervisor starts and releases on a failed start (PlaceholdersFailed on an OSError); destroy_jail releases only once the jail is verified gone. tests/e2e/test_placeholders_battery.py (committed first; repro above: the tree kept .envrc, .git/hooks and secret.env): two jails over one tree; the first's teardown leaves the second's holds and the second still cannot create any held path; the second's teardown leaves the tree as it was (.git, there before, kept and empty). 5 runs in 5. uv run just done passes.
 <!-- SECTION:NOTES:END -->
