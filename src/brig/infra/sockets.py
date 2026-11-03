@@ -144,6 +144,10 @@ re-checkable and so reopens the pid-reuse window (decision-0005 item 6).
 """
 
 
+_SIGNAL_WAIT_S = 5.0
+"""How long `signal_jail_pid1` waits for a jail that is still coming up to start its command."""
+
+
 def _children(pid: int, proc_root: str = "/proc") -> list[int]:
     """`pid`'s direct children, found by scanning every numeric entry of `proc_root`
     and reading its `PPid` line (TASK-0001.24's probe, verbatim).
@@ -260,36 +264,69 @@ def jail_pid1_namespace(
         time.sleep(min(_POLL_INTERVAL_S, remaining))
 
 
-def signal_jail_pid1(bwrap_pid: int, sig: int, proc_root: str = "/proc") -> bool:
-    """Send `sig` to the jail's PID 1 (its supervisor), found under `bwrap_pid` as
-    `jail_pid1_namespace` finds it, and say whether it was sent.
-
-    Through a pidfd, opened first and the candidate checked again after it (its parent still
-    `bwrap_pid`, its innermost pid still 1), so a pid recycled between the scan and the signal
-    is never signalled. `False` when no PID 1 is there, or it is a zombie, or it has no child
-    left: the jail's command has finished, or never started.
-    """
+def _pid1_under(bwrap_pid: int, proc_root: str) -> tuple[int, dict[str, str]] | None:
+    """The jail's PID 1 under `bwrap_pid` and its `/proc` status fields, or `None`."""
     for child in _children(bwrap_pid, proc_root):
-        try:
-            pidfd = os.pidfd_open(child)
-        except OSError:
-            continue
         try:
             with open(f"{proc_root}/{child}/status") as handle:
                 fields = dict(line.split(":", 1) for line in handle if ":" in line)
-            if fields.get("PPid", "").strip() != str(bwrap_pid):
-                continue
-            if fields.get("NSpid", "").split()[-1:] != ["1"]:
-                continue
-            if fields.get("State", "").split()[:1] == ["Z"] or not _children(child, proc_root):
-                return False  # the supervisor is exiting, or its command already has
-            signal.pidfd_send_signal(pidfd, sig)
-            return True
         except OSError:
             continue
-        finally:
-            os.close(pidfd)
-    return False
+        if fields.get("NSpid", "").split()[-1:] == ["1"]:
+            return child, fields
+    return None
+
+
+def signal_jail_pid1(
+    bwrap_pid: int,
+    sig: int,
+    proc_root: str = "/proc",
+    timeout_s: float = _SIGNAL_WAIT_S,
+) -> bool:
+    """Send `sig` to the jail's PID 1 (its supervisor) once it has started the command, and say
+    whether it was sent.
+
+    Waits up to `timeout_s` while the jail is still coming up (no PID 1 yet, or a PID 1 with no
+    child yet): a jail `create_bwrap_jail` just returned may not have started its command. `False`
+    once the jail is gone, its PID 1 a zombie, or a PID 1 that started its command has none left:
+    the command has finished.
+
+    Through a pidfd, opened first and the candidate checked again after it (its parent still
+    `bwrap_pid`, its innermost pid still 1), so a pid recycled between the scan and the signal is
+    never signalled.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        found = _pid1_under(bwrap_pid, proc_root)
+        if found is None and _gone(bwrap_pid, proc_root):
+            return False
+        if found is not None:
+            child, fields = found
+            if fields.get("State", "").split()[:1] == ["Z"]:
+                return False
+            if _children(child, proc_root):
+                return _signal_checked(bwrap_pid, child, sig, proc_root)
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_POLL_INTERVAL_S)
+
+
+def _signal_checked(bwrap_pid: int, child: int, sig: int, proc_root: str) -> bool:
+    """Signal `child` through a pidfd if it is still `bwrap_pid`'s PID 1 once the pidfd is open."""
+    try:
+        pidfd = os.pidfd_open(child)
+    except OSError:
+        return False
+    try:
+        again = _pid1_under(bwrap_pid, proc_root)
+        if again is None or again[0] != child:
+            return False
+        signal.pidfd_send_signal(pidfd, sig)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(pidfd)
 
 
 def channel_ready(

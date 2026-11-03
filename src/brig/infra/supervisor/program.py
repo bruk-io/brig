@@ -288,21 +288,38 @@ def _reap_until_gone(child_pid: int) -> int:
 
 
 def _main() -> None:
-    """Run the supervisor's one journey: make this process unreachable from the command,
-    read the exec request, start the command, report it started, reap until nothing
-    remains, report it done.
+    """Run the supervisor's one journey: make this process unreachable from the command, take
+    `SIGTERM`/`SIGINT` before anything else, read the exec request, start the command (forwarding
+    any signal that came first), report it started, reap until nothing remains, report it done.
+
+    The handlers go in first because a PID 1 drops, at send time, any signal it has no handler
+    for, blocked or not (TASK-0030): a `SIGINT` sent before the command existed was lost while
+    the host was told it had been delivered. One that arrives before the command exists is held
+    and forwarded as soon as it does.
     """
     _make_undumpable()
+    started: list[int] = []
+    held: list[int] = []
+
+    def forward(sig: int, frame: FrameType | None) -> None:
+        if started:
+            _forward_signal(started[0], sig, frame)
+        else:
+            held.append(sig)
+
+    for forwarded in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(forwarded, forward)
     argv, env = _read_exec_request()
     child_pid = _start_child(argv, env)
+    started.append(child_pid)
+    for sig in held:
+        _forward_signal(child_pid, sig, None)
     # `_read_exec_request`'s own docstring explains why this process's own
     # `_REQUEST_FD` had to stay open past that call -- `_start_child`'s file
     # actions, just run, needed it there to close *the real command's* copy.
     # Nothing here has a further use for it.
     os.close(_REQUEST_FD)
     _emit({"kind": "started", "pid": child_pid})
-    for forwarded in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(forwarded, lambda sig, frame: _forward_signal(child_pid, sig, frame))
     exit_code = _reap_until_gone(child_pid)
     _emit({"kind": "done", "exit_code": exit_code})
 
