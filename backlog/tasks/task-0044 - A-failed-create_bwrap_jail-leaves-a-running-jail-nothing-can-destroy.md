@@ -4,7 +4,7 @@ title: A failed create_bwrap_jail leaves a running jail nothing can destroy
 status: To Do
 assignee: []
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T18:31:00Z'
+updated_date: '2026-11-03T18:37:00Z'
 labels:
   - brig
   - lifecycle
@@ -31,4 +31,47 @@ Architecture review 2026-11-03 (reasoned from code): in presentation/drivers/bwr
 
 <!-- SECTION:NOTES:BEGIN -->
 Lead, 2026-11-03: criteria written in a separate edit right after promotion (finish-moved for that reason only).
+
+Repro at 228b2980782d, test files: tests/integration/test_create_failure_tears_down.py; command: `uv run pytest tests/integration/test_create_failure_tears_down.py -q` exited 1
+
+```text
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_a_failed_namespace_scan_tears_the_started_supervisor_down ________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-520/test_a_failed_namespace_scan_t0')
+
+    def test_a_failed_namespace_scan_tears_the_started_supervisor_down(tmp_path: Path) -> None:
+        """The scan finds no PID 1 under a running supervisor: `ChannelNamespaceNotFound` still
+        propagates, and before it does the supervisor's group was verified, sent TERM, verified
+        gone and its pid released, and its events pipe closed."""
+        proc_root = str(tmp_path / "proc")
+        plant_fake_proc(proc_root, {_SUPERVISOR_PID: (1, str(_SUPERVISOR_PID))})
+        directories = FakeChannelDirectories()
+        processes = FakeProcesses(alive_checks=1)
+        supervisors = FakeSupervisors()
+        reserved = reserve_channels((Channel("ctl"),), directories=directories)
+    
+        with pytest.raises(ChannelNamespaceNotFound):
+            create_bwrap_jail(
+                ("server",),
+                channels=reserved,
+                processes=processes,
+                supervisors=supervisors,
+                directories=directories,
+                proc_root=proc_root,
+            )
+    
+>       assert processes.signalled == [(_SUPERVISOR_PID, signal.SIGTERM)]
+E       assert [] == [(2000, <Sign...SIGTERM: 15>)]
+E         
+E         Right contains one more item: (2000, <Signals.SIGTERM: 15>)
+E         Use -v to get more diff
+
+tests/integration/test_create_failure_tears_down.py:51: AssertionError
+=========================== short test summary info ============================
+FAILED tests/integration/test_create_failure_tears_down.py::test_a_failed_namespace_scan_tears_the_started_supervisor_down
+1 failed in 5.11s
+```
 <!-- SECTION:NOTES:END -->
