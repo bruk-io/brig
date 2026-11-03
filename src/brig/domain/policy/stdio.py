@@ -9,7 +9,8 @@ class Stdio:
     `stdout` and `stderr` for appending, created owner-only (0600) when absent. `"/dev/null"`
     discards a stream. Wherever a stream goes, the command gets a pipe, and the host pumps it to
     or from the file or the embedder's own fd (TASK-0042): handed a host inode, a jail could
-    reopen it through `/proc/self/fd` with any mode the file allows its uid. The pumps end with
+    reopen it through `/proc/self/fd` with any mode the file allows its uid. So the command never
+    gets a terminal, even with `INHERIT` on one: `isatty` is false in the jail. The pumps end with
     the jail. Nothing else of the embedder's reaches the command: these three numbers are the
     whole fd allow-list past the supervisor's own wire."""
 
