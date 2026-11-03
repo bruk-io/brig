@@ -29,6 +29,7 @@ from brig.domain.policy.paths import (
     RootAbsent,
     StdioHardLinked,
     StdioInWritableRoot,
+    StdioNotOwnFile,
     StdioThroughLink,
     ThroughLink,
     cwd_refusal,
@@ -55,6 +56,7 @@ from brig.presentation.errors import (
     PolicyRootAbsent,
     PolicyStdioHardLinked,
     PolicyStdioInWritableRoot,
+    PolicyStdioNotOwnFile,
     PolicyStdioThroughLink,
 )
 from brig.presentation.jail import (
@@ -153,6 +155,7 @@ def _supervisors_for(
         PolicyStdioInWritableRoot: a stdio path is inside a writable root.
         PolicyStdioThroughLink: a stdio path goes through a symbolic link.
         PolicyStdioHardLinked: an existing stdio file has another name.
+        PolicyStdioNotOwnFile: an existing stdio path is not a regular file the embedder owns.
         PolicyInterpreterUnreachable: the policy does not mount the interpreter the supervisor
             runs under, or a link on the way to it.
     """
@@ -199,13 +202,17 @@ def _supervisors_for(
     named = tuple(path for path in streams if path is not None and path != "/dev/null")
     chains = {path: _files.link_chain(path) for path in named}
     counts = {path: _files.link_count(path) for path in named}
-    match stdio_refusal(policy, streams, chains, counts):
+    first = {path: _files.first_link(path) for path in named}
+    own = {path: _files.own_regular_file(path) for path in named}
+    match stdio_refusal(policy, streams, chains, counts, first, own):
         case PathNotAbsolute(path=path):
             raise PolicyPathNotAbsolute(path)
         case StdioInWritableRoot(path=path):
             raise PolicyStdioInWritableRoot(path)
-        case StdioThroughLink(path=path):
-            raise PolicyStdioThroughLink(path)
+        case StdioThroughLink(path=path, link=through):
+            raise PolicyStdioThroughLink(path, through)
+        case StdioNotOwnFile(path=path):
+            raise PolicyStdioNotOwnFile(path)
         case StdioHardLinked(path=path):
             raise PolicyStdioHardLinked(path)
         case None:

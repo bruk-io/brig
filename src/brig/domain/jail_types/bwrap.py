@@ -317,21 +317,16 @@ def ceilings(
     what this compile states, before any jail runs. An e2e battery holds every one of these to
     what it measures (`at_most`), so none is stated stronger than the batteries show.
 
-    `fs_write` and `fs_read` are `BEST_EFFORT` while a write deny or a mask is mounted inside a
-    writable root: the mount is on the host's directory entry there, and the host replacing that
-    entry (an editor saving by rename) detaches it in the jail. `channel_exclusivity` is
-    `VIOLATED` when a writable path the jail shares with the host is not a declared channel, as
-    `CHANNEL_EXCLUSIVITY_CLAIM` says (a writable root included), or when the jail can see one of
-    `socket_directories`, whose sockets it could dial.
+    `fs_write` and `fs_read` are `BEST_EFFORT` while any write deny or mask is mounted: the mount
+    is on the host's directory entry, and the host replacing that entry (an editor saving by
+    rename) can detach it in the jail, wherever it is (measured on one kernel, not on another).
+    `channel_exclusivity` is `VIOLATED` when a writable path the jail shares with the host is not
+    a declared channel, as `CHANNEL_EXCLUSIVITY_CLAIM` says (a writable root included), or when
+    the jail can see one of `socket_directories`, whose sockets it could dial.
     """
-    inside = [
-        mount.target
-        for mount in mounts
-        if mount.kind is MountKind.READ_ONLY
-        and any(mount.target != root and within(mount.target, root) for root in policy.writable)
-    ]
-    denies = any(path in policy.write_denies for path in inside)
-    masks = any(path in policy.masks for path in inside)
+    mounted = {mount.target for mount in mounts if mount.kind is MountKind.READ_ONLY}
+    denies = any(path in mounted for path in policy.write_denies)
+    masks = any(path in mounted for path in policy.masks)
     exclusive = set(writable_shared_paths(mounts)) <= set(declared_channel_paths(channels))
     exclusive = exclusive and not _dialable(policy, socket_directories)
     return {

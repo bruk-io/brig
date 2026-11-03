@@ -57,11 +57,21 @@ def test_a_deny_or_mask_inside_a_writable_root_is_only_best_effort() -> None:
     assert found[FS_READ_CLAIM.name] is Grade.BEST_EFFORT
 
 
-def test_a_mask_outside_every_writable_root_keeps_fs_read_enforced() -> None:
+def test_a_mask_outside_every_writable_root_is_best_effort_too() -> None:
+    """The host can rename over a masked entry wherever it is."""
     policy = FsPolicy(readable=("/",), writable=("/w",), masks=("/home/me/.ssh",))
     found = _ceilings(policy, {"/home/me/.ssh": PathKind.DIRECTORY})
 
-    assert found[FS_READ_CLAIM.name] is Grade.ENFORCED
+    assert found[FS_READ_CLAIM.name] is Grade.BEST_EFFORT
+
+
+def test_no_deny_or_mask_keeps_fs_read_and_fs_write_enforced() -> None:
+    found = _ceilings(FsPolicy(readable=("/",), writable=("/w",)), {})
+
+    assert (found[FS_READ_CLAIM.name], found[FS_WRITE_CLAIM.name]) == (
+        Grade.ENFORCED,
+        Grade.ENFORCED,
+    )
 
 
 def test_a_writable_root_shared_with_the_host_violates_channel_exclusivity() -> None:

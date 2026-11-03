@@ -114,22 +114,19 @@ def test_fs_read_a_masked_file_reads_nothing_of_the_host() -> None:
 
 
 def test_env_only_the_allowed_variables_reach_the_command() -> None:
-    os.environ["BRIG_REPORT_ALLOWED"] = "yes"
-    os.environ["BRIG_REPORT_SECRET"] = "no"
-    try:
-        program = (
-            "import os, sys\n"
-            "control = os.environ.get('BRIG_REPORT_ALLOWED') == 'yes'\n"
-            "leaked = 'BRIG_REPORT_SECRET' in os.environ\n"
-            "sys.exit((1 if control else 0) + (2 if leaked else 0))\n"
-        )
-        code, jail = _exit(
-            program,
-            env=tuple(os.environ.items()),
-            env_policy=EnvPolicy(allowed=("BRIG_REPORT_ALLOWED",)),
-        )
-    finally:
-        del os.environ["BRIG_REPORT_ALLOWED"], os.environ["BRIG_REPORT_SECRET"]
+    """The candidate environment carries an allowed variable and a secret one; only the allowed
+    one reaches the command (the control: it does)."""
+    program = (
+        "import os, sys\n"
+        "control = os.environ.get('BRIG_REPORT_ALLOWED') == 'yes'\n"
+        "leaked = 'BRIG_REPORT_SECRET' in os.environ\n"
+        "sys.exit((1 if control else 0) + (2 if leaked else 0))\n"
+    )
+    code, jail = _exit(
+        program,
+        env=(("BRIG_REPORT_ALLOWED", "yes"), ("BRIG_REPORT_SECRET", "no")),
+        env_policy=EnvPolicy(allowed=("BRIG_REPORT_ALLOWED",)),
+    )
     _held_to(jail, ENV_CLAIM, control=bool(code & 1), blocked=not code & 2)
 
 

@@ -14,6 +14,7 @@ from tests.integration.fakes import FakeChannelDirectories
 from brig import (
     WHOLE_HOST_READ_ONLY,
     Channel,
+    ChannelDirectoryCreateFailed,
     FsPolicy,
     PolicyMaskHides,
     PolicyPathNotAbsolute,
@@ -52,24 +53,12 @@ def test_a_relative_path_is_refused_before_anything_is_created() -> None:
 
 def test_the_default_policy_is_not_refused_and_reaches_directory_creation() -> None:
     """Control: `WHOLE_HOST_READ_ONLY` with a channel directory under the state directory is the
-    common case. Stops once `directories.create` is reached, by failing the create itself, so no
-    real bwrap is needed."""
+    common case. The fake refuses the create itself (`fail_create`), so reaching it shows the
+    policy was not refused, and no real bwrap is needed."""
     reserved = reserve_channels((Channel("ctl"),))
-    state_channel = reserved.directory.host_path
-    directories = FakeChannelDirectories(path=state_channel)
+    directories = FakeChannelDirectories(path=reserved.directory.host_path, fail_create=True)
 
-    class _Stop(Exception):
-        pass
-
-    def stop(path: str) -> None:
-        directories.created.append(path)
-        raise _Stop
-
-    directories.create = stop  # type: ignore[method-assign]
-
-    with pytest.raises(_Stop):
+    with pytest.raises(ChannelDirectoryCreateFailed):
         create_bwrap_jail(
             ("true",), policy=WHOLE_HOST_READ_ONLY, channels=reserved, directories=directories
         )
-
-    assert directories.created == [state_channel]

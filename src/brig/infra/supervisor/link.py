@@ -79,6 +79,7 @@ through the interpreter at all.
 
 import os
 import select
+import stat
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -296,7 +297,11 @@ def _open_through_no_link(path: str, flags: int) -> int:
         opened = os.open(parts[-1], flags | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=current)
     finally:
         os.close(current)
-    if os.fstat(opened).st_nlink > 1:
+    info = os.fstat(opened)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+        os.close(opened)
+        raise OSError(f"{path} is not a regular file this user owns; refusing to use it as stdio")
+    if info.st_nlink > 1:
         os.close(opened)
         raise OSError(f"{path} has another name (a hard link); refusing to write through it")
     return opened

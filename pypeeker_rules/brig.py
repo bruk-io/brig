@@ -618,8 +618,8 @@ register_dsl_rule(
             RulePart(
                 build=_attribute_writes_on_imports,
                 message=(
-                    "'{module}' assigns an attribute through an imported name "
-                    "which patches it: " + _NO_PATCHING_FIX
+                    "'{module}' assigns through an imported name (an attribute or an "
+                    "item, such as os.environ[...]), which patches it: " + _NO_PATCHING_FIX
                 ),
             ),
             RulePart(

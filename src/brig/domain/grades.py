@@ -20,7 +20,7 @@ from brig.domain.claims import Claim
 class Grade(StrEnum):
     """What a claim's evidence showed, the only four words a report ever states (rule 11),
     strongest first. `BEST_EFFORT`: it holds unless the host itself changes what the jail mounts
-    (decision-0008), as replacing the entry a mask or deny is mounted on does."""
+    (decision-0008), as replacing the entry a mask or deny is mounted on can."""
 
     ENFORCED = "ENFORCED"
     BEST_EFFORT = "BEST_EFFORT"

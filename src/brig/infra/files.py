@@ -55,3 +55,26 @@ def link_count(path: str) -> int:
         return os.lstat(path).st_nlink
     except OSError:
         return 1
+
+
+def first_link(path: str) -> str | None:
+    """The first component on the way to `path` (itself included) that is a symbolic link, as a
+    path, or `None` when none is."""
+    parts = [part for part in path.split("/") if part]
+    for depth in range(1, len(parts) + 1):
+        prefix = "/" + "/".join(parts[:depth])
+        if os.path.islink(prefix):
+            return prefix
+    return None
+
+
+def own_regular_file(path: str) -> bool:
+    """Whether `path` is absent (brig will create it, owned by this process) or a regular file
+    this process's user owns, not following a link at `path`."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()

@@ -101,8 +101,17 @@ class StdioInWritableRoot:
 
 @dataclass(frozen=True)
 class StdioThroughLink:
-    """A refusal: the stdio path `path` goes through a symbolic link; brig opens stdio files
-    through no link at all, so name the path it leads to (TASK-0034)."""
+    """A refusal: the stdio path `path` goes through the symbolic link `link`; brig opens stdio
+    files through no link at all, so name the path it leads to (TASK-0034)."""
+
+    path: str
+    link: str
+
+
+@dataclass(frozen=True)
+class StdioNotOwnFile:
+    """A refusal: the stdio path `path` is not a regular file the embedder owns (another user's
+    file, a device); brig writes the command's streams only to the embedder's own (TASK-0035)."""
 
     path: str
 
@@ -198,14 +207,26 @@ def stdio_refusal(
     streams: tuple[str | None, ...],
     chains: Mapping[str, tuple[str, ...]] | None = None,
     links: Mapping[str, int] | None = None,
-) -> PathNotAbsolute | StdioInWritableRoot | StdioThroughLink | StdioHardLinked | None:
+    first_links: Mapping[str, str | None] | None = None,
+    own: Mapping[str, bool] | None = None,
+) -> (
+    PathNotAbsolute
+    | StdioInWritableRoot
+    | StdioThroughLink
+    | StdioHardLinked
+    | StdioNotOwnFile
+    | None
+):
     """Why the stdio paths `streams` cannot be used with `policy`, or `None`. Each named one must
     be absolute; neither it nor any path its lookup passes through (`chains`, from `link_chain`)
     may be inside a writable root, since a jail could replace what is there with a link
-    (TASK-0031); it may go through no link at all (TASK-0034); and an existing file must have no
-    other name (`links`, its hard-link count, TASK-0035). `"/dev/null"` is always fine."""
+    (TASK-0031); it may go through no link at all (`first_links`, TASK-0034); and an existing
+    file must be a regular file the embedder owns (`own`) with no other name (`links`, its
+    hard-link count, TASK-0035). `"/dev/null"` is always fine."""
     known = chains or {}
     counts = links or {}
+    linked = first_links or {}
+    owned = own or {}
     for path in streams:
         if path is None or path == "/dev/null":
             continue
@@ -215,8 +236,11 @@ def stdio_refusal(
         for step in chain:
             if any(within(step, root) for root in policy.writable):
                 return StdioInWritableRoot(path)
-        if len(chain) > 1:
-            return StdioThroughLink(path)
+        link = linked.get(path)
+        if link is not None or len(chain) > 1:
+            return StdioThroughLink(path, link or path)
+        if not owned.get(path, True):
+            return StdioNotOwnFile(path)
         if counts.get(path, 1) > 1:
             return StdioHardLinked(path)
     return None

@@ -42,6 +42,7 @@ from brig.presentation.errors import (
     PolicyRootAbsent,
     PolicyStdioHardLinked,
     PolicyStdioInWritableRoot,
+    PolicyStdioNotOwnFile,
     PolicyStdioThroughLink,
     StateDirectoryInvalid,
 )
@@ -97,6 +98,7 @@ __all__ = [
     "PolicyRootAbsent",
     "PolicyStdioHardLinked",
     "PolicyStdioInWritableRoot",
+    "PolicyStdioNotOwnFile",
     "PolicyStdioThroughLink",
     "ProcessUnknown",
     "Reservation",

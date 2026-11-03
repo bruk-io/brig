@@ -48,11 +48,15 @@ future contribution; a change that violates one is a SPEC change first, code sec
    batteries. *Held by* the report battery grading from measured evidence only.
 9. **Nothing crosses the boundary anonymously.** `channel_exclusivity` grades whether the declared
    channels are the only shared media: every writable path the jail shares with the host, and
-   every place where the host keeps sockets the jail could dial (decision-0008 item 5). Argv is a
-   shared medium too: anything put in a command line is visible in `ps` to every user who can see
-   the process, so brig puts no secret there (channel endpoints are paths, never secrets). *Held
-   by* `tests/e2e/test_channel_exclusivity_battery.py`, `tests/e2e/test_cross_jail_channel_battery.py`
-   and the socket case in `tests/e2e/test_report_battery.py`.
+   every place where the host keeps sockets the jail could dial (decision-0008 item 5). **Argv is
+   one of the enumerated shared media**, as the old law said: anything on a command line brig
+   starts is visible in `ps` to every user who can see the process, for as long as it runs, and is
+   counted, never excused because the exposure is the host's rather than the jail's. brig's own
+   argv carries only paths (the supervisor's script, channel endpoints) and the embedder's
+   command; the environment and stdio travel by pipe and fd, never argv. *Held by*
+   `tests/e2e/test_channel_exclusivity_battery.py`, `tests/e2e/test_cross_jail_channel_battery.py`
+   and the socket case in `tests/e2e/test_report_battery.py`; the argv count has no test yet, and
+   the claim's grade does not yet include it.
 10. **Prove gates by planting violations.** A probe or test that observes a clean run proves
     nothing. Every enforcement claim has a battery that attempts the violation and a positive
     control that proves the probe works, and every bug fix lands its failing test first. *Held

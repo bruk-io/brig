@@ -66,10 +66,24 @@ class PolicyStdioThroughLink(Exception):
     """Raised when a stdio path goes through a symbolic link: brig opens stdio files through no
     link at all, so a link swapped in by a jail cannot redirect them (TASK-0034)."""
 
+    def __init__(self, path: str, link: str) -> None:
+        super().__init__(
+            f"stdio path {path!r} goes through the symbolic link {link!r} -- name the path it "
+            "leads to (os.path.realpath) instead"
+        )
+        self.path = path
+        self.link = link
+
+
+class PolicyStdioNotOwnFile(Exception):
+    """Raised when an existing stdio path is not a regular file the embedder owns: another
+    user's file, or a device. brig writes and reads the command's streams only through the
+    embedder's own files, or `/dev/null` (TASK-0035)."""
+
     def __init__(self, path: str) -> None:
         super().__init__(
-            f"stdio path {path!r} goes through a symbolic link -- name the path it leads to "
-            "(os.path.realpath) instead"
+            f"stdio path {path!r} is not a regular file you own -- use a fresh path brig "
+            "creates, a file of your own, or /dev/null"
         )
         self.path = path
 
