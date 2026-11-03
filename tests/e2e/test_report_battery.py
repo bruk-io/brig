@@ -157,7 +157,10 @@ def test_channel_exclusivity_a_host_socket_in_a_socket_place_is_reached_only_whe
 ):
     """decision-0008 item 5: a host listener in `/tmp`. Under the default policy the jail dials
     it (measured VIOLATED; the report says no more); under a policy that shows no socket place it
-    cannot (measured ENFORCED, and the report says so). The control: the host itself reaches it."""
+    cannot (measured ENFORCED). The report there says only BEST_EFFORT (TASK-0043): its readable
+    roots are host directories a socket could sit in, and no list of places finds every one
+    (`tests/e2e/test_ceiling_host_change_battery.py` dials one). The control: the host itself
+    reaches it."""
     from brig import CHANNEL_EXCLUSIVITY_CLAIM
 
     with tempfile.TemporaryDirectory(dir="/tmp") as place:
@@ -187,7 +190,7 @@ def test_channel_exclusivity_a_host_socket_in_a_socket_place_is_reached_only_whe
             )
             code, jail = _exit(_DIAL, path, policy=narrow)
             _held_to(jail, CHANNEL_EXCLUSIVITY_CLAIM, control=True, blocked=code == 7)
-            assert jail.report[CHANNEL_EXCLUSIVITY_CLAIM] is Grade.ENFORCED
+            assert jail.report[CHANNEL_EXCLUSIVITY_CLAIM] is Grade.BEST_EFFORT
 
 
 _READ_AFTER_GO = (

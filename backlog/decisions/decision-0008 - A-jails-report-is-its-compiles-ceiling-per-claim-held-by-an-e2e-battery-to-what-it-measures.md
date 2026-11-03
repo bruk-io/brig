@@ -44,9 +44,43 @@ proves it (rule 11: honest grades).
    than those places (inside a project, say) is not seen by this rule; the claim's description
    says what it covers.
 
+**Note, 2026-11-03 (TASK-0043): `ENFORCED` needs a kernel mechanism.** An architecture review
+found three ceilings stated `ENFORCED` where only a list of places backed them, and a battery
+(`tests/e2e/test_ceiling_host_change_battery.py`) now plants each. The rule: a ceiling reaches
+`ENFORCED` only when a kernel mechanism holds the claim, never because a list of paths found
+nothing. `BEST_EFFORT` (item 2) widens to match: it holds unless the host itself changes what the
+jail sees, whether by replacing an entry a mount stands on or by keeping a listening socket under a
+root. So:
+
+- **`fs_write`** is computed from the compiled mounts, not the policy's roles: any mount that is
+  not writable whose nearest mount above it is writable (a deny, a mask, a readable root nested in
+  a writable one, brig's tmpfs over a state directory inside one) makes it `BEST_EFFORT`. The host
+  renaming such an entry away moves the mount with it, and the jail writes into what the host
+  makes there (measured on this kernel for a nested readable root). The pins are writable over
+  writable and do not count. Item 2's "any mounted deny" becomes this.
+- **`channel_exclusivity`** is `BEST_EFFORT` whenever the jail sees any host path a socket could
+  sit in beyond its own channel directory: any readable or writable root, a file included (the
+  host can rename a socket over it). The jail's channel directory, brig's own mounts (its state
+  directory's tmpfs, the supervisor script, the empty directory and `/dev/null` a mask shows) and
+  the jail's own `/proc` and `/dev` do not count. A list of places is not a mechanism: measured, a
+  jail dialled a socket under a home directory that item 5's list does not name. Item 5's rule
+  stays for `VIOLATED`: a visible `SOCKET_DIRECTORIES` entry, where hosts do keep sockets, or a
+  writable shared root (item 4). Since every bwrap jail mounts its interpreter
+  (`interpreter_refusal`), no bwrap jail is `ENFORCED` here today.
+- **`network`** is never stronger than `channel_exclusivity`: the jail's own network namespace has
+  no interface, but a host socket it can dial can carry the network (measured: a relay on a socket
+  under a readable root carried the jail's bytes to a TCP listener). The default policy's
+  `network` is so `VIOLATED`.
+
+What could earn the two back is a design draft ("A kernel mechanism to earn channel_exclusivity
+and network back from best-effort"): this kernel's Landlock is ABI 7, whose socket scoping covers
+abstract Unix sockets only, so the candidate is a supervisor-held listening fd per channel plus a
+seccomp filter on `socket(AF_UNIX)`.
+
 ## Consequences
 
 - An embedder reads `jail.report[FS_READ_CLAIM]` and so on, and shows the word.
 - A new claim needs its ceiling and its battery in the same change.
-- An embedder that wants `channel_exclusivity` enforced reads no socket place: it names its
-  readable roots, or masks those places.
+- An embedder that wants `channel_exclusivity` no worse than `BEST_EFFORT` reads no socket place:
+  it names its readable roots, or masks those places. `ENFORCED` waits for a kernel mechanism
+  (the 2026-11-03 note).

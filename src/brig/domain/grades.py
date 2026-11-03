@@ -11,8 +11,10 @@ from brig.domain.claims import Claim
 
 class Grade(StrEnum):
     """What a claim's evidence showed, the only four words a report ever states (rule 11),
-    strongest first. `BEST_EFFORT`: it holds unless the host itself changes what the jail mounts
-    (decision-0008), as replacing the entry a mask or deny is mounted on can."""
+    strongest first. `ENFORCED` needs a kernel mechanism that holds the claim, never a list of
+    places that found nothing (decision-0008, the 2026-11-03 note). `BEST_EFFORT`: it holds
+    unless the host itself changes what the jail sees, as replacing the entry a mask, a deny or a
+    nested readable root is mounted on can, or keeping a listening socket under a root."""
 
     ENFORCED = "ENFORCED"
     BEST_EFFORT = "BEST_EFFORT"

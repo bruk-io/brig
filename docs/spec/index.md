@@ -14,8 +14,12 @@ future contribution; a change that violates one is a SPEC change first, code sec
 
 1. **Honesty over strength.** A weak jail honestly reported beats a strong claim untested. Every
    claim a jail's compile states carries a grade in the jail's report, never stronger than an e2e
-   battery measures (decision-0008). *Held by* `tests/e2e/test_report_battery.py` (each claim's
-   report against its measured grade) and `tests/unit/test_grades.py`.
+   battery measures (decision-0008), and `ENFORCED` only where a kernel mechanism holds it, never
+   because a list of places found nothing (decision-0008's 2026-11-03 note). *Held by*
+   `tests/e2e/test_report_battery.py` (each claim's report against its measured grade),
+   `tests/e2e/test_ceiling_host_change_battery.py` (each violation the host's help lets through,
+   against a report that allows for it), `tests/unit/test_report_ceilings.py` and
+   `tests/unit/test_grades.py`.
 2. **Refuse, never downgrade.** A request brig cannot meet is refused with brig's own error before
    anything starts, never met partly: a policy it cannot compile, a stdio path a jail could
    redirect, an interpreter the policy does not mount. There is no fallback the caller did not
@@ -48,14 +52,17 @@ future contribution; a change that violates one is a SPEC change first, code sec
    batteries. *Held by* the report battery grading from measured evidence only.
 9. **Nothing crosses the boundary anonymously.** `channel_exclusivity` grades whether the declared
    channels are the only shared media: every writable path the jail shares with the host, and
-   every place where the host keeps sockets the jail could dial (decision-0008 item 5). **Argv is
+   every host path where a socket the jail could dial might sit (decision-0008 item 5 and its
+   2026-11-03 note): a visible place where hosts keep sockets violates it, and any other root
+   leaves it best-effort, since no list of places finds every socket. **Argv is
    one of the enumerated shared media**, as the old law said: anything on a command line brig
    starts is visible in `ps` to every user who can see the process, for as long as it runs, and is
    counted, never excused because the exposure is the host's rather than the jail's. brig's own
    argv carries only paths (the supervisor's script, channel endpoints) and the embedder's
    command; the environment and stdio travel by pipe and fd, never argv. *Held by*
-   `tests/e2e/test_channel_exclusivity_battery.py`, `tests/e2e/test_cross_jail_channel_battery.py`
-   and the socket case in `tests/e2e/test_report_battery.py`; the argv count has no test yet, and
+   `tests/e2e/test_channel_exclusivity_battery.py`, `tests/e2e/test_cross_jail_channel_battery.py`,
+   the socket case in `tests/e2e/test_report_battery.py` and the socket outside every listed
+   place in `tests/e2e/test_ceiling_host_change_battery.py`; the argv count has no test yet, and
    the claim's grade does not yet include it.
 10. **Prove gates by planting violations.** A probe or test that observes a clean run proves
     nothing. Every enforcement claim has a battery that attempts the violation and a positive
@@ -98,8 +105,18 @@ between a pinned directory and the rest of its root crosses a mount and fails wi
 in the jail's channel directory before the jail starts (decision-0002). `claims.py` and
 `grades.py` hold the claims a compile states and `grade`, the one function that grades them
 from evidence. A jail's runtime report is the ceiling its compile states per claim (`fs_write`,
-`fs_read`, `network`, `env`, `channel_exclusivity`; `BEST_EFFORT` where the host could undo a
-mount), and an e2e battery holds each ceiling to what it measures (decision-0008).
+`fs_read`, `network`, `env`, `channel_exclusivity`), and an e2e battery holds each ceiling to what
+it measures (decision-0008). A ceiling is `ENFORCED` only where a kernel mechanism holds the claim,
+never because a list of places found nothing (decision-0008's 2026-11-03 note); `BEST_EFFORT` holds
+unless the host itself changes what the jail sees. `fs_write` is read from the compiled mounts: any
+mount that is not writable whose nearest mount above is writable (a deny, a mask, a readable root
+nested in a writable root) makes it `BEST_EFFORT`, since the host replacing that entry leaves the
+jail writing there; the pins, writable over writable, do not count. `fs_read` is `BEST_EFFORT`
+while a mask is mounted. `channel_exclusivity` is `VIOLATED` for a writable path shared beyond the
+declared channels or a visible place where hosts keep sockets (`SOCKET_DIRECTORIES`), else
+`BEST_EFFORT` while the jail sees any readable or writable root, where the host could keep a socket
+it can dial. `network` is never stronger than `channel_exclusivity`, since a dialable host socket
+can carry the network.
 
 Where the domain and the world alternate, the exchange is a value too. `effects.py` names the
 closed set a generator may yield: start the supervised command, await the supervisor's report,

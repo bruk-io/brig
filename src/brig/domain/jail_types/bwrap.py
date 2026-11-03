@@ -25,7 +25,7 @@ from enum import StrEnum
 
 from brig.domain.channels import Reservations
 from brig.domain.claims import Claim
-from brig.domain.grades import Grade
+from brig.domain.grades import Grade, at_most
 from brig.domain.plan import Plan
 from brig.domain.policy.paths import FsPolicy, PathKind, within
 
@@ -253,12 +253,17 @@ def render(mounts: tuple[Mount, ...]) -> tuple[str, ...]:
 CHANNEL_EXCLUSIVITY_CLAIM = Claim(
     name="channel_exclusivity",
     description=(
-        "the only paths this jail can write that the host can also reach are the "
-        "channels it declared, and it sees no place where the host keeps sockets it "
-        "could dial: nothing crosses the boundary anonymously (old SPEC law 9)"
+        "the only paths this jail can write that the host can also reach are the channels it "
+        "declared, and the only host paths it sees are its own channel directory and brig's own "
+        "mounts, so it can dial no socket the host keeps: nothing crosses the boundary "
+        "anonymously (law 9). A readable or writable root shows the jail host directories where "
+        "a socket could sit, and no list of places finds every one, so any root makes this at "
+        "best best-effort: it holds until the host puts a listening socket under a root; one of "
+        "the places hosts keep sockets in (/run, /tmp and the like) visible, or a writable "
+        "root, violates it"
     ),
 )
-"""What the compile claims about the paths it mounts (old SPEC law 9). A claim, never a grade:
+"""What the compile claims about the paths it mounts (law 9). A claim, never a grade:
 `domain/grades.py`'s `grade` decides that from evidence a battery measured."""
 
 
@@ -268,7 +273,9 @@ FS_WRITE_CLAIM = Claim(
         "the command writes only inside the policy's writable roots and its declared channels, "
         "and nothing a write deny names; nor can it rename a directory on the way to a write "
         "deny, a mask or a readable root inside a writable root that was there when the jail "
-        "started, to make its own file at that path for the host to read"
+        "started, to make its own file at that path for the host to read. Best-effort while any "
+        "read-only mount (a deny, a mask, a readable root) sits beneath a writable one: the host "
+        "replacing the entry it is mounted on leaves the jail writing there"
     ),
 )
 FS_READ_CLAIM = Claim(
@@ -277,7 +284,11 @@ FS_READ_CLAIM = Claim(
 )
 NETWORK_CLAIM = Claim(
     name="network",
-    description="the command reaches no network: its own network namespace, with no interface",
+    description=(
+        "the command reaches no network: its own network namespace, with no interface. Never "
+        "stronger than channel_exclusivity, since a host socket the jail can dial can carry the "
+        "network for it"
+    ),
 )
 ENV_CLAIM = Claim(
     name="env",
@@ -304,6 +315,36 @@ def _dialable(policy: FsPolicy, socket_directories: tuple[str, ...]) -> bool:
     return False
 
 
+def _sees_host_paths(policy: FsPolicy) -> bool:
+    """Whether the jail sees any host path a socket could sit in beyond its own channel
+    directory: any readable or writable root, a file included (the host can rename a socket
+    over it). brig's own mounts (its state directory's tmpfs, the supervisor script, the empty
+    directory a mask shows) and the jail's own `/proc` and `/dev` are not the host's places. A
+    mask cannot hide a whole root (`refusal`), so every root shows something of the host."""
+    return bool(policy.readable or policy.writable)
+
+
+def _beneath_writable(mounts: tuple[Mount, ...]) -> bool:
+    """Whether any mount that is not writable (a read-only bind: a deny, a mask, a nested
+    readable root; brig's tmpfs) sits where the jail would otherwise see a writable mount: the
+    last mount strictly above its target is writable. The host replacing the entry it is mounted
+    on (an editor saving by rename, a package manager swapping a directory) leaves the jail
+    writing there. A pin is writable over writable, so it does not count."""
+    for index, mount in enumerate(mounts):
+        if mount.kind in (MountKind.WRITABLE, MountKind.REMOUNT_READ_ONLY):
+            continue
+        above = [
+            earlier
+            for earlier in mounts[:index]
+            if earlier.kind is not MountKind.REMOUNT_READ_ONLY
+            and earlier.target != mount.target
+            and within(mount.target, earlier.target)
+        ]
+        if above and above[-1].kind is MountKind.WRITABLE:
+            return True
+    return False
+
+
 def ceilings(
     policy: FsPolicy,
     mounts: tuple[Mount, ...],
@@ -314,31 +355,45 @@ def ceilings(
     what this compile states, before any jail runs. An e2e battery holds every one of these to
     what it measures (`at_most`), so none is stated stronger than the batteries show.
 
-    `fs_write` and `fs_read` are `BEST_EFFORT` while any write deny or mask is mounted: the mount
-    is on the host's directory entry, and the host replacing that entry (an editor saving by
-    rename) can detach it in the jail, wherever it is (measured on one kernel, not on another).
-    What `fs_write` does cover beside the deny itself: the command cannot rename a directory
-    strictly between a writable root and a deny, a mask or a readable root nested in it, since each
-    that is there when the jail starts (on the host, or made by brig for an absent entry) is pinned,
-    a mount point of its own (`EBUSY`; a rename across one fails with `EXDEV`). What it does not: a
-    directory the host itself creates, removes or renames on the way while the jail runs, which the
-    pins do not see, the same host change that makes the grade best-effort.
-    `channel_exclusivity` is `VIOLATED` when a writable path the jail shares with the host is not
-    a declared channel, as `CHANNEL_EXCLUSIVITY_CLAIM` says (a writable root included), or when
-    the jail can see one of `socket_directories`, whose sockets it could dial.
+    `ENFORCED` needs a kernel mechanism that holds the claim, never a list of places that found
+    nothing (decision-0008, the 2026-11-03 note). So:
+
+    - `fs_write` is `BEST_EFFORT` while any mount that is not writable sits beneath a writable
+      one (`_beneath_writable`: a deny, a mask, a readable root nested in a writable root),
+      read from the compiled `mounts`, not the policy's roles. What it does cover beside that:
+      the command cannot rename a directory strictly between a writable root and a deny, a mask
+      or a readable root nested in it, since each that is there when the jail starts is pinned, a
+      mount point of its own (`EBUSY`; a rename across one fails with `EXDEV`). What it does not:
+      the host itself replacing, creating or removing an entry on the way while the jail runs.
+    - `fs_read` is `BEST_EFFORT` while any mask is mounted: the host replacing a masked entry
+      can detach the mask in the jail, wherever it is (measured on one kernel, not another).
+    - `channel_exclusivity` is `VIOLATED` when a writable path the jail shares with the host is
+      not a declared channel (a writable root included), or when the jail can see one of
+      `socket_directories`; else `BEST_EFFORT` while it sees any host path at all
+      (`_sees_host_paths`), since a socket the host keeps there can be dialled through a
+      read-only mount; `ENFORCED` only with no root, which `interpreter_refusal` never lets
+      through today.
+    - `network` is never stronger than `channel_exclusivity`: the jail's own network namespace
+      has no interface, but a host socket it can dial can carry the network.
     """
-    mounted = {mount.target for mount in mounts if mount.kind is MountKind.READ_ONLY}
-    denies = any(path in mounted for path in policy.write_denies)
-    masks = any(path in mounted for path in policy.masks)
-    exclusive = set(writable_shared_paths(mounts)) <= set(declared_channel_paths(channels))
-    exclusive = exclusive and not _dialable(policy, socket_directories)
+    masks = any(
+        mount.target in policy.masks for mount in mounts if mount.kind is MountKind.READ_ONLY
+    )
+    if not set(writable_shared_paths(mounts)) <= set(declared_channel_paths(channels)):
+        exclusivity = Grade.VIOLATED
+    elif _dialable(policy, socket_directories):
+        exclusivity = Grade.VIOLATED
+    elif _sees_host_paths(policy):
+        exclusivity = Grade.BEST_EFFORT
+    else:
+        exclusivity = Grade.ENFORCED
     return frozendict(
         {
-            FS_WRITE_CLAIM: Grade.BEST_EFFORT if denies else Grade.ENFORCED,
+            FS_WRITE_CLAIM: Grade.BEST_EFFORT if _beneath_writable(mounts) else Grade.ENFORCED,
             FS_READ_CLAIM: Grade.BEST_EFFORT if masks else Grade.ENFORCED,
-            NETWORK_CLAIM: Grade.ENFORCED,
+            NETWORK_CLAIM: Grade.ENFORCED if at_most(Grade.ENFORCED, exclusivity) else exclusivity,
             ENV_CLAIM: Grade.ENFORCED,
-            CHANNEL_EXCLUSIVITY_CLAIM: Grade.ENFORCED if exclusive else Grade.VIOLATED,
+            CHANNEL_EXCLUSIVITY_CLAIM: exclusivity,
         }
     )
 
