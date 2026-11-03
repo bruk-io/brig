@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:31:00Z'
-updated_date: '2026-11-03T03:50:00Z'
+updated_date: '2026-11-03T03:53:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -143,4 +143,6 @@ tests/e2e/test_cwd_stdio_battery.py:137: AssertionError
 FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_stdio_path_reaching_a_writable_root_through_a_parent_link_is_refused
 1 failed, 5 deselected in 0.17s
 ```
+
+Worker, 2026-11-03, on the review's finding (a stdio path whose parent links into a writable root): reproduced (repro above) and fixed at 8b42a6a. stdio_refusal now checks every path the stdio path's lookup passes through (infra.files.link_chain), so outside/logs/out.txt that goes through root/logs is refused (PolicyStdioInWritableRoot), though its text and its final target are outside the root. Besides, infra opens each stdio file one component at a time with O_PATH|O_DIRECTORY|O_NOFOLLOW and O_NOFOLLOW on the last, so a link swapped in after the check fails the start (JailSpawnFailed) instead of redirecting it. That no-link open is also what covers a stdio path in a root another jail of the same embedder may write, which brig cannot see. uv run just done passes.
 <!-- SECTION:NOTES:END -->
