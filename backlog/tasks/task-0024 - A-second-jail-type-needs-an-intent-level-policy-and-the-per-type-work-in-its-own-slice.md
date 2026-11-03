@@ -7,7 +7,7 @@ status: To Do
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T03:01:00Z'
+updated_date: '2026-11-03T03:06:00Z'
 labels:
   - size-8
 dependencies: []
@@ -40,4 +40,6 @@ Proposed shape, for the decision: an intent policy (writable roots; read roots o
 
 <!-- SECTION:NOTES:BEGIN -->
 Accepted 2026-11-03 under the owner's goal for the migration. Decided as decision-0007 (above). Built in two tasks below: the policy and mount compile (done, c4ef292), then the slice move.
+
+Review (reviewer, 2026-11-03): not closed, AC1 not ticked. decision-0007 as committed (abc2aa6, HEAD) has empty Context, Decision and Consequences; its text exists only as an uncommitted change in the working tree, so the recorded decision is blank. Once committed, it still answers only part of what the task asks: it settles the embedder's policy and bwrap's compile, and where orchestration lives, but not how Seatbelt compiles the policy (no SBPL mapping, nor which intents it can and cannot honour, e.g. a mask as /dev/null), and not the Linux-only seams the description names: ChannelReadinessPort.ready's jail_namespace_fd, decision-0002's PID-1 supervisor on macOS, and putting the launch argv on the effect. Its reasoning holds for what it covers, apart from item 4's absent-entry rule (see TASK-0024.01's drafts). Also stays open while TASK-0024.01 and .02 are.
 <!-- SECTION:NOTES:END -->
