@@ -7,6 +7,7 @@ status: To Do
 assignee:
   - '@claude'
 created_date: '2026-11-03T02:42:00Z'
+updated_date: '2026-11-03T02:45:00Z'
 labels:
   - size-2
 dependencies: []
@@ -25,3 +26,23 @@ Found while fixing TASK-0022, 2026-11-03. tests/e2e/test_channel_jail_finished.p
 - [ ] #1 await_channel_ready answers ChannelJailFinished as soon as the jail's own process has exited, whether or not create_bwrap_jail held its namespace, and never reaps it (decision-0003: peek, not reap)
 - [ ] #2 test_channel_jail_finished.py asserts that property and its timing, not which side of the scan's race it landed on, and passes 10 runs in 10 with TASK-0022's supervisor
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Repro at 08aaf4a2516a, test files: tests/e2e/test_channel_jail_finished.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_channel_jail_finished.py::test_a_jail_whose_command_exits_at_once_is_created_and_reads_as_finished` exited 1
+
+(29 earlier lines omitted)
+```text
+            destroy_jail(jail, directories=directories)
+    
+>       assert outcome == ChannelJailFinished()
+E       assert ChannelNotReady() == ChannelJailFinished()
+E        +  where ChannelJailFinished() = ChannelJailFinished()
+
+tests/e2e/test_channel_jail_finished.py:85: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_channel_jail_finished.py::test_a_jail_whose_command_exits_at_once_is_created_and_reads_as_finished
+1 failed in 10.15s
+```
+<!-- SECTION:NOTES:END -->
