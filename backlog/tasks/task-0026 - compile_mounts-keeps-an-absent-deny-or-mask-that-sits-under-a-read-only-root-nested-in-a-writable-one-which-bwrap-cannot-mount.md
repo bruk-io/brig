@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-11-03T03:06:00Z'
-updated_date: '2026-11-03T03:09:00Z'
+updated_date: '2026-11-03T03:10:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -41,5 +41,23 @@ E   ImportError: cannot import name 'PolicyPathThroughLink' from 'brig' (/home/u
 ERROR tests/e2e/test_fs_policy_battery.py
 !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
 1 error in 0.16s
+```
+
+Repro at f19782dd42be, test files: tests/e2e/test_fs_policy_battery.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_fs_policy_battery.py -k 'read_only_root_inside or root_absent'` exited 1
+
+(83 earlier lines omitted)
+```text
+        """TASK-0026: a root must exist to be mounted; refused before anything starts, naming it."""
+        with _fresh_tmp_dir() as root:
+            missing = f"{root}/not-there"
+>           with pytest.raises(brig.PolicyRootAbsent) as refused:
+                               ^^^^^^^^^^^^^^^^^^^^^
+E           AttributeError: module 'brig' has no attribute 'PolicyRootAbsent'
+
+tests/e2e/test_fs_policy_battery.py:583: AttributeError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_fs_policy_battery.py::test_an_absent_entry_under_a_read_only_root_inside_a_writable_one_needs_no_mount
+FAILED tests/e2e/test_fs_policy_battery.py::test_a_root_absent_on_the_host_is_refused
+2 failed, 12 deselected in 0.11s
 ```
 <!-- SECTION:NOTES:END -->
