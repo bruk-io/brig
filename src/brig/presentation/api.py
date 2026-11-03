@@ -4,7 +4,6 @@ the command's exit, interrupt it, tear the jail down. Creating a jail is each ja
 
 import signal
 import time
-from pathlib import Path
 from typing import assert_never
 
 from brig.domain import channels as _channels
@@ -17,7 +16,6 @@ from brig.domain.channels import (
     Reservations,
 )
 from brig.domain.effects import ExitCodeUnknown, GroupState
-from brig.infra import placeholders as _placeholders
 from brig.infra import sockets as _sockets
 from brig.presentation.driver import run
 from brig.presentation.errors import (
@@ -29,10 +27,11 @@ from brig.presentation.errors import (
 from brig.presentation.jail import (
     CHANNEL_DIRECTORIES,
     CHANNEL_READINESS,
+    KILL_GRACE_S,
+    PLACEHOLDERS,
     PROCESSES,
     Jail,
-    close_namespace_fd,
-    resolved_state_dir,
+    dismantle,
 )
 from brig.presentation.ports import (
     ChannelDirectoryPort,
@@ -41,15 +40,13 @@ from brig.presentation.ports import (
     ChannelReadinessPort,
     ChannelReady,
     ChannelRefused,
+    PlaceholderPort,
     ProcessPort,
     SupervisorPort,
 )
 
 _DEFAULT_WAIT_TIMEOUT_S = 30.0
 """How long `run_jail` waits for the command's exit when the embedder names no `timeout_s`."""
-
-_DEFAULT_KILL_GRACE_S = 1.0
-"""How long `destroy_jail`'s post-KILL rung polls for the group to be gone, by default."""
 
 _DEFAULT_CHANNEL_READY_TIMEOUT_S = 30.0
 """How long `await_channel_ready` polls when the embedder names no `timeout_s`."""
@@ -164,48 +161,38 @@ def run_jail(
 def destroy_jail(
     jail: Jail,
     *,
-    kill_grace_s: float = _DEFAULT_KILL_GRACE_S,
+    kill_grace_s: float = KILL_GRACE_S,
     processes: ProcessPort = PROCESSES,
     supervisors: SupervisorPort | None = None,
     directories: ChannelDirectoryPort = CHANNEL_DIRECTORIES,
+    placeholders: PlaceholderPort = PLACEHOLDERS,
 ) -> None:
     """Tear `jail` down, verified: no process of its group is left when this returns.
 
-    `kill_grace_s` bounds the post-KILL rung's poll. Then, whatever the ladder found, it closes
+    Runs `dismantle`, the cleanup a failed `create_bwrap_jail` runs too (TASK-0044):
+    `kill_grace_s` bounds the post-KILL rung's poll; then, whatever the ladder found, it closes
     the supervisor's pipe, deletes the supervisor script and the channel directory, and closes
-    the namespace fd, swallowing `OSError` from each, so a repeated call is safe. Deleting the
-    script after a failed teardown is safe: by then the supervisor has read it or never will
-    (TASK-0012). Placeholders are released only once the group is verified gone, since removing
-    one a jail still mounts over detaches that mount (TASK-0027).
+    the namespace fd, swallowing `OSError` from each, so a repeated call is safe. Placeholders
+    are released only once the group is verified gone, since removing one a jail still mounts
+    over detaches that mount (TASK-0027).
 
     Raises:
         JailTeardownFailed: the kill ladder's last verify still found the group alive.
     """
-    resolved_supervisors = supervisors if supervisors is not None else jail.supervisors
-    deadline = time.monotonic() + kill_grace_s
-    state = run(
-        operations.destroy(jail.process, deadline=deadline), processes, resolved_supervisors
+    state = dismantle(
+        jail.process,
+        supervisors=supervisors if supervisors is not None else jail.supervisors,
+        processes=processes,
+        directories=directories,
+        placeholders=placeholders,
+        kill_grace_s=kill_grace_s,
+        supervisor_script=jail.supervisor_script,
+        channel_directory=jail.channel_directory,
+        channel_namespace_fd=jail.channel_namespace_fd,
+        placeholder_record=jail.placeholders,
     )
-    resolved_supervisors.close(jail.process.pid)
-    if jail.supervisor_script is not None:
-        try:
-            jail.supervisor_script.unlink(missing_ok=True)
-        except OSError:
-            pass
-    if jail.channel_directory is not None:
-        try:
-            directories.remove(str(jail.channel_directory))
-        except OSError:
-            pass
-    if jail.channel_namespace_fd is not None:
-        close_namespace_fd(jail.channel_namespace_fd)
     if state is not GroupState.GONE:
         raise JailTeardownFailed(jail.process)
-    if jail.placeholders is not None:
-        try:
-            _placeholders.release(Path(resolved_state_dir()), jail.placeholders)
-        except OSError:
-            pass  # left for the next jail's release to sweep
 
 
 def interrupt_jail(jail: Jail) -> bool:

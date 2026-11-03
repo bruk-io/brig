@@ -3,7 +3,7 @@ model {
   extend brig.library {
     ports = component 'Ports' {
       technology 'Python 3.15'
-      description 'The Protocols a driver and the API call infra through -- processes, the supervisor, channel directories, channel readiness -- and the readiness outcomes an embedder matches on, so no infra type crosses a port and a test can pass a fake of the same shape.'
+      description 'The Protocols a driver and the API call infra through -- processes, the supervisor, placeholders, channel directories, channel readiness -- and the readiness outcomes an embedder matches on, so no infra type crosses a port and a test can pass a fake of the same shape.'
     }
   }
 }

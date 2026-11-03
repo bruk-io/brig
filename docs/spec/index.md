@@ -44,11 +44,14 @@ future contribution; a change that violates one is a SPEC change first, code sec
 7. **Control must not require cooperation.** Interrupt and teardown work when the command is
    spinning, wedged or hostile: `interrupt_jail` signals through the supervisor and loses nothing
    while the jail comes up; `destroy_jail` ends the jail's whole PID namespace and verifies it is
-   gone. The pumps that carry the jail's stdio end with it: `destroy_jail` drains and closes
+   gone. A `create_bwrap_jail` that fails once its supervisor has started tears it down the same
+   way, through the one cleanup `destroy_jail` runs, and the embedder never gets a running jail
+   it has no `Jail` for (TASK-0044); in both, the placeholders are released only once teardown
+   reads the group gone, and a group that survives is `JailTeardownFailed`. The pumps that carry the jail's stdio end with it: `destroy_jail` drains and closes
    them, so a command that never reads its stdin, or floods its stdout, cannot hold the host past
    teardown (TASK-0042). *Held by* `tests/e2e/test_interrupt_battery.py`,
-   `tests/e2e/test_supervisor_reaps_orphans.py`, `tests/e2e/test_stdio_pumps_battery.py` and the
-   teardown integration tests; a battery that plants survivors from the host is not yet
+   `tests/e2e/test_supervisor_reaps_orphans.py`, `tests/e2e/test_stdio_pumps_battery.py`, the
+   teardown integration tests and, for a failed create, `tests/integration/test_create_failure_*`; a battery that plants survivors from the host is not yet
    written.
 8. **Events are evidence, never the boundary.** No security claim rests on an event having been
    emitted: the supervisor's `started`/`done` say what happened, and the grades rest on
@@ -190,8 +193,10 @@ for every jail type.
 Each jail type's own presentation is its slice (decision-0007 item 5): `drivers/bwrap.py`
 refuses and compiles the policy, writes the supervisor script, starts the jail through the
 driver, holds its PID namespace for readiness, and exports `create_bwrap_jail`. What every jail
-type shares is beside it: `jail.py` (the `Jail`, brig's state directory, and the real ports'
-wiring), `api.py` (reserving channels, readiness, waiting, interrupting the command with
+type shares is beside it: `jail.py` (the `Jail`, brig's state directory, the real ports'
+wiring, and `dismantle`: the verified kill ladder for a process that exists, then removing the
+script, the channel directory and the fds, and releasing the placeholders only on a group read
+gone, the one cleanup `destroy_jail` and a failed create both run), `api.py` (reserving channels, readiness, waiting, interrupting the command with
 `SIGINT` through its supervisor, teardown) and `report.py` (a report as text).
 
 An embedder talks to a channel only over the connection readiness verified. `await_channel_ready`

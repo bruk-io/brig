@@ -139,8 +139,10 @@ class PolicyPathThroughLink(Exception):
 
 class PlaceholdersFailed(Exception):
     """Raised when brig cannot make, on the host, the directories it mounts over an absent write
-    deny or mask under a writable root, or its record of them (TASK-0027): nothing was started,
-    and whatever was made was removed again."""
+    deny or mask under a writable root, or its record of them (TASK-0027), or cannot note the
+    started jail in that record. Whatever was made was removed again, and a jail already started
+    was torn down first (TASK-0044); a teardown that left its group alive raises
+    `JailTeardownFailed` instead, with this as its `__cause__`."""
 
     def __init__(self, paths: tuple[str, ...]) -> None:
         super().__init__(
@@ -220,7 +222,9 @@ class JailExitUnknown(Exception):
 
 
 class JailTeardownFailed(Exception):
-    """Raised when a jail's process group was still alive after TERM, KILL and the grace poll.
+    """Raised when a jail's process group was still alive after TERM, KILL and the grace poll:
+    by `destroy_jail`, and by `create_bwrap_jail` when a step after the start failed and the
+    teardown that followed could not end the jail (that step's error is the `__cause__`).
 
     Args:
         process: The jail's supervisor, whose group is still alive.
@@ -234,7 +238,9 @@ class JailTeardownFailed(Exception):
 class ChannelNamespaceNotFound(Exception):
     """Raised when a jail that declared channels started but no in-jail PID 1 appeared under
     its bwrap before `infra.sockets.JAIL_PID1_TIMEOUT_S` passed: readiness has no namespace to
-    compare a peer against (decision-0005 item 1).
+    compare a peer against (decision-0005 item 1), or `/proc` could not be listed (the
+    `OSError` is the `__cause__`). The started jail was torn down before this propagates
+    (TASK-0044).
 
     Args:
         bwrap_pid: The outer bwrap process whose children were scanned.

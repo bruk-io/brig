@@ -72,6 +72,28 @@ class SupervisorPort(Protocol):
         ...
 
 
+class PlaceholderPort(Protocol):
+    """What a driver needs from infra to hold the directories a jail mounts over at absent
+    paths, tie them to the jail's process, and release them once no jail mounts over them
+    (TASK-0027). A record is the port's own name for one jail's hold."""
+
+    def hold(self, paths: tuple[str, ...]) -> str | None:
+        """Make the directories missing on the way to each of `paths` and record them as one
+        jail's, and return the record, or `None` when there is nothing to record. An `OSError`
+        propagates, whatever was made removed again first."""
+        ...
+
+    def attach(self, record: str, pid: int) -> None:
+        """Note that the jail holding `record` is the process `pid`, which from now on says
+        whether the jail is alive. An `OSError` propagates."""
+        ...
+
+    def release(self, record: str) -> None:
+        """Remove `record` and the directories no live jail still mounts over. An `OSError`
+        propagates for the caller to judge."""
+        ...
+
+
 class ChannelReadinessRefusal(Enum):
     """Why readiness refused a connection that did connect (decision-0005)."""
 

@@ -1,20 +1,24 @@
 """What every jail type's presentation shares: the `Jail` an embedder holds, brig's state
-directory, and the real ports' wiring onto infra, which translates infra's values so none
-crosses a port (decision-0001 rule 13)."""
+directory, the real ports' wiring onto infra, which translates infra's values so none crosses a
+port (decision-0001 rule 13), and `dismantle`, the one cleanup a failed create and
+`destroy_jail` both run (TASK-0044)."""
 
 import functools
 import os
 import secrets
 import signal
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import assert_never
 
+from brig.domain import operations
 from brig.domain.claims import Claim
-from brig.domain.effects import ExitCodeUnknown, ExitOutcome, Process
+from brig.domain.effects import ExitCodeUnknown, ExitOutcome, GroupState, Process
 from brig.domain.grades import Grade
 from brig.domain.jail_types import bwrap
+from brig.infra import placeholders as _placeholders
 from brig.infra import sockets as _sockets
 from brig.infra import state_dir as _state_dir_mod
 from brig.infra.processes import ProcessUnknown as _InfraProcessUnknown
@@ -24,6 +28,7 @@ from brig.infra.processes import peek as _infra_peek
 from brig.infra.processes import release as _release
 from brig.infra.processes import signal_group as _signal_group
 from brig.infra.supervisor import link
+from brig.presentation.driver import run
 from brig.presentation.errors import (
     StateDirectoryInvalid,
 )
@@ -34,9 +39,13 @@ from brig.presentation.ports import (
     ChannelReadinessRefusal,
     ChannelReady,
     ChannelRefused,
+    PlaceholderPort,
     ProcessPort,
     SupervisorPort,
 )
+
+KILL_GRACE_S = 1.0
+"""How long teardown's post-KILL rung polls for the group to be gone, by default."""
 
 
 def _peek(pid: int) -> int | None | ExitCodeUnknown:
@@ -140,6 +149,36 @@ class _RealChannelReadiness:
 CHANNEL_READINESS: ChannelReadinessPort = _RealChannelReadiness()
 
 
+def _hold_placeholders(paths: tuple[str, ...]) -> str | None:
+    """infra's `hold` under brig's state directory, for a fresh jail id; `None` for no paths,
+    so a jail with nothing absent writes no record."""
+    if not paths:
+        return None
+    return str(_placeholders.hold(Path(resolved_state_dir()), secrets.token_hex(8), paths))
+
+
+def _attach_placeholders(record: str, pid: int) -> None:
+    """infra's `attach` under brig's state directory."""
+    _placeholders.attach(Path(resolved_state_dir()), Path(record), pid)
+
+
+def _release_placeholders(record: str) -> None:
+    """infra's `release` under brig's state directory."""
+    _placeholders.release(Path(resolved_state_dir()), Path(record))
+
+
+@dataclass(frozen=True)
+class _RealPlaceholders:
+    """`brig.infra.placeholders` as the default `PlaceholderPort`."""
+
+    hold: Callable[[tuple[str, ...]], str | None] = _hold_placeholders
+    attach: Callable[[str, int], None] = _attach_placeholders
+    release: Callable[[str], None] = _release_placeholders
+
+
+PLACEHOLDERS: PlaceholderPort = _RealPlaceholders()
+
+
 @dataclass(frozen=True)
 class Jail:
     """A bwrap jail an embedder created.
@@ -161,13 +200,65 @@ class Jail:
     channel_directory: Path | None = None
     channel_namespace_fd: int | None = None
     mounts: tuple[bwrap.Mount, ...] = ()
-    placeholders: Path | None = None
+    placeholders: str | None = None
     report: frozendict[Claim, Grade] = frozendict()
 
 
-def close_namespace_fd(fd: int) -> None:
+def _close_namespace_fd(fd: int) -> None:
     """Close `fd`, swallowing `OSError`: teardown cleanup never raises past its verify."""
     try:
         os.close(fd)
     except OSError:
         pass
+
+
+def dismantle(
+    process: Process | None,
+    *,
+    supervisors: SupervisorPort,
+    processes: ProcessPort,
+    directories: ChannelDirectoryPort,
+    placeholders: PlaceholderPort,
+    kill_grace_s: float = KILL_GRACE_S,
+    supervisor_script: Path | None = None,
+    channel_directory: Path | None = None,
+    channel_namespace_fd: int | None = None,
+    placeholder_record: str | None = None,
+) -> GroupState:
+    """Tear down what a jail made, and return what teardown found: the one cleanup `destroy_jail`
+    and a failed `create_bwrap_jail` both run, so the two cannot disagree (TASK-0044).
+
+    Once a process exists, it goes first: the verified kill ladder (`operations.destroy`, its
+    post-KILL poll bounded by `kill_grace_s`), then the supervisor's pipe is closed. With no
+    process (a create that failed before its start) there is nothing to tear down and the result
+    is `GroupState.GONE`. Then, whatever the ladder found, the supervisor script and the channel
+    directory are removed and the namespace fd closed, swallowing `OSError` from each, so a
+    repeated call is safe; removing the script after a failed teardown is safe, since by then the
+    supervisor has read it or never will (TASK-0012). The placeholder record is released only
+    when the result is `GONE`: removing a placeholder a jail still mounts over detaches that
+    mount (TASK-0027), so a record a live jail holds is left for a later sweep. Raises nothing;
+    the caller decides what an `ALIVE` result becomes.
+    """
+    state = GroupState.GONE
+    if process is not None:
+        deadline = time.monotonic() + kill_grace_s
+        state = run(operations.destroy(process, deadline=deadline), processes, supervisors)
+        supervisors.close(process.pid)
+    if supervisor_script is not None:
+        try:
+            supervisor_script.unlink(missing_ok=True)
+        except OSError:
+            pass
+    if channel_directory is not None:
+        try:
+            directories.remove(str(channel_directory))
+        except OSError:
+            pass
+    if channel_namespace_fd is not None:
+        _close_namespace_fd(channel_namespace_fd)
+    if state is GroupState.GONE and placeholder_record is not None:
+        try:
+            placeholders.release(placeholder_record)
+        except OSError:
+            pass  # left for the next jail's release to sweep
+    return state

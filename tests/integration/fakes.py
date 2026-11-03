@@ -164,6 +164,41 @@ class FakeChannelDirectories:
 
 
 @dataclass
+class FakePlaceholders:
+    """A fake `PlaceholderPort`, for a host where brig held placeholders for a jail: `hold`
+    records the paths it was given and hands back `record` whatever they are (a jail started
+    with a caller's own `supervisors` compiles no policy, so it is given none); `attach`
+    records `(record, pid)`, raising `OSError` while `fail_attach`; `release` records the
+    record. Touches no filesystem.
+    """
+
+    record: str = "fake-placeholders-0001"
+    fail_attach: bool = False
+    held: list[tuple[str, ...]] = field(default_factory=list)
+    attached: list[tuple[str, int]] = field(default_factory=list)
+    released: list[str] = field(default_factory=list)
+
+    def hold(self, paths: tuple[str, ...]) -> str:
+        """Record `paths` and hand back `record`."""
+        self.held.append(paths)
+        return self.record
+
+    def attach(self, record: str, pid: int) -> None:
+        """Record `(record, pid)`; raise `OSError` while `fail_attach`.
+
+        Raises:
+            OSError: `fail_attach` is set.
+        """
+        self.attached.append((record, pid))
+        if self.fail_attach:
+            raise OSError(28, "fake host: no space left on device")
+
+    def release(self, record: str) -> None:
+        """Record `record`."""
+        self.released.append(record)
+
+
+@dataclass
 class FakeChannelReadiness:
     """A fake `ChannelReadinessPort`: `ready` records what it was asked and answers with the
     next of `outcomes`, repeating the last once they run out. No `/proc`, clock or path.

@@ -3,7 +3,6 @@ supervisor script, refusing and compiling the policy, starting the jail through 
 and holding the jail's PID namespace for channel readiness."""
 
 import os
-import secrets
 import sys
 import tempfile
 import time
@@ -15,7 +14,7 @@ from brig.domain import operations
 from brig.domain.channels import (
     Reservations,
 )
-from brig.domain.effects import Process
+from brig.domain.effects import GroupState, Process
 from brig.domain.jail_types import bwrap
 from brig.domain.policy.env import DENY_ALL, EnvPolicy
 from brig.domain.policy.paths import (
@@ -40,7 +39,6 @@ from brig.domain.policy.paths import (
 )
 from brig.domain.policy.stdio import INHERIT, Stdio
 from brig.infra import files as _files
-from brig.infra import placeholders as _placeholders
 from brig.infra import sockets as _sockets
 from brig.infra import state_dir as _state_dir_mod
 from brig.infra.supervisor import assemble, link
@@ -48,6 +46,7 @@ from brig.presentation.driver import run
 from brig.presentation.errors import (
     ChannelDirectoryCreateFailed,
     ChannelNamespaceNotFound,
+    JailTeardownFailed,
     PlaceholdersFailed,
     PolicyCwdOutsideRoots,
     PolicyInterpreterUnreachable,
@@ -62,14 +61,16 @@ from brig.presentation.errors import (
 )
 from brig.presentation.jail import (
     CHANNEL_DIRECTORIES,
+    PLACEHOLDERS,
     PROCESSES,
     Jail,
-    close_namespace_fd,
+    dismantle,
     real_supervisor_port,
     resolved_state_dir,
 )
 from brig.presentation.ports import (
     ChannelDirectoryPort,
+    PlaceholderPort,
     ProcessPort,
     SupervisorPort,
 )
@@ -225,6 +226,7 @@ def create_bwrap_jail(
     processes: ProcessPort = PROCESSES,
     supervisors: SupervisorPort | None = None,
     directories: ChannelDirectoryPort = CHANNEL_DIRECTORIES,
+    placeholders: PlaceholderPort = PLACEHOLDERS,
     proc_root: str = "/proc",
 ) -> Jail:
     """Compile `command` into a bwrap jail and start its supervisor running it.
@@ -248,20 +250,28 @@ def create_bwrap_jail(
         supervisors: A `SupervisorPort` to use as given (a fake in a test); `policy` is then not
             compiled and no supervisor script is written.
         directories: The `ChannelDirectoryPort`.
+        placeholders: The `PlaceholderPort` that holds the directories the jail mounts over at
+            absent paths (a fake in a test).
         proc_root: Where to scan for the jail's PID 1; `/proc` except in a test.
 
-    Everything made before a failure (the script, the channel directory, the namespace fd, the
-    placeholders) is removed before the exception propagates (TASK-0012). Beside what is listed
-    below, the policy refusals of `_supervisors_for`, `StateDirectoryInvalid`, `JailSpawnFailed`
-    from the driver (an unopenable stdio path included, TASK-0028), and
-    `ChannelNamespaceNotFound` from `_namespace_fd_for` propagate. A jail whose command
-    finished before its namespace was found has no namespace fd (TASK-0001.30).
+    A failure cleans up through `dismantle`, the cleanup `destroy_jail` runs (TASK-0044), before
+    the exception propagates. Once the supervisor has started, that is the verified kill ladder
+    first, and the placeholders are released only if it reports the group gone; before the
+    start there is no process, and everything made (the script, the channel directory, the
+    placeholders) is removed (TASK-0012). Beside what is listed below, the policy refusals of
+    `_supervisors_for`, `StateDirectoryInvalid`, `JailSpawnFailed` from the driver (an
+    unopenable stdio path included, TASK-0028), and `ChannelNamespaceNotFound` from
+    `_namespace_fd_for` propagate. A jail whose command finished before its namespace was found
+    has no namespace fd (TASK-0001.30).
 
     Raises:
         ChannelDirectoryCreateFailed: the host refused to create the channel
             directory.
         PlaceholdersFailed: the host refused a directory for an absent write deny or mask, or
-            brig's record of it (TASK-0027).
+            brig's record of it (TASK-0027), before the start or once it had started.
+        JailTeardownFailed: a step failed once the supervisor had started, and the teardown
+            that followed still found its group alive; the step's own exception is the
+            `__cause__`.
     """
     if supervisors is not None:
         resolved_supervisors: SupervisorPort = supervisors
@@ -279,14 +289,13 @@ def create_bwrap_jail(
     )
     created: Path | None = None
     namespace_fd: int | None = None
-    record: Path | None = None
-    state_dir = Path(resolved_state_dir())
+    record: str | None = None
+    process: Process | None = None
     try:
-        if absent:
-            try:
-                record = _placeholders.hold(state_dir, secrets.token_hex(8), absent)
-            except OSError as error:
-                raise PlaceholdersFailed(absent) from error
+        try:
+            record = placeholders.hold(absent)
+        except OSError as error:
+            raise PlaceholdersFailed(absent) from error
         if channel_directory is not None:
             try:
                 directories.create(str(channel_directory))
@@ -297,26 +306,25 @@ def create_bwrap_jail(
         process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
         if record is not None:
             try:
-                _placeholders.attach(state_dir, record, process.pid)
+                placeholders.attach(record, process.pid)
             except OSError as error:
                 raise PlaceholdersFailed(absent) from error
         if channel_directory is not None:
             namespace_fd = _namespace_fd_for(process, proc_root)
-    except BaseException:
-        if supervisor_script is not None:
-            supervisor_script.unlink(missing_ok=True)
-        if created is not None:
-            try:
-                directories.remove(str(created))
-            except OSError:
-                pass
-        if namespace_fd is not None:
-            close_namespace_fd(namespace_fd)
-        if record is not None:
-            try:
-                _placeholders.release(state_dir, record)
-            except OSError:
-                pass  # left for the next jail's release to sweep
+    except BaseException as error:
+        state = dismantle(
+            process,
+            supervisors=resolved_supervisors,
+            processes=processes,
+            directories=directories,
+            placeholders=placeholders,
+            supervisor_script=supervisor_script,
+            channel_directory=created,
+            channel_namespace_fd=namespace_fd,
+            placeholder_record=record,
+        )
+        if process is not None and state is not GroupState.GONE:
+            raise JailTeardownFailed(process) from error
         raise
     return Jail(
         process=process,
@@ -348,11 +356,15 @@ def _namespace_fd_for(process: Process, proc_root: str = "/proc") -> int | None:
 
     Raises:
         ChannelNamespaceNotFound: no in-jail PID 1 appeared before
-            `infra.sockets.JAIL_PID1_TIMEOUT_S` passed, with `process` still running.
+            `infra.sockets.JAIL_PID1_TIMEOUT_S` passed, with `process` still running, or
+            `proc_root` could not be listed (the `OSError` is the `__cause__`).
     """
-    outcome = _sockets.jail_pid1_namespace(
-        process.pid, time.monotonic() + _sockets.JAIL_PID1_TIMEOUT_S, proc_root
-    )
+    try:
+        outcome = _sockets.jail_pid1_namespace(
+            process.pid, time.monotonic() + _sockets.JAIL_PID1_TIMEOUT_S, proc_root
+        )
+    except OSError as error:
+        raise ChannelNamespaceNotFound(process.pid) from error
     if isinstance(outcome, _sockets.JailPid1NotFound):
         raise ChannelNamespaceNotFound(process.pid)
     if isinstance(outcome, _sockets.JailPid1Exited):
