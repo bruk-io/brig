@@ -10,13 +10,11 @@ reason, not because anything below needs a real jail or a real bwrap.
 
 import ast
 import base64
-import io
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
-import types
 from pathlib import Path
 from typing import cast
 
@@ -108,42 +106,44 @@ def test_refusal_message_mentions_the_required_version_for_an_old_interpreter() 
     assert "3.9.0" in message
 
 
-def test_preamble_message_agrees_with_refusal_message_for_the_same_version() -> None:
-    """The assembled file's own preamble -- extracted and executed here with a
-    synthetic `sys.version_info`, never a real old interpreter -- writes to
-    stderr exactly what `refusal_message` returns for the same installed
-    version, and exits non-zero. Confirms the two cannot read differently for
-    the same version, the one thing `assembled_source`'s own docstring claims
-    about `_preamble`'s embedded duplicate.
-    """
-    preamble_source = _preamble_guard_body()
-    fake_sys = types.SimpleNamespace(version_info=(3, 9, 0), stderr=io.StringIO())
-
-    def fake_exit(code: int) -> None:
-        raise SystemExit(code)
-
-    fake_sys.exit = fake_exit
-    namespace: dict[str, object] = {"sys": fake_sys}
-
-    with pytest.raises(SystemExit) as excinfo:
-        exec(compile(preamble_source, "<preamble>", "exec"), namespace)
-
-    assert excinfo.value.code == 1
-    assert fake_sys.stderr.getvalue() == assemble.refusal_message((3, 9, 0)) + "\n"
+def _older_interpreter() -> str | None:
+    """A real Python on this host older than rule 17's floor, or `None`."""
+    for name in ("python3", "python3.13", "python3.12", "python3.11", "python3.10"):
+        found = shutil.which(name)
+        if found is None:
+            continue
+        version = subprocess.run(
+            [found, "-c", "import sys; print(*sys.version_info[:3])"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.split()
+        if version and tuple(int(part) for part in version) < (3, 15):
+            return found
+    return None
 
 
-def test_preamble_does_not_fire_for_an_interpreter_that_clears_the_floor() -> None:
-    """The same preamble, run with a `sys.version_info` that already clears
-    rule 17's floor, writes nothing and does not exit -- the guard is a
-    refusal, not an unconditional message.
-    """
-    preamble_source = _preamble_guard_body()
-    fake_sys = types.SimpleNamespace(version_info=(3, 15, 0), stderr=io.StringIO())
-    namespace: dict[str, object] = {"sys": fake_sys}
+def test_the_assembled_file_refuses_a_real_older_interpreter_with_refusal_messages_words(
+    tmp_path: Path,
+) -> None:
+    """The real assembled file, run under a real interpreter older than 3.15, writes exactly what
+    `refusal_message` returns for that version and exits 1. Nothing is faked: the interpreter is
+    the host's own (TASK-0039, decision-0001 rule 5: no doubles in e2e)."""
+    older = _older_interpreter()
+    if older is None:
+        pytest.skip("no Python older than 3.15 on this host to refuse")
+    script = tmp_path / "supervisor.py"
+    script.write_text(assemble.assembled_source())
+    done = subprocess.run([older, str(script)], capture_output=True, text=True, check=False)
+    installed = subprocess.run(
+        [older, "-c", "import sys; print(*sys.version_info[:3])"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
 
-    exec(compile(preamble_source, "<preamble>", "exec"), namespace)
-
-    assert fake_sys.stderr.getvalue() == ""
+    assert done.returncode == 1
+    assert done.stderr == assemble.refusal_message(tuple(int(p) for p in installed)) + "\n"
 
 
 def test_real_assembled_file_runs_the_supervisor_journey_under_this_interpreter() -> None:
@@ -201,19 +201,6 @@ def test_real_assembled_file_refuses_a_real_older_interpreter() -> None:
     assert result.returncode != 0
     assert "3.15" in result.stderr
     assert "Traceback" not in result.stderr
-
-
-def _preamble_guard_body() -> str:
-    """The assembled file's preamble, minus its own leading `import sys`: the
-    two tests above inject a fake `sys` (a `types.SimpleNamespace` with a
-    synthetic `version_info`) into the `exec` namespace they run this in, and
-    a real `import sys` statement in that same namespace would rebind `sys`
-    right back to the real module, defeating the whole point of faking it.
-    `_preamble`'s own guard logic is everything after that first line.
-    """
-    preamble_source, _, _ = assemble.assembled_source().partition("import base64\n")
-    _, _, guard_body = preamble_source.partition("\n")
-    return guard_body
 
 
 def _write_assembled_file() -> str:
