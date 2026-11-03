@@ -24,7 +24,7 @@ Architecture review 2026-11-03 (reasoned from code): in presentation/drivers/bwr
 <!-- AC:BEGIN -->
 - [x] #1 Once the supervisor process exists, every failure inside create_bwrap_jail tears the jail down through the same destroy path destroy_jail uses, and releases placeholders only once teardown reports the process gone
 - [x] #2 An integration test with fakes fails each step after the start (placeholder attach, the namespace scan) and asserts the process was destroyed and nothing was released while it lived; recorded failing before the fix
-- [ ] #3 create_bwrap_jail and destroy_jail share one cleanup function, so the two paths cannot disagree again
+- [x] #3 create_bwrap_jail and destroy_jail share one cleanup function, so the two paths cannot disagree again
 <!-- AC:END -->
 
 ## Implementation Notes
