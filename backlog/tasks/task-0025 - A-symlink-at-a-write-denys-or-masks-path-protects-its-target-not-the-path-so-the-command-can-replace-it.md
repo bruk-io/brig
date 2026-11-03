@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:06:00Z'
-updated_date: '2026-11-03T03:13:00Z'
+updated_date: '2026-11-03T03:16:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -22,7 +22,7 @@ Found reviewing TASK-0024.01 (c4ef292). infra/files.py kinds() follows links, an
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 A deny or mask whose path is a symlink is refused, or compiled so the path itself cannot be written, created or read, with the decision saying which
-- [ ] #2 An e2e test plants a symlink at a deny path inside a writable root and shows the command can neither write through it nor replace it
+- [x] #2 An e2e test plants a symlink at a deny path inside a writable root and shows the command can neither write through it nor replace it
 <!-- AC:END -->
 
 ## Implementation Notes
