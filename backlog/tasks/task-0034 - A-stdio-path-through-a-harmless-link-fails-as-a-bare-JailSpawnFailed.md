@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:59:00Z'
-updated_date: '2026-11-03T04:10:00Z'
+updated_date: '2026-11-03T04:13:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -54,4 +54,16 @@ Accepted 2026-11-03 under the owner's goal. The test commit e3bce5a's message na
 Worker's report (Claude): fixed at bc4508f. stdio_refusal refuses a stdio path whose lookup passes through any link (its link_chain has more than one entry) with StdioThroughLink, raised as PolicyStdioThroughLink naming the path and saying to name what it leads to. The repro above passes now. uv run just done passes.
 
 Review 2026-11-03 (reviewer): not closed. Full gate passes (recorded on TASK-0021). Measured: stdout=D/ln/out.txt with D/ln -> D/real is now refused before anything starts, with PolicyStdioThroughLink: "stdio path '.../ln/out.txt' goes through a symbolic link -- name the path it leads to (os.path.realpath) instead". AC#1 is not met as written: the error names the path and says what to do, but it does not name the link (D/ln). StdioThroughLink carries only the path, though link_chain already has the steps. To change: carry the first link in the chain on StdioThroughLink and PolicyStdioThroughLink, put it in the message, and assert it in test_a_stdio_path_through_any_link_is_refused_naming_it. Small, and no draft filed; it belongs to this task.
+
+Repro at 24dac4f2a35c, test files: tests/e2e/test_cwd_stdio_battery.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_cwd_stdio_battery.py -k any_link` exited 1
+
+(25 earlier lines omitted)
+```text
+E            +  where None = getattr(PolicyStdioThroughLink("stdio path '/tmp/tmpr95tlvkk/logs/out.txt' goes through a symbolic link -- name the path it leads to (os.path.realpath) instead"), 'link', None)
+
+tests/e2e/test_cwd_stdio_battery.py:160: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_stdio_path_through_any_link_is_refused_naming_it
+1 failed, 9 deselected in 0.09s
+```
 <!-- SECTION:NOTES:END -->
