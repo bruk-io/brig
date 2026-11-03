@@ -21,8 +21,8 @@ Found reviewing TASK-0024.01 (c4ef292). _kept() keeps an absent deny/mask when a
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 An absent entry is kept only when the most specific root or deny covering it is writable, with a unit case for a readable root and a write deny nested in a writable root
-- [ ] #2 A root absent on the host is refused before anything is created, or the decision says why it is compiled
+- [x] #1 An absent entry is kept only when the most specific root or deny covering it is writable, with a unit case for a readable root and a write deny nested in a writable root
+- [x] #2 A root absent on the host is refused before anything is created, or the decision says why it is compiled
 <!-- AC:END -->
 
 ## Implementation Notes
