@@ -27,4 +27,6 @@ docs/spec/index.md law 9 (168a633): channel_exclusivity now grades only writable
 
 <!-- SECTION:NOTES:BEGIN -->
 Accepted 2026-11-03. Fixed at fe3f40d: law 9 again counts argv as one of the enumerated shared media, never excused because the exposure is the host's (the old law's words), says what brig's own argv carries (paths only) and that the environment and stdio travel by pipe and fd, and that nothing tests the argv count yet and the claim's grade does not include it.
+
+No repro: this was a wording defect in docs/spec/index.md law 9, and no test can fail on prose. The evidence is the diff 168a633..fe3f40d.
 <!-- SECTION:NOTES:END -->
