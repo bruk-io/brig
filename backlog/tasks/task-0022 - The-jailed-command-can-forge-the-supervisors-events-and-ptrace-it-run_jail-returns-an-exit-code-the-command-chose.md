@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:22:00Z'
-updated_date: '2026-11-03T02:37:00Z'
+updated_date: '2026-11-03T02:44:00Z'
 labels:
   - size-5
 dependencies: []
@@ -64,4 +64,22 @@ brig.destroy_jail(jail)
 
 <!-- SECTION:NOTES:BEGIN -->
 Accepted 2026-11-03 under the owner's goal for the migration (bh-02's TASK-0176 waits on it).
+
+Repro at 88c7f8238f9c, test files: tests/e2e/test_supervisor_isolation_battery.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_supervisor_isolation_battery.py` exited 1
+
+(18 earlier lines omitted)
+```text
+        """decision-0006 item 2: `--cap-drop ALL`, so even a jail brig's root caller starts holds
+        no capability inside its namespaces."""
+        exit_code, _ = _exit_code_of(_CAPABILITIES)
+>       assert exit_code == 0, "the jailed command holds capabilities"
+E       AssertionError: the jailed command holds capabilities
+E       assert 1 == 0
+
+tests/e2e/test_supervisor_isolation_battery.py:119: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_supervisor_isolation_battery.py::test_a_command_cannot_forge_the_supervisors_done
+FAILED tests/e2e/test_supervisor_isolation_battery.py::test_the_command_holds_no_capability
+2 failed, 1 passed in 0.58s
+```
 <!-- SECTION:NOTES:END -->
