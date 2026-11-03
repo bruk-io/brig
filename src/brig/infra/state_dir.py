@@ -1,19 +1,6 @@
-"""Brig's own runtime-state directory: where brig keeps artifacts it writes for
-itself -- currently just the assembled supervisor script (`presentation/drivers/bwrap.py`'s
-`_supervisor_path`) -- instead of the caller-controlled, shared `/tmp`
-(TASK-0006).
-
-Functional core (`resolve`, pure) / imperative shell (`ensure`, the one I/O call)
-split, the same discipline `infra/processes.py`'s own module docstring states for
-itself: `resolve` only ever reads a mapping it is handed and builds a `Path`, never
-touching the filesystem; `ensure` is the one function here that does.
-
-This is brig's own operational configuration, not something a jailed command sees
-or that `EnvPolicy` scrubs: `EnvPolicy` governs what a caller's `env` hands the
-*jailed command* (`domain/policy/env.py`'s own docstring), never brig's own
-host-side settings, and `BRIG_HOME` is exactly the latter -- conflating the two
-would mean a caller's own `EnvPolicy` could silently redirect where brig writes its
-own supervisor script.
+"""brig's state directory, where it keeps what it writes for itself (supervisor scripts,
+channel directories, placeholder records) instead of the shared `/tmp` (TASK-0006).
+`BRIG_HOME` is brig's own setting, never something `EnvPolicy` scrubs.
 """
 
 import os
@@ -24,26 +11,10 @@ _BRIG_HOME = "BRIG_HOME"
 
 
 def resolve(env: Mapping[str, str] = os.environ) -> Path:
-    """Where brig's own state directory is, according to `env`: `BRIG_HOME`,
-    taken exactly as given with no further default-resolution logic, when it is
-    set and absolute; `~/.brig` otherwise.
+    """brig's state directory per `env`: `BRIG_HOME` when set, else `~/.brig`. Pure.
 
-    A relative `BRIG_HOME` is refused outright rather than silently accepted:
-    it would depend on whatever the calling process's own working directory
-    happens to be, and `compile_supervisor_launch` (`domain/jail_types/bwrap.py`)
-    binds this directory into bwrap's own argv as a literal path string -- a
-    relative one reproduces this task's original bug one layer further out,
-    measured directly against real bwrap: `BRIG_HOME=relstate` produces `bwrap:
-    Can't mkdir relstate: Read-only file system`, then `JailExitUnknown`, the
-    identical signature this function exists to rule out. A caller wanting
-    `~` expansion or a path relative to somewhere specific does that itself,
-    before setting `BRIG_HOME` -- this function states the requirement, not a
-    convenience resolver.
-
-    Pure: reads only the mapping it is handed (`env`, `os.environ` by default --
-    read, never mutated, and never touched here outside this one default
-    argument), touches no filesystem, and raises only on the one input it
-    refuses.
+    A relative `BRIG_HOME` is refused: it lands in bwrap's argv as given, and bwrap fails with
+    `Can't mkdir relstate: Read-only file system` (measured).
 
     Raises:
         ValueError: `BRIG_HOME` is set to a value that is not an absolute path.
@@ -58,13 +29,7 @@ def resolve(env: Mapping[str, str] = os.environ) -> Path:
 
 
 def ensure(path: Path) -> Path:
-    """Make `path` exist (and every missing parent of it), then hand it straight
-    back -- the one I/O call this module makes, kept apart from `resolve`'s pure
-    computation of what `path` should be.
-
-    A no-op, `exist_ok=True`, when `path` is already there -- repeated calls (one
-    per process that starts a jail) are never an error.
-    """
+    """Make `path` and its missing parents if absent, and return it."""
     path.mkdir(parents=True, exist_ok=True)
     return path
 

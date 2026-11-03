@@ -1,19 +1,6 @@
-"""Fakes of the world at infra's edge, for brig's integration suite.
-
-Doubles live only here: a fake, asserted on through its state, never a patch.
-
-A fake here never imports past brig's public API (decision-0001 rule 4), so it
-cannot name `brig.presentation.ports.ProcessPort` or `brig.infra.processes.SpawnedProcess`
-directly; `_SpawnedProcess` below is this module's own record of the two fields that port
-asks for. Only those two: infra's `SpawnedProcess` also carries `session_detached`, which
-a driver never reads -- teardown signals and probes the process *group* -- so
-`_ProcessIdentity` does not require it and this fake does not fabricate it.
-`ports.py`'s `ProcessPort.spawn` returns `_ProcessIdentity`, a `Protocol` presentation
-owns rather than infra's concrete dataclass, so this fake's own same-shaped
-`_SpawnedProcess` satisfies it structurally without ever importing it.
-
-`FakeChannelReadiness` (TASK-0001.27) obeys the same rule: its outcome types come
-from brig's public API, not from `brig.presentation.ports` or `brig.infra.sockets`.
+"""Fakes of the world at infra's edge, for brig's integration suite: doubles live only here, and
+a test asserts on their state, never a patch (decision-0001 rule 5). They import only brig's
+public API (rule 4), so each satisfies its port structurally.
 """
 
 import os
@@ -24,63 +11,26 @@ from brig import (
     ChannelNotReady,
     ChannelReady,
     ChannelRefused,
-    ProcessUnknown,
-    SupervisorDoneUnknown,
+    ExitCodeUnknown,
 )
-
-
-@dataclass(frozen=True)
-class _SpawnedProcess:
-    """What `FakeProcesses.spawn` hands back: a fabricated process identity."""
-
-    pid: int
-    pgid: int
 
 
 @dataclass
 class FakeProcesses:
-    """A fake of the world `brig.presentation.ports.ProcessPort` asks infra for.
+    """A fake `ProcessPort` that records every call and touches no process.
 
-    Records every call in its own state -- never touches a real process. `spawn`
-    hands back a fabricated identity built from `next_pid`; `reap` and `reap_deadline`
-    both report `exit_code` for whichever pid they are asked about, except
-    `reap_deadline`, which reports `None` instead while `expires` is `True` -- a test's
-    way to arrange a deadline-bound wait that expires rather than collecting the
-    process (TASK-0001.06). `group_alive` reports `alive`, so a test can arrange a jail
-    whose process already exited on its own (the walking skeleton's `true`) by leaving
-    it at the default `False`, or one teardown must signal by setting it `True`.
-    `group_alive_deadline` (decision-0003/TASK-0013) answers the same way as one more
-    `group_alive` call -- a fake never actually polls or sleeps.
-
-    `process_unknown`, while `True`, has `reap`, `reap_deadline` and `peek` all report
-    `ProcessUnknown` instead of `exit_code` (or, for `reap_deadline`/`peek`, `None`) --
-    a test's way to arrange the process being no longer this program's child to wait
-    for at all (`ECHILD`: something else already released it), the race TASK-0001.06's
-    review found (`reap` leaking a raw `ChildProcessError`, `reap_deadline` reporting
-    it as an ordinary deadline expiry). `leader_exited`, while `True` and
-    `process_unknown` is not, has `peek` report `exit_code` instead of `None` -- a
-    test's way to arrange the ladder's leader having already exited and sitting as a
-    deliberately held (peeked, not released) zombie throughout, which a driver then
-    excludes from every `group_alive`/`group_alive_deadline` check it makes
-    (decision-0003) -- a test's way to arrange a jail whose leader exits before the
-    rest of its group does, TASK-0001.06's other review finding. `alive_checks` has
-    `group_alive` report `True` for that many calls before falling back to `alive` --
-    together with `leader_exited`, a test's way to arrange the ladder staying on
-    `alive` through more `Verify` calls than a leader-only group would need, then
-    finally seeing the group gone.
+    `group_alive` reports `alive`, after `True` for the first `alive_checks` calls; the default
+    `False` is a jail whose command already exited. `peek` reports `exit_code` while
+    `leader_exited` (a held, exited leader the driver leaves out of each check), `None`
+    otherwise, and `ExitCodeUnknown` while `process_unknown` (no longer a child, `ECHILD`).
+    `group_alive_deadline` answers as one more `group_alive` call, without polling.
     """
 
     exit_code: int = 0
     alive: bool = False
-    expires: bool = False
     process_unknown: bool = False
     leader_exited: bool = False
     alive_checks: int = 0
-    next_pid: int = 1000
-    spawned: list[tuple[str, ...]] = field(default_factory=list)
-    spawned_inheritable_fds: list[tuple[int, ...]] = field(default_factory=list)
-    reaped: list[int] = field(default_factory=list)
-    reaped_deadline: list[tuple[int, float]] = field(default_factory=list)
     peek_attempts: list[int] = field(default_factory=list)
     released: list[int] = field(default_factory=list)
     signalled: list[tuple[int, signal.Signals]] = field(default_factory=list)
@@ -88,47 +38,17 @@ class FakeProcesses:
     checked_held: list[frozenset[int]] = field(default_factory=list)
     checked_deadline: list[tuple[int, int, float]] = field(default_factory=list)
 
-    def spawn(self, argv: tuple[str, ...], inheritable_fds: tuple[int, ...]) -> _SpawnedProcess:
-        """Record `argv` and hand back a fabricated process identity.
-
-        `inheritable_fds` is recorded too (`spawned_inheritable_fds`), paired by
-        position with `spawned`: this fake stands in for the world, not the fd-closing
-        policy itself (that is infra's own e2e battery's job), but a test wiring a real
-        jail type through still has somewhere to see what allow-list reached the edge.
-        """
-        self.spawned.append(argv)
-        self.spawned_inheritable_fds.append(inheritable_fds)
-        pid = self.next_pid
-        self.next_pid += 1
-        return _SpawnedProcess(pid=pid, pgid=pid)
-
-    def reap(self, pid: int) -> int | ProcessUnknown:
-        """Record `pid`; report `exit_code`, or `ProcessUnknown` while `process_unknown`."""
-        self.reaped.append(pid)
-        return ProcessUnknown() if self.process_unknown else self.exit_code
-
-    def reap_deadline(self, pid: int, deadline: float) -> int | None | ProcessUnknown:
-        """Record `(pid, deadline)`; report `exit_code`, `None` while `expires`, or
-        `ProcessUnknown` while `process_unknown` (checked first: a process that is no
-        longer this program's child to wait for at all is not merely a deadline that
-        passed).
-        """
-        self.reaped_deadline.append((pid, deadline))
-        if self.process_unknown:
-            return ProcessUnknown()
-        return None if self.expires else self.exit_code
-
     def signal_group(self, pgid: int, sig: signal.Signals) -> None:
         """Record the signal sent to `pgid`."""
         self.signalled.append((pgid, sig))
 
-    def peek(self, pid: int) -> int | None | ProcessUnknown:
-        """Record `pid`; report `ProcessUnknown` while `process_unknown`, `exit_code`
+    def peek(self, pid: int) -> int | None | ExitCodeUnknown:
+        """Record `pid`; report `ExitCodeUnknown` while `process_unknown`, `exit_code`
         while `leader_exited`, or `None` otherwise (still running).
         """
         self.peek_attempts.append(pid)
         if self.process_unknown:
-            return ProcessUnknown()
+            return ExitCodeUnknown()
         return self.exit_code if self.leader_exited else None
 
     def release(self, pid: int) -> None:
@@ -157,9 +77,7 @@ class FakeProcesses:
 
 @dataclass(frozen=True)
 class _SupervisorIdentity:
-    """What `FakeSupervisors.start` hands back: a fabricated supervisor identity --
-    the single process the host now tracks in place of the group `_SpawnedProcess`
-    stood in for (decision-0002)."""
+    """What `FakeSupervisors.start` hands back: a fabricated supervisor identity."""
 
     pid: int
     pgid: int
@@ -167,18 +85,11 @@ class _SupervisorIdentity:
 
 @dataclass
 class FakeSupervisors:
-    """A fake of the world `brig.presentation.ports.SupervisorPort` asks infra for
-    (TASK-0001.15 step 4): the supervised path's counterpart to `FakeProcesses`.
+    """A fake `SupervisorPort` that records every call and starts nothing.
 
-    Records every call in its own state -- never starts a real supervisor. `start`
-    hands back a fabricated identity built from `next_pid`; `await_done` reports
-    `exit_code`, `None` while `expires` is `True` (a test's way to arrange a
-    deadline-bound wait that times out rather than resolving), or
-    `SupervisorDoneUnknown` while `done_unknown` is `True` (a test's way to arrange
-    the supervisor's report being gone for good). `fail_start`, while `True`, has
-    `start` raise `OSError` after recording the call -- the fakes-only way to arrange
-    `create_bwrap_jail` failing once everything before the start already happened
-    (`presentation/driver.py`'s `run` turns it into `JailSpawnFailed`).
+    `start` hands back an identity from `next_pid`, or raises `OSError` while `fail_start`
+    (which the driver turns into `JailSpawnFailed`). `await_done` reports `exit_code`, `None`
+    while `expires` (a wait that timed out), or `ExitCodeUnknown` while `done_unknown`.
     """
 
     exit_code: int = 0
@@ -186,11 +97,11 @@ class FakeSupervisors:
     done_unknown: bool = False
     fail_start: bool = False
     next_pid: int = 2000
-    started: list[tuple[tuple[str, ...], tuple[tuple[str, str], ...]]] = field(default_factory=list)
+    started: list[tuple[tuple[str, ...], frozendict[str, str]]] = field(default_factory=list)
     awaited: list[tuple[int, float]] = field(default_factory=list)
     closed: list[int] = field(default_factory=list)
 
-    def start(self, argv: tuple[str, ...], env: tuple[tuple[str, str], ...]) -> _SupervisorIdentity:
+    def start(self, argv: tuple[str, ...], env: frozendict[str, str]) -> _SupervisorIdentity:
         """Record `(argv, env)`; raise `OSError` while `fail_start`, else hand back a
         fabricated supervisor identity.
 
@@ -204,13 +115,13 @@ class FakeSupervisors:
         self.next_pid += 1
         return _SupervisorIdentity(pid=pid, pgid=pid)
 
-    def await_done(self, pid: int, deadline: float) -> int | None | SupervisorDoneUnknown:
+    def await_done(self, pid: int, deadline: float) -> int | None | ExitCodeUnknown:
         """Record `(pid, deadline)`; report `exit_code`, `None` while `expires`, or
-        `SupervisorDoneUnknown` while `done_unknown`.
+        `ExitCodeUnknown` while `done_unknown`.
         """
         self.awaited.append((pid, deadline))
         if self.done_unknown:
-            return SupervisorDoneUnknown()
+            return ExitCodeUnknown()
         return None if self.expires else self.exit_code
 
     def close(self, pid: int) -> None:
@@ -220,12 +131,9 @@ class FakeSupervisors:
 
 @dataclass
 class FakeChannelDirectories:
-    """A fake of the world `brig.presentation.ports.ChannelDirectoryPort` asks for
-    (TASK-0001.25, TASK-0001.26): `allocate` hands back `path` and counts itself in
-    `allocated`; `create` and `remove` record the path in `created`/`removed`.
-    `fail_create`, while `True`, has `create` raise `OSError` *instead of* recording
-    (a host filesystem failure leaves nothing created -- TASK-0001.29).
-    Bookkeeping only -- never touches the filesystem.
+    """A fake `ChannelDirectoryPort`: `allocate` hands back `path` and counts itself; `create`
+    and `remove` record the path; while `fail_create`, `create` raises `OSError` and records
+    nothing. Touches no filesystem.
     """
 
     path: str = "/fake/state/channels/0001"
@@ -256,16 +164,8 @@ class FakeChannelDirectories:
 
 @dataclass
 class FakeChannelReadiness:
-    """A fake of the world `brig.presentation.ports.ChannelReadinessPort` asks for
-    (TASK-0001.27), mirroring `FakeSupervisors`'s shape: `ready` records every
-    `(path, jail_namespace_fd)` it was asked about in `asked`, and hands back the
-    next scripted outcome from `outcomes`, repeating the last one once the script
-    runs out -- so a test states "not ready, not ready, then ready" as three values
-    and lets `await_channel_ready` poll through them.
-
-    Bookkeeping only: no real socket, no real `/proc`, no real bwrap, and no clock
-    of its own -- a fake never sleeps, so a caller polling it to its own deadline
-    sees exactly the scripted sequence however many attempts that takes.
+    """A fake `ChannelReadinessPort`: `ready` records what it was asked and hands back the next
+    of `outcomes`, repeating the last once they run out. No socket, `/proc` or clock.
     """
 
     outcomes: list[ChannelReady | ChannelNotReady | ChannelRefused] = field(
@@ -287,18 +187,9 @@ class FakeChannelReadiness:
 def plant_fake_proc(
     root: str, entries: dict[int, tuple[int, str]], zombies: frozenset[int] = frozenset()
 ) -> None:
-    """Build a fake procfs tree under the real directory `root`, one entry per
-    `pid: (ppid, nspid)` in `entries`, so a `/proc`-scanning code path can be driven
-    with real files and real I/O rather than a patched `open` (TASK-0016's own
-    reasoning for `group_alive`'s `proc_root` parameter, applied to TASK-0001.27's
-    scan).
-
-    Each entry gets a `status` carrying the `PPid:` and `NSpid:` lines the scan
-    reads, and an `ns/pid` leaf for `os.open` to succeed on -- a real empty file
-    stands in for the nsfs inode, since nothing under test reads its contents, only
-    holds the fd open. Every entry also carries a `State:` line -- zombie (`Z`) for
-    each pid in `zombies`, sleeping (`S`) otherwise -- which `infra.sockets._gone`
-    reads to tell an exited jail (TASK-0001.30) from one still running.
+    """Build a procfs-shaped tree under the real directory `root`, one entry per
+    `pid: (ppid, nspid)`, for a `/proc` scan to read with real I/O: a `status` with `State:`
+    (zombie for each of `zombies`), `PPid:` and `NSpid:`, and an empty `ns/pid` to open.
     """
     os.makedirs(root, exist_ok=True)
     for pid, (ppid, nspid) in entries.items():

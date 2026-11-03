@@ -7,6 +7,7 @@ import secrets
 import sys
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import assert_never
 
@@ -75,46 +76,14 @@ from brig.presentation.ports import (
 
 
 def _supervisor_path() -> tuple[str, ...]:
-    """Where this host's own assembled supervisor file actually is: rule 17's
-    one file (`infra.supervisor.assemble.assembled_source()` -- `wire.py` +
-    `program.py`, stdlib only, refusing to run under an interpreter older
-    than 3.15), written fresh to a new file inside brig's own state directory
-    (`resolved_state_dir`, TASK-0006) on every call.
+    """Write the assembled supervisor (`infra.supervisor.assemble`) to a fresh file in brig's
+    state directory and return the argv that runs it. A new file per jail, so `destroy_jail`
+    deletes only its own (TASK-0001.21); the compile binds it back inside the state directory's
+    mask, so any policy reaches it (TASK-0019).
 
-    TASK-0001.21: no longer `functools.cache`d -- every jail needs its own
-    file, so that `destroy_jail` can delete exactly the one file it no longer
-    needs without also deleting a still-live jail's own (`_supervisors_for`'s
-    own docstring has the reasoning). Never called at module scope: writing a
-    file is real I/O, and `pyproject.toml`'s own `[tool.pypeeker.import-time-
-    side-effects]` allow-list has no entry for this module, so doing this
-    eagerly at import time would trip that rule, not just style. Called
-    exactly once per `create_bwrap_jail` call that needs it (`_supervisors_for`,
-    the one caller) -- a second call in the same jail's creation would write a
-    second, decoy file and leak the first one forever once `destroy_jail`
-    deletes the wrong path instead.
-
-    Reachable inside a bwrap jail under most of the caller's own `policy` shapes (TASK-0006):
-    `compile_supervisor_launch` masks `resolved_state_dir()` unconditionally and binds this one
-    file back inside it (TASK-0019), so wherever `tempfile.NamedTemporaryFile`'s own collision-safe
-    random suffix actually placed this file stays reachable even under a policy that excludes
-    everything else this file used to depend on (`/tmp`, before this task; the whole host root,
-    under `WHOLE_HOST_READ_ONLY`, incidentally covered it too). A jail created with a narrower
-    `policy` of its own no longer has to also happen to cover this path -- that was exactly
-    TASK-0006's bug.
-
-    `-I` (isolated mode, TASK-0001.15/.17 adversarial review) runs this
-    interpreter ignoring `PYTHONPATH`/`PYTHONHOME` and without adding user
-    site-packages, regardless of what this process's own environment happens
-    to carry -- belt and braces next to `infra.supervisor.link._start` no
-    longer handing the supervisor process `EnvPolicy`-scrubbed environment at
-    all (that module's own docstring explains why a mapping an embedder
-    scrubbed for the *confined command* is not safe to also hand the process
-    enforcing the confinement): `-I` closes the same hole a second,
-    independent way, for whatever this process's own environment might
-    someday carry. It does nothing for `LD_PRELOAD`, which the dynamic linker
-    consults before the interpreter ever starts -- the env split is what
-    closes that half. The assembled file imports only the stdlib (rule 17),
-    so running it under `-I` changes nothing it does.
+    `-I` keeps `PYTHONPATH`, `PYTHONHOME` and user site-packages out of the supervisor, beside
+    `link.py` giving it no environment of the caller's; it does nothing for `LD_PRELOAD`, which
+    only the environment split keeps out.
     """
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -133,17 +102,9 @@ def _supervisors_for(
     cwd: str | None = None,
     stdio: Stdio = INHERIT,
 ) -> tuple[SupervisorPort, Path, tuple[bwrap.Mount, ...], tuple[str, ...]]:
-    """The `SupervisorPort` `create_bwrap_jail` uses for `policy` when its caller names none,
-    the path of the fresh supervisor script written for it (TASK-0001.21: the jail deletes
-    that one file and no other), and the mounts the jail was compiled with.
-
-    A fresh `LiveSupervisors` every call: whichever instance opened a jail's events pipe is
-    the only one that can read or close it, and `Jail.supervisors` carries it back to
-    `run_jail`/`destroy_jail`.
-
-    Refuses `policy` before anything is written (`domain/policy/paths.py`'s `refusal`, with
-    the state directory and the channel directory as paths the jail needs), then looks up
-    what is at each write deny's and mask's path, the one host fact the compile needs.
+    """Refuse or compile `policy` for one jail, and return its `SupervisorPort` (a fresh
+    `LiveSupervisor`), the supervisor script written for it, its mounts, and the absent paths
+    it holds placeholders for. Nothing is written before every refusal has passed.
 
     Raises:
         PolicyPathNotAbsolute: a path in `policy` is not absolute and normalised.
@@ -238,7 +199,7 @@ def _supervisors_for(
         channels=channels,
     )
     supervisor_argv = bwrap.compile_supervisor_launch(supervisor_path, mounts, cwd)
-    port = real_supervisor_port(link.LiveSupervisors(supervisor_argv, streams))
+    port = real_supervisor_port(link.LiveSupervisor(supervisor_argv, streams))
     held = (*policy.write_denies, *policy.masks)
     placeholders = tuple(
         dict.fromkeys(
@@ -253,7 +214,7 @@ def _supervisors_for(
 def create_bwrap_jail(
     command: tuple[str, ...],
     *,
-    env: tuple[tuple[str, str], ...] = (),
+    env: Mapping[str, str] = frozendict(),
     policy: FsPolicy = WHOLE_HOST_READ_ONLY,
     env_policy: EnvPolicy = DENY_ALL,
     channels: Reservations | None = None,
@@ -264,97 +225,33 @@ def create_bwrap_jail(
     directories: ChannelDirectoryPort = CHANNEL_DIRECTORIES,
     proc_root: str = "/proc",
 ) -> Jail:
-    """Compile `command` into a bwrap jail and start its supervisor running it,
-    seeing exactly the paths `policy` names (TASK-0001.16) and exactly the
-    environment variables `env_policy` allows out of `env` (TASK-0001.17).
+    """Compile `command` into a bwrap jail and start its supervisor running it.
 
-    `policy` defaults to `WHOLE_HOST_READ_ONLY` (`domain/policy/paths.py`), the
-    same whole host root, read-only, every jail got before that parameter existed.
-    `env` is the candidate environment (`Plan.env`'s own docstring: not yet
-    scrubbed) a caller has to offer; left unset, it is empty, so `env_policy`
-    defaults to `DENY_ALL` (`domain/policy/env.py`) and scrubs nothing out of
-    nothing -- the same no-environment-at-all behaviour every jail got before
-    either parameter existed, now reached by an explicit policy rather than a
-    bare default with no policy behind it. `operations.create` is the one place
-    `env_policy` is ever applied (`domain/operations.py`'s own docstring): by the
-    time this function's own `run` performs the yielded `StartSupervisedCommand`,
-    the effect's `env` is already scrubbed, and nothing downstream (this driver,
-    `infra/supervisor/link.py`) ever reads `env` or `os.environ` again to get
-    there.
+    Args:
+        command: The command, with each channel's endpoint already in its argv.
+        env: The candidate environment; `env_policy` decides what of it the command sees
+            (default `DENY_ALL`: nothing).
+        policy: What the command may see of the host's filesystem (default: all of it,
+            read-only).
+        env_policy: The environment allow-list.
+        channels: What `reserve_channels` returned for this jail. Its channel directory is
+            created here, private to the owning user, and bound writable into the jail; it is
+            never put in `env` (old SPEC decision-184/186).
+        cwd: The command's working directory, inside a root of `policy`; the embedder's own
+            when unset.
+        stdio: Where the command's fd 0, 1 and 2 come from; the embedder's own by default.
+        processes: The `ProcessPort` (a fake in a test).
+        supervisors: A `SupervisorPort` to use as given (a fake in a test); `policy` is then not
+            compiled and no supervisor script is written.
+        directories: The `ChannelDirectoryPort`.
+        proc_root: Where to scan for the jail's PID 1; `/proc` except in a test.
 
-    `cwd` is the command's working directory (bwrap's `--chdir`; inside a root of `policy`,
-    else `PolicyCwdOutsideRoots`), the embedder's own when left unset. `stdio` says where the
-    command's fd 0, 1 and 2 come from (`domain/policy/stdio.py`), the embedder's own by default;
-    a path that cannot be opened is `JailSpawnFailed` (TASK-0028).
-
-    `channels` is what `reserve_channels` handed back for this jail (TASK-0001.25):
-    its channel directory is bound into the jail, writable, when it declares any
-    channel. It reaches the jailed command only through `command` -- the caller has
-    already written each endpoint there -- and never through `env`, which this
-    function neither reads nor extends with it (old SPEC decision-184/186). The
-    directory itself is created here (TASK-0001.26), through `directories`, when
-    `channels` declares any channel: private to the owning user, under brig's own
-    state directory, before the jail starts (it is the channel bind's source;
-    the jail sees it through the state directory's mask, TASK-0019). It is carried on
-    the returned `Jail` as `channel_directory` for `destroy_jail` to remove.
-
-    `supervisors`, left unset, is resolved from `policy` (`_supervisors_for`),
-    which also writes this jail's own fresh supervisor script file and hands
-    back its path, carried on the returned `Jail` as `supervisor_script` for
-    `destroy_jail` to delete later (TASK-0001.21). An explicit `supervisors` (a
-    fake, in a test) is used as given instead, and `policy` then plays no part,
-    the same way a fake stands in for the whole world regardless of what domain
-    state asked for it -- no file was written for it, so `supervisor_script` is
-    `None` on the `Jail` this returns.
-
-    `presentation/driver.py`'s `run` raises `JailSpawnFailed` should the
-    supervisor's own start fail. Resolving brig's own state directory
-    (`resolved_state_dir`, above) raises `StateDirectoryInvalid` should
-    `BRIG_HOME` name a value it cannot use. `_supervisors_for` raises
-    `PolicyPathNotAbsolute` or `PolicyMaskHides` for a policy it refuses
-    (decision-0007), while `_namespace_fd_for` (below) raises
-    `ChannelNamespaceNotFound` for a channel-declaring jail whose in-jail PID 1
-    never appears while its outer process still runs (TASK-0001.27); one whose
-    command already finished returns a `Jail` with no namespace fd instead
-    (TASK-0001.30). `directories.create`'s own `OSError` (a full or
-    read-only disk) is raised as `ChannelDirectoryCreateFailed`, with the
-    `OSError` as its `__cause__` (TASK-0001.29). Nothing else in this
-    function's own body raises, so nothing else is in this docstring.
-
-    TASK-0012: once `_supervisors_for` has written `supervisor_script`, no `Jail`
-    exists yet to carry that path to a later `destroy_jail` call -- this is the
-    only function that still holds it. Should `run` raise anything at all before
-    returning (`JailSpawnFailed`, the one documented case, but this catches
-    unconditionally rather than naming it, so a future failure added to that call
-    is never a second leak to rediscover), the just-written file is deleted here
-    before the exception propagates unchanged: a side effect alongside the raise,
-    never a replacement for it.
-
-    TASK-0001.26: `directories.create` runs inside that same `try`, not before it,
-    because it can itself fail partway (`mkdir` succeeds, `chmod` does not) -- a
-    directory created outside the `try` would leak exactly like the script did.
-    The `except` therefore removes the channel directory too, swallowing `OSError`
-    the same way `destroy_jail` does (and safe when `create` never finished:
-    `remove` on a path `mkdir` already made still finds something to delete),
-    before the original exception propagates. `Jail.channel_directory` is set only
-    once `create` returned.
-
-    TASK-0001.27: for a jail that declares a channel, the jail's own PID namespace
-    is looked up here too, once the supervisor has actually started (`process.pid`
-    -- the *outer* bwrap process -- is what the scan is rooted at), inside the same
-    `try` and for the same leak reason as `directories.create`: a
-    `ChannelNamespaceNotFound` must not leave the channel directory or the script
-    behind either -- and should anything later in the same `try` raise, the
-    namespace fd this call already opened is closed on the way out, so a failure
-    here leaks neither a directory, nor a script, nor an fd.
-    `infra.sockets.jail_pid1_namespace` is called directly rather than through a
-    port (`ChannelReadinessPort`'s own docstring: nothing needs to fake "which pid
-    is bwrap's child"). The resulting fd is carried as `Jail.channel_namespace_fd`.
-
-    `proc_root` is `/proc` for every production caller, and is passed straight
-    through to `_namespace_fd_for`: it exists so a test can plant a directory tree
-    of its own rather than need a real bwrap jail underneath the scan, the same
-    parameter `infra.processes.group_alive` already carries (TASK-0016).
+    Everything made before a failure (the script, the channel directory, the namespace fd, the
+    placeholders) is removed before the exception propagates (TASK-0012). Beside what is listed
+    below, the policy refusals of `_supervisors_for`, `StateDirectoryInvalid`, `JailSpawnFailed`
+    from the driver (an unopenable stdio path included, TASK-0028), and
+    `ChannelNamespaceNotFound` from `_namespace_fd_for` propagate. A jail whose command
+    finished before its namespace was found has no namespace fd (TASK-0001.30).
 
     Raises:
         ChannelDirectoryCreateFailed: the host refused to create the channel
@@ -425,7 +322,11 @@ def create_bwrap_jail(
         channel_namespace_fd=namespace_fd,
         mounts=mounts,
         placeholders=record,
-        report=bwrap.ceilings(policy, mounts, channels, _socket_directories()) if mounts else {},
+        report=(
+            bwrap.ceilings(policy, mounts, channels, _socket_directories())
+            if mounts
+            else frozendict()
+        ),
     )
 
 
@@ -437,32 +338,13 @@ def _socket_directories() -> tuple[str, ...]:
 
 
 def _namespace_fd_for(process: Process, proc_root: str = "/proc") -> int | None:
-    """The open fd on the jail's own PID namespace, found under `process` -- the
-    *outer* bwrap process `create_bwrap_jail` just started -- or `None` when the
-    jail's command had already finished and taken that namespace with it
-    (TASK-0001.30: `infra.sockets.JailPid1Exited`, which the scan reports as soon as
-    `process` itself is gone, without waiting out its deadline), or
-    `ChannelNamespaceNotFound` once `infra.sockets.JAIL_PID1_TIMEOUT_S` passes with
-    `process` still running and no in-jail PID 1 in sight.
-
-    `infra.sockets.jail_pid1_namespace` is called with a `time.monotonic()`
-    deadline computed here, never with that module's own constant: infra takes a
-    deadline rather than computing one, the same split `infra.processes.
-    reap_deadline` already has (rule 2: the module that decides what "too long"
-    means is presentation's, the one that waits is infra's).
-
-    That deadline (and so the frozen duration it is built from) is what this
-    function adds to `create_bwrap_jail`'s own documented failure set, alongside
-    the `ChannelDirectoryCreateFailed` its `directories.create` call can already
-    raise.
+    """An open fd on the jail's PID namespace, found under `process` (the outer bwrap), or
+    `None` when the jail's command had already finished and taken the namespace with it
+    (TASK-0001.30). Presentation sets the deadline; infra waits.
 
     Raises:
-        ChannelNamespaceNotFound: nothing under `process.pid` looked like the jail's
-            in-jail PID 1 before the deadline passed.
-
-    `proc_root` is `/proc` for every production caller; it exists so a test can plant
-    a directory tree of its own instead of a real bwrap jail, the same parameter
-    `infra.processes.group_alive` already carries for the same reason (TASK-0016).
+        ChannelNamespaceNotFound: no in-jail PID 1 appeared before
+            `infra.sockets.JAIL_PID1_TIMEOUT_S` passed, with `process` still running.
     """
     outcome = _sockets.jail_pid1_namespace(
         process.pid, time.monotonic() + _sockets.JAIL_PID1_TIMEOUT_S, proc_root

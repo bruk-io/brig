@@ -124,7 +124,7 @@ def test_env_only_the_allowed_variables_reach_the_command() -> None:
     )
     code, jail = _exit(
         program,
-        env=(("BRIG_REPORT_ALLOWED", "yes"), ("BRIG_REPORT_SECRET", "no")),
+        env={"BRIG_REPORT_ALLOWED": "yes", "BRIG_REPORT_SECRET": "no"},
         env_policy=EnvPolicy(allowed=("BRIG_REPORT_ALLOWED",)),
     )
     _held_to(jail, ENV_CLAIM, control=bool(code & 1), blocked=not code & 2)

@@ -1,14 +1,6 @@
-"""Unit test for `operations.start`'s deadline-bound `AwaitSupervisorDone`
-(TASK-0001.06 review; re-pointed at the supervised path by TASK-0001.15 step 4).
-
-Drives `start` by hand, pinning that it narrows the driver's reply to the three
-outcomes `AwaitSupervisorDone` can carry: an exit code, `None` once a deadline
-passes, and `ExitCodeUnknown` once the supervisor's report for this process can
-never be recovered -- distinct outcomes `presentation/api.py`'s `run_jail` turns into
-different brig errors, and conflating the last two (review finding 3, on the earlier
-direct-spawn `Reap`) would make a process whose exit code is gone for good look like
-one still worth waiting for again.
-"""
+"""Unit test for `operations.start`: it narrows the driver's reply to an exit code, `None` (the
+deadline passed) or `ExitCodeUnknown` (never recoverable), which `run_jail` turns into
+different errors."""
 
 import pytest
 

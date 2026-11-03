@@ -1,14 +1,6 @@
-"""grade(claims, evidence) -> Mapping[Claim, Grade]: rule 11's one producer of a
-report (decision-0001 rule 11; decision-0002 section 4).
-
-A jail type's compile, or an e2e battery wiring an existing claim in for the first
-time (TASK-0001.18), produces `Claim`s; neither grades them. An e2e battery that
-plants the violation with a positive control (rule 11's own text) is the one source
-of `Evidence`; `grade` below is the one place that turns a claim plus whatever
-evidence exists for it into the one word a report states. A claim nothing has
-measured yet grades `UNENFORCED` -- not a failure, a fact about what has not been
-proven -- so a report can never overstate what the library actually knows.
-"""
+"""Grades: `grade(claims, evidence)` is the one producer of a graded report (decision-0001
+rule 11). Evidence comes only from an e2e battery that plants the violation beside a positive
+control; a claim nothing has measured grades `UNENFORCED`."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -28,7 +20,9 @@ class Grade(StrEnum):
     VIOLATED = "VIOLATED"
 
 
-_STRENGTH = {Grade.VIOLATED: 0, Grade.UNENFORCED: 1, Grade.BEST_EFFORT: 2, Grade.ENFORCED: 3}
+_STRENGTH = frozendict(
+    {Grade.VIOLATED: 0, Grade.UNENFORCED: 1, Grade.BEST_EFFORT: 2, Grade.ENFORCED: 3}
+)
 
 
 def at_most(stated: Grade, measured: Grade) -> bool:
@@ -39,35 +33,19 @@ def at_most(stated: Grade, measured: Grade) -> bool:
 
 @dataclass(frozen=True)
 class Evidence:
-    """What an e2e battery measured for one claim: whether its positive control was
-    observed getting through, and whether its planted violation was blocked.
-
-    Rule 11 asks for "an e2e battery that plants the violation with a positive
-    control" -- not a violation alone. `violation_blocked` on its own is not
-    evidence: a battery whose probe can never detect anything open (a dead code
-    path, a probe that always reports "blocked" by mistake) could set it `True`
-    without ever having proven the probe could tell the difference. `grade` below
-    reads `violation_blocked` only once `control_observed` confirms the positive
-    control -- the same attempt, made with the boundary not yet in place -- was
-    actually seen getting through, the same pairing every one of TASK-0001.05's own
-    batteries already uses.
-    """
+    """What an e2e battery measured for one claim: whether its positive control got through,
+    and whether its planted violation was blocked. `violation_blocked` counts only once
+    `control_observed` shows the probe could see a violation at all."""
 
     control_observed: bool
     violation_blocked: bool
 
 
-def grade(claims: tuple[Claim, ...], evidence: Mapping[Claim, Evidence]) -> Mapping[Claim, Grade]:
-    """Grade every claim in `claims` from whatever `evidence` has for it.
-
-    A claim with no key in `evidence` -- or one whose positive control was never
-    observed getting through -- grades `UNENFORCED`: nothing proved the probe could
-    have seen a violation, so nothing here claims it did, per rule 11's own text
-    ("a claim without evidence grades unenforced"). Otherwise, a claim whose planted
-    violation was blocked grades `ENFORCED`; one whose violation got through anyway
-    grades `VIOLATED`. Pure: this module does no I/O (rule 2), so every `Evidence`
-    here was measured elsewhere, by whoever calls this.
-    """
+def grade(
+    claims: tuple[Claim, ...], evidence: Mapping[Claim, Evidence]
+) -> frozendict[Claim, Grade]:
+    """Grade each of `claims` from its `evidence`: `UNENFORCED` with none, or with a positive
+    control never observed; else `ENFORCED` if the violation was blocked, `VIOLATED` if not."""
     report: dict[Claim, Grade] = {}
     for claim in claims:
         found = evidence.get(claim)
@@ -77,4 +55,4 @@ def grade(claims: tuple[Claim, ...], evidence: Mapping[Claim, Evidence]) -> Mapp
             report[claim] = Grade.ENFORCED
         else:
             report[claim] = Grade.VIOLATED
-    return report
+    return frozendict(report)

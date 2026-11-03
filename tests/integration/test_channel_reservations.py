@@ -54,7 +54,7 @@ def test_a_reservation_reaches_the_command_through_argv_and_never_through_env(
     assert supervisors.started == []  # nothing has started yet
 
     command = ("server", "--listen", reservation.endpoint)
-    host_like_env = (("PATH", "/usr/bin"), ("HOME", "/home/x"))
+    host_like_env = {"PATH": "/usr/bin", "HOME": "/home/x"}
     jail = create_bwrap_jail(
         command,
         env=host_like_env,
@@ -73,7 +73,7 @@ def test_a_reservation_reaches_the_command_through_argv_and_never_through_env(
     assert argv == command
     assert env == host_like_env
     for path in (reservation.endpoint, reservation.bound_path):
-        for name, value in env:
+        for name, value in env.items():
             assert path not in name
             assert path not in value
 

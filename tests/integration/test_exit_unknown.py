@@ -1,17 +1,6 @@
-"""Integration test for `run_jail` telling an unobtainable exit code apart from a
-timeout (review finding 3 on TASK-0001.06; re-pointed at the supervised path by
-TASK-0001.15 step 4).
-
-Runs the create-then-wait part of the journey through brig's public API, with
-`FakeSupervisors` arranged so its `await_done` reports the supervisor's report for
-this process as gone for good (`done_unknown=True`) -- the shape a supervisor that
-can never answer again gives `run_jail`, and which `await_done` must never conflate
-with an ordinary deadline expiry (both of which `Reap`'s own earlier review found
-reported as `None`). `run_jail` must raise `JailExitUnknown`, not `JailWaitTimedOut`:
-unlike a deadline that merely passed, no later wait could ever recover this
-process's exit code. Nothing inside brig's own code is faked or patched (rule 5);
-only the world at the edge is.
-"""
+"""Integration test: `run_jail` raises `JailExitUnknown`, not `JailWaitTimedOut`, when the
+supervisor's report is gone for good (`FakeSupervisors(done_unknown=True)`); no later wait could
+recover it."""
 
 import pytest
 from tests.integration.fakes import FakeProcesses, FakeSupervisors

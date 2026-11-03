@@ -151,7 +151,7 @@ time.sleep({forge_sleep_s})
 os._exit({real_exit_code})
 """
     command = (sys.executable, "-I", "-c", forging_script)
-    supervisors = link.LiveSupervisors(_SUPERVISOR_ARGV)
+    supervisors = link.LiveSupervisor(_SUPERVISOR_ARGV)
     # Captured before the early check, not after: that check's own deadline
     # already consumes forge_sleep_s / 4 of the process's real lifetime before
     # `start` would otherwise be set, so measuring from here is what makes the
@@ -161,7 +161,7 @@ os._exit({real_exit_code})
     # into it (measured on GitHub Actions: 0.395s, under the old 0.4s floor,
     # for exactly this reason, not genuine CI slowness).
     start = time.monotonic()
-    supervisor = supervisors.start(command, ())
+    supervisor = supervisors.start(command, {})
     try:
         # Asked for less time than the real command needs to actually finish: if
         # the forged `done` were trusted, this would already return 0 here.
@@ -212,7 +212,7 @@ time.sleep({forge_sleep_s})
 os._exit({real_exit_code})
 """
     command = (sys.executable, "-I", "-c", forging_script)
-    supervisors = link.LiveSupervisors(_SUPERVISOR_ARGV)
+    supervisors = link.LiveSupervisor(_SUPERVISOR_ARGV)
     # Captured before the early check, not after: that check's own deadline
     # already consumes forge_sleep_s / 4 of the process's real lifetime before
     # `start` would otherwise be set, so measuring from here is what makes the
@@ -222,7 +222,7 @@ os._exit({real_exit_code})
     # into it (measured on GitHub Actions: 0.395s, under the old 0.4s floor,
     # for exactly this reason, not genuine CI slowness).
     start = time.monotonic()
-    supervisor = supervisors.start(command, ())
+    supervisor = supervisors.start(command, {})
     try:
         # Asked for less time than the real command needs to actually finish: if
         # the forged `done` were trusted, this would already return 0 here.
@@ -267,7 +267,7 @@ starts as `supervisor_argv`.
 
 
 def test_the_supervisors_own_process_never_sees_the_supervised_commands_env() -> None:
-    """`LiveSupervisors.start`'s `env` -- the supervised command's own,
+    """`LiveSupervisor.start`'s `env` -- the supervised command's own,
     `EnvPolicy`-scrubbed environment (`domain/policy/env.py`) -- must reach only
     the wire's exec request, never the supervisor process's own environment.
 
@@ -280,8 +280,8 @@ def test_the_supervisors_own_process_never_sees_the_supervised_commands_env() ->
     inside the process that enforces the confinement.
     """
     fake_supervisor_argv = (sys.executable, "-I", "-c", _FAKE_SUPERVISOR_SCRIPT)
-    supervisors = link.LiveSupervisors(fake_supervisor_argv)
-    supervisor = supervisors.start(("irrelevant",), (("BRIG_TEST_ENV_MARKER", "leaked"),))
+    supervisors = link.LiveSupervisor(fake_supervisor_argv)
+    supervisor = supervisors.start(("irrelevant",), {"BRIG_TEST_ENV_MARKER": "leaked"})
     try:
         outcome = supervisors.await_done(supervisor.pid, time.monotonic() + 10.0)
         assert outcome == 0, "the supervisor's own process saw the command's env marker"
@@ -309,8 +309,8 @@ def test_forwarding_term_to_a_supervised_command_still_works_after_the_stdio_fix
     timing concession, not a property of the fix under test.
     """
     command = (sys.executable, "-I", "-c", "import time; time.sleep(30)")
-    supervisors = link.LiveSupervisors(_SUPERVISOR_ARGV)
-    supervisor = supervisors.start(command, ())
+    supervisors = link.LiveSupervisor(_SUPERVISOR_ARGV)
+    supervisor = supervisors.start(command, {})
     try:
         started = supervisor.read_event(time.monotonic() + 10.0)
         assert started is not None and not isinstance(started, link.ReadTimedOut)

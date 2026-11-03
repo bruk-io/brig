@@ -26,30 +26,10 @@ from brig.domain.plan import Plan
 from brig.domain.policy.paths import FsPolicy, PathKind, within
 
 _VIRTUAL_FS_FLAGS: tuple[str, ...] = ("--proc", "/proc", "--dev", "/dev", "--tmpfs", "/sys")
-"""Virtual-filesystem hygiene (TASK-0015, decision-0004), not a namespace/behavior
-flag -- kept as its own constant rather than folded into `_NAMESPACE_FLAGS` below
-for exactly that reason. `WHOLE_HOST_READ_ONLY`'s recursive `--ro-bind / /` carries
-along whatever the host already has mounted at `/proc` and `/sys`, so without this,
-a jailed command sees the *ambient host's* `/proc` (every real host pid, not only
-its own namespace's) and the host's real `/sys` (block/bus/class/dev/devices/
-firmware/kernel/module entries) -- measured directly against real bwrap
-(decision-0004).
-
-`--proc /proc` gives the jail a fresh procfs scoped to its own PID namespace,
-structurally (not a mitigation riding on a host's own `ptrace_scope`): measured,
-the jail's own `/proc` listing then contains only its own namespace's processes.
-`--dev /dev` gives a minimal, functional device set (null, zero, random, urandom
-and similar) instead of the host's real `/dev`, confirmed not to break the jail's
-own basic command. `--tmpfs /sys` masks `/sys` empty rather than giving it a
-namespace-scoped equivalent -- unlike procfs, sysfs has no per-namespace scoping
-to offer instead, so absent is the only safe default; an embedder whose own policy
-genuinely needs hardware introspection adds their own `/sys` bind back explicitly.
-
-Unconditional, placed after the state directory's mask and before `_NAMESPACE_FLAGS`,
-the same way that mask already is: never part of the caller's own
-`FsPolicy`, since an embedder narrowing or widening their own policy has no
-business accidentally re-exposing or hiding these.
-"""
+"""A procfs of the jail's own PID namespace, a minimal `/dev`, and an empty `/sys`, whatever the
+policy binds (decision-0004): a bind of `/` otherwise carries the host's own `/proc` (every host
+pid) and `/sys` into the jail. sysfs has no per-namespace view, so it is emptied; an embedder
+that needs it binds it back."""
 
 _NAMESPACE_FLAGS: tuple[str, ...] = (
     "--unshare-all",
@@ -60,71 +40,22 @@ _NAMESPACE_FLAGS: tuple[str, ...] = (
     "--as-pid-1",
     "--",
 )
-"""bwrap's own namespace-isolation flags, after whatever `compile_mounts` names for
-a policy's binds and ahead of whatever this jail type's driver names as the jail's
-one process -- the supervisor (decision-0002), by way of `compile_supervisor_launch`.
+"""The namespace flags, after the mounts and before the supervisor's argv. Each is load-bearing:
 
-``--cap-drop ALL`` (decision-0006): bwrap run by root drops no capability by default, so a
-jail's command held nearly every capability in its namespaces, ``CAP_SYS_PTRACE`` among them,
-which overrides the supervisor's non-dumpable flag and lets the command reach PID 1. With it
-the jail holds none, whoever runs brig.
-
-A policy's binds have to come first: without at least one bind, bwrap pivots into an
-empty new root and `execvp` finds nothing there to run, regardless of exit code --
-`WHOLE_HOST_READ_ONLY`'s whole-host read-only bind is the thinnest policy that lets
-the supervisor's own file be reachable inside the jail at all (presentation's own
-wiring documents exactly how it relies on that). ``--unshare-all`` isolates every
-namespace bwrap can; ``--die-with-parent`` ties the jail's lifetime to the process
-that started it.
-
-``--as-pid-1`` (TASK-0001.15 step 4, measured against real bwrap in a privileged
-Docker container -- bwrap itself refuses ``--unshare-all`` outside one, a container
-limitation, not a finding about this flag) is load-bearing for decision-0002's own
-premise, not an optional hardening: ``--unshare-all`` implies ``--unshare-pid``, and
-bwrap's *default* behaviour there installs its own reaper process as the namespace's
-real PID 1, with whatever this argv names after ``--`` running as PID 2 instead --
-measured directly (the supervisor's own ``started`` event named a pid of 3, not 1,
-without this flag; 1, with it). Without it, an orphan reparented inside the
-namespace reparents to bwrap's own reaper, never to the supervisor, and
-``program.py``'s own "reaps everything reparented to it, including orphans"
-(its own module docstring) silently stops being true for anything bwrap's reaper
-catches instead. ``--as-pid-1`` makes the supervisor itself the one process bwrap
-execs into that role, with no separate reaper in between.
-
-``--new-session`` (TASK-0001.05 AC#2) closes the TIOCSTI escape bwrap's own
-documentation warns about: a process sharing a controlling terminal with something
-outside the jail can, without its session detached from that terminal, inject
-keystrokes back onto it via the TIOCSTI ioctl and escape through whatever reads them
-next. Stated here, as this jail type's own policy, rather than left to infra's spawn:
-on the toolchain this project's own CI runs, this flag is the *only* thing closing that
-hole, and it is load-bearing rather than defense in depth.
-
-That is a correction of what TASK-0001.05's review measured on one host. The review
-found infra's ``os.posix_spawnp(..., setsid=True)`` (TASK-0001.06's safe-spawn work)
-running unconditionally, before bwrap's own argv is ever parsed, and concluded this
-flag could never be credited for the closure. Measured since, on real Linux
-(TASK-0001.12): ``setsid=True`` is not available on every interpreter -- it is compiled
-out of uv's managed CPython, the build this project's ``pyproject.toml`` and CI select
--- so ``brig.infra.processes.spawn`` falls back to a new process group alone there,
-which leaves the controlling terminal shared and the hole open. Infra reports which it
-got as ``SpawnedProcess.session_detached``. Where that is ``False``, nothing but
-``--new-session`` closes this, and the flag's contribution is attributable after all;
-where it is ``True``, infra's session already closed it first and the flag is the
-redundant half, keeping the property true should that ever stop. Either way
-``tests/e2e/test_tiocsti_battery.py`` grades the property end to end (TIOCSTI stays
-denied) rather than which layer denies it; grading the attribution itself is still
-tracked separately (TASK-0001.11).
+- `--cap-drop ALL` (decision-0006): bwrap run by root drops no capability, and
+  `CAP_SYS_PTRACE` would let the command reach its non-dumpable PID 1.
+- `--as-pid-1`: without it bwrap puts a reaper of its own at PID 1 and the supervisor at
+  PID 3 (measured, TASK-0001.15), so orphans reparent to bwrap's reaper, not the supervisor.
+- `--new-session` closes the TIOCSTI escape (TASK-0001.05). uv's managed CPython is built
+  without `posix_spawn`'s `setsid` (TASK-0001.12), so where infra's spawn reports
+  `session_detached` `False` this flag is the only thing closing it.
 """
 
 
-def compile_run(command: tuple[str, ...], env: tuple[tuple[str, str], ...] = ()) -> Plan:
-    """Compile a request to run `command`, in `env`, as the one command bwrap's
-    supervisor runs as its own child (decision-0002).
-
-    This jail type never refuses a request (see `domain/plan.py`), so the walking
-    skeleton's compile always produces a `Plan`.
-    """
-    return Plan(argv=command, env=env)
+def compile_run(command: tuple[str, ...], env: Mapping[str, str] = frozendict()) -> Plan:
+    """The plan for running `command`, with `env` as its candidate environment, as the
+    supervisor's child (decision-0002). A policy is refused before this, by `refusal`."""
+    return Plan(argv=command, env=frozendict(env))
 
 
 class MountKind(StrEnum):
@@ -149,7 +80,7 @@ class Mount:
 _DEV_NULL = "/dev/null"
 """What a masked file is replaced with: reads are empty and writes refused, read-only."""
 
-_RANK = {"readable": 0, "writable": 1, "deny": 2, "mask": 3}
+_RANK = frozendict({"readable": 0, "writable": 1, "deny": 2, "mask": 3})
 """At one path, which entry mounts last and so wins: a mask over a deny over a writable root
 over a readable one."""
 
@@ -312,7 +243,7 @@ def ceilings(
     mounts: tuple[Mount, ...],
     channels: Reservations | None,
     socket_directories: tuple[str, ...] = SOCKET_DIRECTORIES,
-) -> dict[Claim, Grade]:
+) -> frozendict[Claim, Grade]:
     """The strongest grade each claim can have for a jail compiled to `mounts` (decision-0008):
     what this compile states, before any jail runs. An e2e battery holds every one of these to
     what it measures (`at_most`), so none is stated stronger than the batteries show.
@@ -329,13 +260,15 @@ def ceilings(
     masks = any(path in mounted for path in policy.masks)
     exclusive = set(writable_shared_paths(mounts)) <= set(declared_channel_paths(channels))
     exclusive = exclusive and not _dialable(policy, socket_directories)
-    return {
-        FS_WRITE_CLAIM: Grade.BEST_EFFORT if denies else Grade.ENFORCED,
-        FS_READ_CLAIM: Grade.BEST_EFFORT if masks else Grade.ENFORCED,
-        NETWORK_CLAIM: Grade.ENFORCED,
-        ENV_CLAIM: Grade.ENFORCED,
-        CHANNEL_EXCLUSIVITY_CLAIM: Grade.ENFORCED if exclusive else Grade.VIOLATED,
-    }
+    return frozendict(
+        {
+            FS_WRITE_CLAIM: Grade.BEST_EFFORT if denies else Grade.ENFORCED,
+            FS_READ_CLAIM: Grade.BEST_EFFORT if masks else Grade.ENFORCED,
+            NETWORK_CLAIM: Grade.ENFORCED,
+            ENV_CLAIM: Grade.ENFORCED,
+            CHANNEL_EXCLUSIVITY_CLAIM: Grade.ENFORCED if exclusive else Grade.VIOLATED,
+        }
+    )
 
 
 def _governing(mounts: tuple[Mount, ...], path: str) -> Mount | None:

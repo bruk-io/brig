@@ -1,21 +1,6 @@
-"""Unit test for the kill ladder's order (decision-0001 rule 10).
-
-Rule 10: "Unit tests drive the generators by hand and pin the order: verify before
-signalling, TERM before KILL, verify after." `tests/unit/test_bwrap_compile.py` covers
-`compile_run` and `create`'s single `Spawn`; this module is `destroy`'s ladder, driven
-by hand against a process that only gives up after both signals, so every rung --
-including the terminal `Release` the ladder yields before every return
-(`domain/teardown.py`'s module docstring says why, decision-0003/TASK-0013) -- is
-actually exercised, not just the happy path where the first `Verify` already finds the
-group gone.
-
-The pre-TASK-0013 scenario where the leader's post-KILL `Reap` could collect
-`ExitCodeUnknown` (a leader already reaped by an earlier rung's `Verify` while the
-rest of its group stayed alive) no longer has anything to pin: `teardown.py` no
-longer yields a `Reap` at all, and `Verify` itself now only ever peeks the leader,
-never releases it, so there is no longer a point in the ladder where the leader can
-already be gone by the time something else looks for it.
-"""
+"""Unit test for the kill ladder's order (decision-0001 rule 10): verify before signalling, TERM
+before KILL, verify after, and `Release` before every return, driven by hand against a group
+that gives up only after both signals."""
 
 import pytest
 

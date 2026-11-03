@@ -91,7 +91,7 @@ def test_a_jail_whose_process_exits_after_its_namespace_was_held_reads_as_finish
     assert outcome == ChannelJailFinished()
     assert len(readiness.asked) == 1
     assert processes.peek_attempts == [_jail().process.pid]
-    assert processes.reaped == [] and processes.released == []
+    assert processes.released == []
 
 
 @pytest.mark.parametrize(

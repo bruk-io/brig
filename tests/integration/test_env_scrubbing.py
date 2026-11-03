@@ -22,11 +22,7 @@ def test_only_the_allowed_names_reach_the_supervisor_start_call() -> None:
     """
     processes = FakeProcesses()
     supervisors = FakeSupervisors()
-    host_like_env = (
-        ("PATH", "/usr/bin"),
-        ("HOME", "/home/x"),
-        ("SECRET_TOKEN", "shh"),
-    )
+    host_like_env = {"PATH": "/usr/bin", "HOME": "/home/x", "SECRET_TOKEN": "shh"}
     policy = EnvPolicy(allowed=("PATH",))
 
     jail = create_bwrap_jail(
@@ -38,7 +34,7 @@ def test_only_the_allowed_names_reach_the_supervisor_start_call() -> None:
     )
     destroy_jail(jail, processes=processes, supervisors=supervisors)
 
-    assert supervisors.started == [(("true",), (("PATH", "/usr/bin"),))]
+    assert supervisors.started == [(("true",), frozendict({"PATH": "/usr/bin"}))]
 
 
 def test_deny_all_is_the_default_even_with_a_host_like_env_given() -> None:
@@ -48,11 +44,11 @@ def test_deny_all_is_the_default_even_with_a_host_like_env_given() -> None:
     """
     processes = FakeProcesses()
     supervisors = FakeSupervisors()
-    host_like_env = (("PATH", "/usr/bin"), ("SECRET_TOKEN", "shh"))
+    host_like_env = {"PATH": "/usr/bin", "SECRET_TOKEN": "shh"}
 
     jail = create_bwrap_jail(
         ("true",), env=host_like_env, processes=processes, supervisors=supervisors
     )
     destroy_jail(jail, processes=processes, supervisors=supervisors)
 
-    assert supervisors.started == [(("true",), ())]
+    assert supervisors.started == [(("true",), frozendict())]

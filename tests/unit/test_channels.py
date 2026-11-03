@@ -9,7 +9,7 @@ import pytest
 from brig.domain.channels import (
     Channel,
     ChannelDirectory,
-    ChannelRefused,
+    ChannelNameRefusal,
     Reservation,
     Reservations,
     reserve,
@@ -76,9 +76,9 @@ def test_reserve_refuses_a_name_that_would_escape_the_directory(name: str) -> No
     string the kernel truncates at NUL is refused, and nothing is reserved -- even
     when a valid channel was declared before it.
     """
-    assert reserve((Channel("ok"), Channel(name)), _DIRECTORY) == ChannelRefused(name)
+    assert reserve((Channel("ok"), Channel(name)), _DIRECTORY) == ChannelNameRefusal(name)
 
 
 def test_reserve_refuses_a_repeated_name() -> None:
     """Two channels with one name would share one file; the second is refused."""
-    assert reserve((Channel("ctl"), Channel("ctl")), _DIRECTORY) == ChannelRefused("ctl")
+    assert reserve((Channel("ctl"), Channel("ctl")), _DIRECTORY) == ChannelNameRefusal("ctl")

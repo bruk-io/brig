@@ -1,26 +1,8 @@
-"""Integration test for teardown tolerating a leader that exits before the rest of
-its group (review findings 1 and 2 on TASK-0001.06; redesigned by decision-0003/
-TASK-0013's peek-before-release split).
-
-Runs `destroy_jail` through brig's public API, with `FakeProcesses` arranged so the
-leader has already exited (`leader_exited=True`) while a grandchild of it keeps the
-rest of the group alive for the ladder's first two `Verify` calls (`alive_checks=2`)
-before the post-KILL rung's grace-window poll finally finds the group gone. Nothing
-inside brig's own code is faked or patched (rule 5); only the world at the edge is.
-
-Before TASK-0001.06's own fix, a leader reaped early leaked a raw `ChildProcessError`
-out of `destroy_jail` through the post-KILL `Reap` that no longer exists -- the
-`Reap`-as-synchronization-barrier redesign decision-0003 made means that scenario has
-nothing left to pin here (`tests/unit/test_teardown.py`'s own module docstring has
-the full reasoning). What this test now proves instead: a leader excluded as a
-deliberately held pid is never read as "this group is still alive" on its own, and
-teardown still releases that pid exactly once before `destroy_jail` returns.
-
-This proves the ladder's shape against a fake that always answers instantly -- it
-cannot exercise real `SIGKILL` timing, so it cannot show whether the post-KILL rung's
-grace window actually closes the real race against a genuine multi-process group.
-That is proven separately, for real, against bwrap (TASK-0001.07).
-"""
+"""Integration test for teardown with a leader that exits before the rest of its group
+(decision-0003): `FakeProcesses(leader_exited=True, alive_checks=2)` keeps the group alive
+through two `Verify` calls before the post-KILL poll finds it gone. A held leader is never read
+as the group being alive, and its pid is released once. The real `SIGKILL` timing is proven
+against bwrap (TASK-0001.07)."""
 
 import signal
 

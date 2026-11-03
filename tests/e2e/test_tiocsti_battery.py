@@ -34,7 +34,7 @@ lands only on this freshly made pty, never on the operator's own terminal.
   `setsid=True`, it detaches the spawned process's session before anything else runs,
   which on its own already closes this hole -- independently of any jail type's flags.
   Needs no bwrap, but it does need that flag, which is not on every interpreter
-  (TASK-0001.12): where `SpawnedProcess.session_detached` comes back `False` this skips
+  (TASK-0001.12): where `_SpawnedProcess.session_detached` comes back `False` this skips
   with that measurement as the reason, because infra makes no claim there for it to
   grade -- the closure is then the jail type's, which the bwrap battery below grades.
 - ``test_tiocsti_injection_fails_in_a_real_bwrap_jail``: the same probe run as a real
@@ -57,7 +57,7 @@ TASK-0001.12 narrowed that: `setsid=True` is compiled out of uv's managed CPytho
 build this project's own CI uses, so there `spawn` gets a new process group only, the
 controlling terminal stays shared, and `--new-session` is the one thing closing the
 hole. The attribution is therefore not uniformly ungradable -- it depends on a property
-infra now reports, `SpawnedProcess.session_detached`. Where that is `False` (this
+infra now reports, `_SpawnedProcess.session_detached`. Where that is `False` (this
 project's own CI toolchain), the fourth battery above grades the attribution directly:
 it runs brig's real argv and the same argv with only `--new-session` stripped, and
 requires the first denied and the second to inject, so a change that weakened or

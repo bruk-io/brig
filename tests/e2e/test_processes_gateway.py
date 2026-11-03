@@ -1,56 +1,12 @@
-"""E2E gateway test for `brig.infra.processes` (TASK-0001.06 review, TASK-0001.08,
-decision-0003/TASK-0013).
+"""E2E gateway test for `brig.infra.processes`, against the real OS (decision-0001 rule 4): the
+`ECHILD` race (`reap` and `peek` return `ProcessUnknown`, never a raw `ChildProcessError`),
+`peek` and `release` (decision-0003), and `destroy_jail` over a real process group
+(TASK-0001.08).
 
-Decision-0001 rule 4 lets an e2e test import one `brig.infra` module directly, for
-exactly this: a real `ECHILD` race against the real OS, with nothing faked and no
-bwrap involved. This covers the review's reproduction directly -- a pid that is no
-longer this process's child to wait for at all, because something else already
-collected it -- which `reap` and `reap_deadline` must survive by returning
-`ProcessUnknown` instead of leaking a raw `ChildProcessError`, and which
-`reap_deadline` must tell apart from an ordinary deadline passing (`None`), since
-only the second outcome leaves anything still worth waiting for. Pure POSIX process
-primitives, so this runs for real on every host, including macOS.
-
-decision-0003/TASK-0013's own audit of every call site into `reap`/`reap_deadline`
-found none outside `teardown.py`'s own ladder that need the pid-reuse hazard closed
-(cleanup-only callers that just want an exit code, never a check-then-act on the same
-identity) -- so `reap`/`reap_deadline` keep today's always-release behaviour
-unchanged, and this file's own existing assertions below are not contradicted by that
-decision the way its own Consequences section first predicted. `peek`/`release`
-(decision-0003's actual peek-before-release split) are new, standalone functions
-instead, with their own coverage added below rather than folded into the unchanged
-tests above them.
-
-TASK-0001.08's own gateway test (below, AC#3) drives `destroy_jail` itself -- the
-full public API, not just one infra function -- through the same rule-4 allowance:
-it imports `brig`'s public API alongside `brig.infra.processes`, never
-`brig.domain` or `brig.presentation`, so `Jail`'s `process` field (typed to
-`brig.domain.effects.Process`, which this layer may not import) is filled with the
-real `SpawnedProcess` this test's own `spawn` call returns, through `cast` rather
-than a domain import -- every reader downstream of `Jail.process` (the driver, the
-teardown ladder) only ever reads its `.pid`/`.pgid`, which `SpawnedProcess` already
-carries, so nothing about the real teardown path changes; only the type checker
-needs telling.
-
-TASK-0001.21: `Jail.supervisors` lost its module-level default once every jail got
-its own fresh `LiveSupervisors` instead of one shared singleton, so this test now
-builds a real one of its own, `brig.infra.supervisor.link.LiveSupervisors` -- a
-second `brig.infra` module, still within rule 4's allowance (the e2e layer bars
-only `brig.domain`/`brig.presentation`, not a count of `brig.infra` modules).
-`LiveSupervisors(())` is not a fake standing in for anything (rule 5 confines
-doubles to `tests/integration/`): this test never calls `run_jail`, so `start`
-(the only method that ever reads the empty `supervisor_argv`) is never called
-either, and `destroy_jail`'s own `close(pid)` on a pid nothing started is a
-documented real no-op (`LiveSupervisors.close`'s own docstring) -- the genuine
-production path for a jail destroyed before anything was ever started through it,
-not a simulation of one. `cast`, the same way `Jail.process` already needed one:
-`LiveSupervisors.await_done` returns this module's own `SupervisorDoneUnknown`,
-not `presentation.ports`'s mirror of it (`ports.py`'s own docstring explains why
-the two are deliberately not the same type), so `SupervisorPort`'s structural
-shape is satisfied in substance, by the real production class itself, but not
-in a way mypy can see without crossing into `presentation` -- exactly what this
-layer may not import -- to fetch the one adapter (`presentation/api.py`'s
-`_real_supervisor_port`) that translates between them.
+`Jail.process` takes a real spawned process and `Jail.supervisors` a real `LiveSupervisor`,
+each through `cast`: this layer may not import the domain or presentation types they stand for,
+and the driver reads only `.pid` and `.pgid`. The `LiveSupervisor` is never started; its
+`close` on a pid it does not hold is the real no-op.
 """
 
 import errno
@@ -70,16 +26,13 @@ from brig.infra.processes import (
     group_alive,
     peek,
     reap,
-    reap_deadline,
     release,
     spawn,
 )
-from brig.infra.supervisor.link import LiveSupervisors
+from brig.infra.supervisor.link import LiveSupervisor
 
 _STDIO_FDS = (0, 1, 2)
-"""The allow-list these reap/reap_deadline tests pass `spawn`: standard streams only,
-since what they exercise is the ECHILD race, not TASK-0001.05's fd-closing policy.
-"""
+"""The allow-list these tests pass `spawn`: the standard streams only."""
 
 _LEADER_EXITS_BEFORE_GROUP_ARGV = ("/bin/sh", "-c", "trap '' TERM; sleep 30 & exit 0")
 """A leader that ignores TERM, forks a child that outlives it, and exits right away --
@@ -117,28 +70,6 @@ def test_reap_returns_process_unknown_once_something_else_already_collected_it()
     pid = _spawn_and_reap_directly(("true",))
 
     assert reap(pid) == ProcessUnknown()
-
-
-def test_reap_deadline_returns_process_unknown_once_something_else_already_collected_it() -> None:
-    """`reap_deadline` also tolerates `ECHILD`, and distinguishes it from a timeout
-    (review finding 3).
-    """
-    pid = _spawn_and_reap_directly(("true",))
-
-    assert reap_deadline(pid, time.monotonic() + 5.0) == ProcessUnknown()
-
-
-def test_reap_deadline_returns_none_on_a_genuine_timeout_not_process_unknown() -> None:
-    """A deadline that merely passed, with the process still running, is `None` --
-    never `ProcessUnknown` -- so a later wait still gets a chance to collect it.
-    """
-    process = spawn(("sleep", "9999"), _STDIO_FDS)
-    try:
-        result = reap_deadline(process.pid, time.monotonic() + 0.05)
-        assert result is None
-    finally:
-        os.kill(process.pid, signal.SIGKILL)
-        reap(process.pid)
 
 
 def _peek_until_exited(pid: int, deadline: float) -> int | None | ProcessUnknown:
@@ -242,7 +173,7 @@ def test_destroy_jail_survives_the_leader_exiting_before_its_group() -> None:
     for _ in range(_LEADER_EXITS_BEFORE_GROUP_ITERATIONS):
         spawned = spawn(_LEADER_EXITS_BEFORE_GROUP_ARGV, _STDIO_FDS)
         time.sleep(0.05)
-        jail = Jail(process=cast(Any, spawned), supervisors=cast(Any, LiveSupervisors(())))
+        jail = Jail(process=cast(Any, spawned), supervisors=cast(Any, LiveSupervisor(())))
         try:
             destroy_jail(jail)
         except JailTeardownFailed:
@@ -292,7 +223,7 @@ def test_destroy_jail_survives_the_leader_exiting_before_its_group_without_a_pre
 
     for _ in range(_LEADER_EXITS_BEFORE_GROUP_NO_PRE_SLEEP_ITERATIONS):
         spawned = spawn(_LEADER_EXITS_BEFORE_GROUP_ARGV, _STDIO_FDS)
-        jail = Jail(process=cast(Any, spawned), supervisors=cast(Any, LiveSupervisors(())))
+        jail = Jail(process=cast(Any, spawned), supervisors=cast(Any, LiveSupervisor(())))
         try:
             destroy_jail(jail)
         except JailTeardownFailed:
@@ -333,7 +264,7 @@ def test_destroy_jail_does_not_misread_a_long_held_zombie_as_alive() -> None:
     """
     spawned = spawn(("true",), _STDIO_FDS)
     time.sleep(1.0)  # deliberately widen the peek-before-release window
-    jail = Jail(process=cast(Any, spawned), supervisors=cast(Any, LiveSupervisors(())))
+    jail = Jail(process=cast(Any, spawned), supervisors=cast(Any, LiveSupervisor(())))
 
     started = time.monotonic()
     destroy_jail(jail, kill_grace_s=5.0)
@@ -349,7 +280,7 @@ def test_spawn_raises_spawnerror_for_an_unresolvable_bare_name() -> None:
     """TASK-0014: `spawn`'s own pre-check now raises `SpawnError` for a bare
     `argv[0]` that cannot be resolved against `PATH`, on every platform --
     previously only macOS's own `posix_spawnp` raised for this; on Linux, glibc
-    returned a healthy-looking `SpawnedProcess` whose child just exited 127.
+    returned a healthy-looking spawned process whose child just exited 127.
     """
     with pytest.raises(SpawnError) as excinfo:
         spawn(("definitely-not-a-real-command-xyz",), _STDIO_FDS)

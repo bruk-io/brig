@@ -46,14 +46,11 @@ def _default_mounts(channels: Reservations | None = None) -> tuple[bwrap.Mount, 
 
 
 def test_bwrap_compile_run_names_the_real_command() -> None:
-    """`compile_run` no longer wraps `command` in bwrap's own flags -- the jail's
-    one process is the supervisor now, and `Plan.argv`/`Plan.env` are what it hands
-    that supervisor to run as its own child.
-    """
+    """`compile_run` names the command the supervisor runs as its child, unwrapped."""
     plan = bwrap.compile_run(("true",))
 
     assert plan.argv == ("true",)
-    assert plan.env == ()
+    assert plan.env == frozendict()
 
 
 def test_bwrap_compile_supervisor_launch_wraps_the_given_path() -> None:
@@ -163,7 +160,7 @@ def test_bwrap_create_true_generator() -> None:
     gen = create(plan)
 
     effect = next(gen)
-    assert effect == StartSupervisedCommand(("true",), ())
+    assert effect == StartSupervisedCommand(("true",), frozendict())
 
     # Send back a mock Process (the supervisor's own pid/pgid, in a real journey)
     test_process = Process(pid=1234, pgid=1234)
@@ -184,13 +181,13 @@ def test_bwrap_create_scrubs_plan_env_through_the_given_policy() -> None:
     `policy` does not allow (`SECRET`) never reaches the effect, even though
     `compile_run`'s own candidate `env` carried it.
     """
-    plan = bwrap.compile_run(("true",), env=(("PATH", "/usr/bin"), ("SECRET", "shh")))
+    plan = bwrap.compile_run(("true",), env={"PATH": "/usr/bin", "SECRET": "shh"})
     policy = EnvPolicy(allowed=("PATH",))
 
     gen = create(plan, policy)
 
     effect = next(gen)
-    assert effect == StartSupervisedCommand(("true",), (("PATH", "/usr/bin"),))
+    assert effect == StartSupervisedCommand(("true",), frozendict({"PATH": "/usr/bin"}))
 
     try:
         gen.send(Process(pid=1, pgid=1))
