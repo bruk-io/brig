@@ -7,11 +7,12 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T18:18:00Z'
+updated_date: '2026-11-03T18:19:00Z'
 labels:
   - brig
   - stdio
   - size-3
+  - finish-moved
 dependencies: []
 modified_files:
   - docs/architecture/models/brig/library/supervisor-link.c4
@@ -214,4 +215,6 @@ done: all steps passed
 - Grades: unchanged by this task. For the typical policy (a writable project, readable /, credentials masked) the report is fs_write ENFORCED, fs_read BEST_EFFORT, network VIOLATED, env ENFORCED, channel_exclusivity VIOLATED (TASK-0043's ceilings); before this task that report overstated fs_write, fs_read and channel_exclusivity whenever a stdio path was given, which is what is closed.
 
 **Not verified**: a terminal or a stopped terminal as the embedder's stdout (only pipes and files were measured); behaviour under an embedder that sets SIGPIPE to its default (reasoned from the per-thread mask, not measured); macOS (no Seatbelt slice yet; pumps.py uses poll and pthread_sigmask, both available there).
+
+Lead, 2026-11-03: finish moved once, by me: I wrote the criteria in a separate edit after promoting the draft; they were not changed after the work began.
 <!-- SECTION:NOTES:END -->
