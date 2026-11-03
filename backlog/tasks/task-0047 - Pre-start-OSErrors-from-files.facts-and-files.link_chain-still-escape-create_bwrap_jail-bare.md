@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-11-03T19:22:00Z'
-updated_date: '2026-11-03T19:43:00Z'
+updated_date: '2026-11-03T19:52:00Z'
 labels:
   - brig
   - errors
@@ -24,7 +24,7 @@ Found by TASK-0046's worker, confirmed in review (2026-11-03). src/brig/infra/fi
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Every OSError files.facts and files.link_chain can raise during create_bwrap_jail crosses as one of presentation/errors.py's types, with the OSError as its cause; integration tests pin each; recorded failing before the fix
+- [x] #1 Every OSError files.facts and files.link_chain can raise during create_bwrap_jail crosses as one of presentation/errors.py's types, with the OSError as its cause; integration tests pin each; recorded failing before the fix
 - [ ] #2 Reading brig's own supervisor source failing is not reported as StateDirectoryWriteFailed
 - [ ] #3 A PermissionError or ELOOP from files.facts, and an OSError from files.link_chain's readlink, cross create_bwrap_jail as one of presentation/errors.py's types with the OSError as cause; integration or e2e tests make each happen for real; recorded failing before the fix
 - [ ] #4 Reading brig's own supervisor source sits outside the script write's error handling, so a broken install is not reported as StateDirectoryWriteFailed
