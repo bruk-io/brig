@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-11-03T19:22:00Z'
-updated_date: '2026-11-03T19:40:00Z'
+updated_date: '2026-11-03T19:43:00Z'
 labels:
   - brig
   - errors
@@ -240,4 +240,70 @@ Worker, 2026-11-03: repro a7c18b0, fix 5c12ea4.
 - Fix: the bwrap driver calls files.facts per path and files.link_chain through _facts/_link_chain, each translating OSError with the OSError as __cause__. _supervisor_path reads assembled_source() before making the file, outside the write's try. Every other driver call into infra.files was checked (link_count, first_link, own_regular_file swallow their OSErrors). infra.files docstrings now say what propagates; docs/spec/index.md names both types and the test that holds them.
 - Public API change: brig exports PolicyPathUninspectable and SupervisorSourceUnreadable (additive). An embedder that caught bare OSError from create_bwrap_jail for these cases now gets these types instead.
 - First full-tier run (eb2d372's record) failed one e2e test, which record-check's tail did not keep; e2e passed in five reruns and in the second full-tier record (688d0fd), so it reads as an intermittent e2e flake unrelated to this change (the change only alters failures before anything starts). Not identified.
+
+Check `uv run just done` exited 0
+
+(294 earlier lines omitted)
+```text
+[2m19:43:38.030[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:react/[39m[95marchitecture[39m[0m
+[2m19:43:38.032[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:model/[39m[95marchitecture[39m[0m
+[2m19:43:38.082[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:icons/[39m[95marchitecture[39m[0m
+[2m19:43:40.020[0m [1m[32mINFO [0m [1m[36mlikec4.vite.webcomponent[0m ✓ built in 2.12s
+[2m19:43:40.023[0m [1m[32mINFO [0m [1m[36mlikec4.c4:codegen[0m [2mgenerated[22m /home/user/brig-pins/site/assets/mkdocs_likec4/likec4_views.js[0m
+[2m19:43:40.025[0m [1m[32mINFO [0m [1m[36mlikec4.c4:codegen[0m [32mdone in 2.9s[39m[0m
+
+   ┌───────────────────────────────────────────────────────────────┐
+   │                                                               │
+   │                                                               │
+   │   [2mWebcomponents generated to:[22m                                 │
+   │    site/assets/mkdocs_likec4/likec4_views.js                  │
+   │                                                               │
+   │   [2mSetup and usage instructions:[22m                               │
+   │    [34mhttps://likec4.dev/tooling/code-generation/webcomponent/[39m   │
+   │                                                               │
+   │                                                               │
+   └───────────────────────────────────────────────────────────────┘
+
+uv run mkdocs build --strict
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+
+[31m │  ⚠  Warning from the Material for MkDocs team[0m
+[31m │[0m
+[31m │[0m  MkDocs 2.0, the underlying framework of Material for MkDocs,
+[31m │[0m  will introduce backward-incompatible changes, including:
+[31m │[0m
+[31m │  × [0mAll plugins will stop working – the plugin system has been removed
+[31m │  × [0mAll theme overrides will break – the theming system has been rewritten
+[31m │  × [0mNo migration path exists – existing projects cannot be upgraded
+[31m │  × [0mClosed contribution model – community members can't report bugs
+[31m │  × [0mCurrently unlicensed – unsuitable for production use
+[31m │[0m
+[31m │[0m  Our full analysis:
+[31m │[0m
+[31m │[0m  [4mhttps://squidfunk.github.io/mkdocs-material/blog/2026/02/18/mkdocs-2.0/[0m
+[0m
+INFO    -  mkdocs-likec4: No projects discovered, using default root project
+INFO    -  Cleaning site directory
+INFO    -  Building documentation to directory: /home/user/brig-pins/site
+INFO    -  mkdocs-likec4: Generating web component for default project from /home/user/brig-pins/docs
+INFO    -  Documentation built in 5.68 seconds
+
+== architecture validate: PASS ==
+[2m19:43:41.686[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mlayout[22m wasm[0m
+[2m19:43:41.702[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m /home/user/brig-pins/docs/architecture[0m
+[2m19:43:41.740[0m [1m[32mINFO [0m [1m[36mlikec4.server.projects[0m add [32m'architecture'[39m
+[2m19:43:41.741[0m [1m[32mINFO [0m [1m[36mlikec4.server.workspace[0m loaded [33m1[39m projects
+[2m19:43:42.254[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m found 37 source files[0m
+[2m19:43:42.612[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32m✓ Valid[39m[2m (37 files)[22m[0m
+[2m19:43:42.613[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32mvalidate 928ms[39m[0m
+npx -y likec4@1.60.0 validate docs/architecture
+
+== architecture lint: PASS ==
+
+c4lint: 0 error(s), 0 warning(s) across 30 elements, 51 relationships, 5 views
+uv run python3 scripts/c4lint.py docs/architecture
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+
+done: all steps passed
+```
 <!-- SECTION:NOTES:END -->
