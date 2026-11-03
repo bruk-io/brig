@@ -69,9 +69,18 @@ teardown ladder here is the verified kill sequence in its present form — verif
 again — not yet the fuller ladder (a grace period between signals, a final failure path)
 decision-0001's order reserves for a later slice.
 
-Reserved, not yet built: `facts.py`, `claims.py`, `grades.py`, `records.py`, `identity.py`,
-`egress.py`, `policy/`, and a Seatbelt jail type beside bwrap's. These are decision-0001's layout
-for this directory, filled in by decision-0001's order, step 4, not by this task.
+`src/brig/domain/policy/` is what an embedder states. `paths.py`'s `FsPolicy` is intent, not a
+mechanism (decision-0007): readable roots, writable roots, write denies inside them, and masks,
+each an absolute path that names the same place in the jail as on the host, the more specific
+path winning where two overlap. `refusal` says why a policy cannot be compiled (a path that is
+not absolute, or a mask hiding a root or a path brig needs), and each jail type compiles the
+rest its own way: bwrap's `compile_mounts` into one ordered tuple of mounts, from which its argv
+and its `channel_exclusivity` enumeration are both read. `env.py`'s `EnvPolicy` is the
+environment's allow-list. `claims.py` and `grades.py` hold the claims a compile states and the
+one function that grades them from evidence.
+
+Reserved, not yet built: `facts.py`, `records.py`, `identity.py`, `egress.py`, and a Seatbelt
+jail type beside bwrap's.
 
 ## Infra
 

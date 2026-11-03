@@ -40,7 +40,15 @@ from brig.domain.channels import ChannelRefused as _ChannelNameRefused
 from brig.domain.effects import ExitCodeUnknown, GroupState, Process
 from brig.domain.jail_types import bwrap
 from brig.domain.policy.env import DENY_ALL, EnvPolicy
-from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, Bind, FsPolicy
+from brig.domain.policy.paths import (
+    WHOLE_HOST_READ_ONLY,
+    FsPolicy,
+    MaskHides,
+    PathKind,
+    PathNotAbsolute,
+    refusal,
+)
+from brig.infra import files as _files
 from brig.infra import sockets as _sockets
 from brig.infra import state_dir as _state_dir_mod
 from brig.infra.processes import ProcessUnknown as _InfraProcessUnknown
@@ -57,14 +65,14 @@ from brig.infra.supervisor import assemble, link
 from brig.presentation.drivers.bwrap import run
 from brig.presentation.errors import (
     ChannelDirectoryCreateFailed,
-    ChannelDirectoryUnreachable,
     ChannelNameRefused,
     ChannelNamespaceNotFound,
     JailExitUnknown,
     JailTeardownFailed,
     JailWaitTimedOut,
+    PolicyMaskHides,
+    PolicyPathNotAbsolute,
     StateDirectoryInvalid,
-    StateDirectoryUnreachable,
 )
 from brig.presentation.ports import (
     ChannelDirectoryPort,
@@ -177,105 +185,6 @@ def _resolved_state_dir() -> str:
     return str(_state_dir_mod.ensure(resolved))
 
 
-def _check_state_dir_reachable(policy: FsPolicy, state_dir: str) -> None:
-    """Refuse, before bwrap is ever invoked, a `policy` that would leave `state_dir`
-    unreachable inside the jail (TASK-0001.22): a read-only ancestor bind of
-    `state_dir` whose own source does not already contain `state_dir`'s own leaf.
-    `domain/jail_types/bwrap.py`'s `compile_supervisor_launch`'s unconditional bind
-    still runs after `policy`'s own binds, so it is never shadowed at `state_dir`'s
-    own exact path -- but bwrap creates a bind's missing mountpoint directories in
-    the new root before applying that bind's own mount, in argv order, and a
-    read-only ancestor bind whose source lacks the leaf means that creation fails
-    with `EROFS`: measured against real bwrap as `bwrap: Can't mkdir <state_dir>:
-    Read-only file system`, then `JailExitUnknown` (and `JailTeardownFailed` on the
-    following `destroy_jail`). This function turns that into one clear, dedicated
-    refusal instead, before bwrap is ever invoked at all.
-
-    `bwrap.covering_ancestor_bind` (domain, pure) finds which of `policy`'s own
-    binds, if any, actually governs `state_dir`'s own parent at that moment; this
-    function does the one host filesystem existence check that decides whether it
-    blocks `state_dir` -- I/O, which is why domain itself cannot do it (rule 2).
-
-    A `None` or `writable` governing bind is always safe (measured against real
-    bwrap: a writable ancestor works regardless of whether its own source contains
-    the leaf, and no ancestor at all leaves bwrap's own new root -- a writable
-    tmpfs by default -- free to create `state_dir` itself).
-
-    Raises:
-        StateDirectoryUnreachable: `policy` names a read-only ancestor bind of
-            `state_dir` whose own source does not contain `state_dir`'s leaf.
-    """
-    ancestor = bwrap.covering_ancestor_bind(policy, state_dir)
-    if ancestor is None or ancestor.writable:
-        return
-    suffix = state_dir[len(ancestor.jail_path.rstrip("/")) :]
-    host_equivalent = ancestor.host_path.rstrip("/") + suffix
-    if not Path(host_equivalent).is_dir():
-        raise StateDirectoryUnreachable(state_dir, ancestor)
-
-
-def _check_channel_directory_reachable(policy: FsPolicy, state_dir: str, channel_dir: str) -> None:
-    """Refuse, before anything starts or is created, a `policy` that would leave a
-    jail's per-jail channel directory unreachable (TASK-0001.26): the same guard as
-    `_check_state_dir_reachable`, generalised rather than copied -- it calls the
-    same, unchanged `bwrap.covering_ancestor_bind` on a richer input.
-
-    That input is `policy`'s binds plus a read-only bind of `state_dir` standing for the
-    unconditional mask `compile_supervisor_launch` appends after them (its argv order: policy binds,
-    then the state directory's tmpfs, then the channel bind; a tmpfs never blocks a mountpoint
-    beneath it, and this synthetic bind's `host_path == state_dir` gives the same answer for a
-    channel directory there, as below, TASK-0019), so the synthetic bind here is always the *last*
-    ancestor of any path nested under `state_dir` and always wins over whatever `policy` names on
-    its own, when `channel_dir` is nested under `state_dir` at all (a custom `ChannelDirectoryPort`
-    need not put it there, `ports.py`'s own docstring).
-
-    A winning ancestor is safe -- nothing is refused -- when it is writable (TASK-
-    0001.22's own finding, unchanged by anything here), *or* when `channel_dir`'s
-    own real host-side location genuinely sits inside `ancestor.host_path`'s own
-    real directory tree: a `--bind`/`--ro-bind` mounts whatever that real directory
-    *currently* holds, live, not a snapshot taken at argv-compile time, so brig
-    creating the leaf there before bwrap runs (`create_bwrap_jail`) is enough,
-    regardless of whether the ancestor is read-only. `ancestor.host_path == state_dir`
-    (the synthetic bind above) is one instance of this -- the default allocator
-    always places `channel_dir` under `state_dir` -- but it is not the only one:
-    `WHOLE_HOST_READ_ONLY`'s own single `Bind(host_path="/", jail_path="/")` is a
-    real, unmapped ancestor of *every* absolute path, `channel_dir` included,
-    regardless of where a caller's own `ChannelDirectoryPort` puts it (measured as a
-    real `ChannelDirectoryUnreachable` false refusal on real bwrap before this
-    docstring's own correction: TASK-0001.27's own battery allocates its channel
-    directory under pytest's `tmp_path`, not `state_dir`, and the earlier version of
-    this function -- checking only for the exact `state_dir` self-bind -- refused it
-    under the plain default policy, which is exactly the shape every other jail in
-    this codebase already relies on to reach paths outside `state_dir` too).
-    `ancestor.host_path` is not treated as a *remapped* ancestor's own real
-    directory happening to already contain a coincidentally-matching path: that
-    would need the filesystem check `_check_state_dir_reachable` makes, which this
-    function still does not need, because a prefix match on `channel_dir` itself
-    (not a derived "host equivalent" path) is already answering the right question
-    here -- whether the leaf *will* appear through this exact ancestor once created,
-    not whether some other path already does.
-
-    The one case brig cannot repair is a channel directory under a read-only
-    ancestor bind whose own host-side directory tree does *not* actually contain
-    where `channel_dir` really lives -- a policy bind that remaps some other real
-    location onto an ancestor of `channel_dir`'s jail-side path. This relies on
-    `compile_supervisor_launch`'s argv order holding; a reordering there would
-    silently break this guard rather than loudly.
-
-    Raises:
-        ChannelDirectoryUnreachable: the winning ancestor is read-only and
-            `channel_dir`'s own real location does not sit inside its host-side
-            directory tree.
-    """
-    augmented = FsPolicy(binds=(*policy.binds, Bind(host_path=state_dir, jail_path=state_dir)))
-    ancestor = bwrap.covering_ancestor_bind(augmented, channel_dir)
-    if ancestor is None or ancestor.writable:
-        return
-    if channel_dir.startswith(ancestor.host_path.rstrip("/") + "/"):
-        return
-    raise ChannelDirectoryUnreachable(channel_dir, ancestor)
-
-
 def _supervisor_path() -> tuple[str, ...]:
     """Where this host's own assembled supervisor file actually is: rule 17's
     one file (`infra.supervisor.assemble.assembled_source()` -- `wire.py` +
@@ -303,20 +212,6 @@ def _supervisor_path() -> tuple[str, ...]:
     under `WHOLE_HOST_READ_ONLY`, incidentally covered it too). A jail created with a narrower
     `policy` of its own no longer has to also happen to cover this path -- that was exactly
     TASK-0006's bug.
-
-    Not reachable under every policy, though: measured against real bwrap
-    (adversarial review of TASK-0006/0009), a policy naming a *read-only*
-    ancestor bind of this state directory, sourced from somewhere that does
-    not already contain the directory's own leaf, still breaks the jail
-    (`bwrap: Can't mkdir <state_dir>: Read-only file system` ->
-    `JailExitUnknown`) -- `domain/jail_types/bwrap.py`'s own module docstring
-    has the full, measured scope of what "unconditional" actually covers here.
-    TASK-0001.22: rather than lift that limit (two candidate fixes were
-    measured against real bwrap and both killed -- that module's own
-    docstring has the measurements), `_supervisors_for`'s own
-    `_check_state_dir_reachable` refuses a policy of that exact shape loudly,
-    with `StateDirectoryUnreachable`, before this function is ever reached for
-    that jail at all.
 
     `-I` (isolated mode, TASK-0001.15/.17 adversarial review) runs this
     interpreter ignoring `PYTHONPATH`/`PYTHONHOME` and without adding user
@@ -401,53 +296,56 @@ def _real_supervisor_port(live: link.LiveSupervisors) -> SupervisorPort:
 
 def _supervisors_for(
     policy: FsPolicy, channels: Reservations | None
-) -> tuple[SupervisorPort, Path]:
-    """The `SupervisorPort` `create_bwrap_jail` uses for `policy`, when its own
-    caller names no explicit `supervisors` port of its own, and the exact path of
-    the fresh supervisor script file written for it, so the jail that gets this
-    port back can later delete that one file and no other (TASK-0001.21).
+) -> tuple[SupervisorPort, Path, tuple[bwrap.Mount, ...]]:
+    """The `SupervisorPort` `create_bwrap_jail` uses for `policy` when its caller names none,
+    the path of the fresh supervisor script written for it (TASK-0001.21: the jail deletes
+    that one file and no other), and the mounts the jail was compiled with.
 
-    A fresh `LiveSupervisors`, every call -- never a module-level shared instance,
-    regardless of `policy`: each jail's own instance is cheap to build (it does no
-    I/O of its own until `start` is actually called) and has to be its own
-    instance anyway once two jails' own policies differ (`link.LiveSupervisors`'s
-    own docstring: whichever instance opened a jail's events pipe is the only one
-    that can still read or close it) -- `Jail.supervisors` is what carries this one
-    back to `run_jail`/`destroy_jail` for the same jail later.
+    A fresh `LiveSupervisors` every call: whichever instance opened a jail's events pipe is
+    the only one that can read or close it, and `Jail.supervisors` carries it back to
+    `run_jail`/`destroy_jail`.
 
-    `_supervisor_path()` is called exactly once here, not twice: calling it again
-    would write a second, decoy file and leak the one actually wired into
-    `supervisor_argv` forever, since `destroy_jail` only ever deletes the path this
-    function hands back, never searches the state directory for anything else.
+    Refuses `policy` before anything is written (`domain/policy/paths.py`'s `refusal`, with
+    the state directory and the channel directory as paths the jail needs), then looks up
+    what is at each write deny's and mask's path, the one host fact the compile needs.
 
-    `_check_state_dir_reachable` (TASK-0001.22) runs before that write, raising
-    `StateDirectoryUnreachable` should `policy` name a read-only ancestor bind of
-    brig's own state directory whose source does not contain its leaf
-    (`_check_state_dir_reachable`'s own docstring) -- `WHOLE_HOST_READ_ONLY`'s own
-    single read-only bind at `/` is itself such an ancestor bind, though it never
-    actually fails this check in practice (`_resolved_state_dir()` already created
-    the leaf before this runs, so `/`'s own source always contains it).
-
-    `channels` (TASK-0001.25) reaches `compile_supervisor_launch` unchanged, which
-    binds its channel directory writable when it declares any channel.
-    `_check_channel_directory_reachable` (TASK-0001.26) runs right after the
-    state-directory check, and only when `channels` declares one: it raises
-    `ChannelDirectoryUnreachable` before the script write below, so nothing is
-    left behind to clean up.
+    Raises:
+        PolicyPathNotAbsolute: a path in `policy` is not absolute and normalised.
+        PolicyMaskHides: a mask hides a root, the state directory or the channel directory.
     """
     state_dir = _resolved_state_dir()
-    _check_state_dir_reachable(policy, state_dir)
-    if channels is not None and channels.reservations:
-        _check_channel_directory_reachable(policy, state_dir, channels.directory.host_path)
+    needed = (
+        (state_dir,)
+        if channels is None or not channels.reservations
+        else (
+            state_dir,
+            channels.directory.host_path,
+        )
+    )
+    match refusal(policy, needed):
+        case PathNotAbsolute(path=path):
+            raise PolicyPathNotAbsolute(path)
+        case MaskHides(mask=mask, path=path):
+            raise PolicyMaskHides(mask, path)
+        case None:
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
+    found = _files.kinds((*policy.write_denies, *policy.masks))
+    kinds = {path: PathKind(kind) for path, kind in found.items()}
+    empty_dir = str(_state_dir_mod.ensure_empty(Path(state_dir)))
     supervisor_path = _supervisor_path()
-    supervisor_argv = bwrap.compile_supervisor_launch(
-        supervisor_path,
+    mounts = bwrap.compile_mounts(
+        policy,
+        kinds,
         state_dir=state_dir,
         supervisor_script=supervisor_path[-1],
-        policy=policy,
+        empty_dir=empty_dir,
         channels=channels,
     )
-    return _real_supervisor_port(link.LiveSupervisors(supervisor_argv)), Path(supervisor_path[-1])
+    supervisor_argv = bwrap.compile_supervisor_launch(supervisor_path, mounts)
+    port = _real_supervisor_port(link.LiveSupervisors(supervisor_argv))
+    return port, Path(supervisor_path[-1]), mounts
 
 
 def _allocate_channel_directory() -> str:
@@ -599,6 +497,7 @@ class Jail:
     supervisor_script: Path | None = None
     channel_directory: Path | None = None
     channel_namespace_fd: int | None = None
+    mounts: tuple[bwrap.Mount, ...] = ()
 
 
 def create_bwrap_jail(
@@ -655,10 +554,8 @@ def create_bwrap_jail(
     supervisor's own start fail. Resolving brig's own state directory
     (`_resolved_state_dir`, above) raises `StateDirectoryInvalid` should
     `BRIG_HOME` name a value it cannot use. `_supervisors_for` raises
-    `StateDirectoryUnreachable` should `policy` name a read-only ancestor bind
-    of that state directory whose own source lacks its leaf (TASK-0001.22), and
-    `ChannelDirectoryUnreachable` should it leave the channel directory
-    unreachable (TASK-0001.26), while `_namespace_fd_for` (below) raises
+    `PolicyPathNotAbsolute` or `PolicyMaskHides` for a policy it refuses
+    (decision-0007), while `_namespace_fd_for` (below) raises
     `ChannelNamespaceNotFound` for a channel-declaring jail whose in-jail PID 1
     never appears while its outer process still runs (TASK-0001.27); one whose
     command already finished returns a `Jail` with no namespace fd instead
@@ -709,8 +606,9 @@ def create_bwrap_jail(
     if supervisors is not None:
         resolved_supervisors: SupervisorPort = supervisors
         supervisor_script: Path | None = None
+        mounts: tuple[bwrap.Mount, ...] = ()
     else:
-        resolved_supervisors, supervisor_script = _supervisors_for(policy, channels)
+        resolved_supervisors, supervisor_script, mounts = _supervisors_for(policy, channels)
     channel_directory = (
         Path(channels.directory.host_path)
         if channels is not None and channels.reservations
@@ -746,6 +644,7 @@ def create_bwrap_jail(
         supervisor_script=supervisor_script,
         channel_directory=created,
         channel_namespace_fd=namespace_fd,
+        mounts=mounts,
     )
 
 

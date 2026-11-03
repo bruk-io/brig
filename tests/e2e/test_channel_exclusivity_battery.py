@@ -15,7 +15,7 @@ Two cases, and the second is why the first means anything:
   after the jail is gone. `writable_shared_paths` on that jail's own
   `policy`/`state_dir`/`channels` returns exactly `declared_channel_paths` -- nothing
   shared beyond the declared channel -- so the claim grades `ENFORCED`.
-- **Violation**: the same jail, plus one extra writable `Bind` in its own `FsPolicy`
+- **Violation**: the same jail, plus one extra writable root in its own `FsPolicy`
   pointing at a throwaway host directory that is not a declared channel. The jailed
   command writes into both, and the host reads both back -- proving the extra path is a
   real, exploitable leak rather than a hypothetical one read off the policy. The
@@ -61,8 +61,6 @@ import pytest
 
 from brig import (
     CHANNEL_EXCLUSIVITY_CLAIM,
-    WHOLE_HOST_READ_ONLY,
-    Bind,
     Channel,
     Evidence,
     FsPolicy,
@@ -240,9 +238,7 @@ def test_a_declared_channel_is_the_only_shared_writable_path_and_that_is_measure
     removes that directory.
     """
     reserved = run.reserve()
-    policy = WHOLE_HOST_READ_ONLY
     channels = reserved
-    state_dir = str(run.channels)
     control_path = _control_path(reserved)
 
     jail = create_bwrap_jail(
@@ -260,7 +256,7 @@ def test_a_declared_channel_is_the_only_shared_writable_path_and_that_is_measure
     written = control_path.read_text()
     destroy_jail(jail, directories=run.directories())
 
-    shared = writable_shared_paths(policy, state_dir, channels)
+    shared = writable_shared_paths(jail.mounts)
     declared = declared_channel_paths(channels)
 
     # The write reached the host, through the one path the claim says is shared.
@@ -278,7 +274,7 @@ def test_a_declared_channel_is_the_only_shared_writable_path_and_that_is_measure
 def test_an_undeclared_writable_bind_is_a_real_leak_and_grades_violated(run: _Run) -> None:
     """AC#2's own case: a writable path that is not a declared channel.
 
-    The same jail as the control, plus one extra writable `Bind` in its own `FsPolicy`
+    The same jail as the control, plus one extra writable root in its own `FsPolicy`
     pointing at a throwaway host directory unrelated to any channel. The jailed command
     writes into *both* -- the channel directory (the control signal, so this run also
     proves the probe worked) and the extra bind -- and the host reads both back, so the
@@ -291,14 +287,8 @@ def test_an_undeclared_writable_bind_is_a_real_leak_and_grades_violated(run: _Ru
     """
     reserved = run.reserve()
     extra_dir = str(run.extra)
-    policy = FsPolicy(
-        binds=(
-            *WHOLE_HOST_READ_ONLY.binds,
-            Bind(host_path=extra_dir, jail_path=extra_dir, writable=True),
-        )
-    )
+    policy = FsPolicy(readable=("/",), writable=(extra_dir,))
     channels = reserved
-    state_dir = str(run.channels)
     control_path = _control_path(reserved)
     leak_path = Path(extra_dir) / "leak.txt"
 
@@ -318,7 +308,7 @@ def test_an_undeclared_writable_bind_is_a_real_leak_and_grades_violated(run: _Ru
     leak_written = leak_path.read_text()
     destroy_jail(jail, directories=run.directories())
 
-    shared = writable_shared_paths(policy, state_dir, channels)
+    shared = writable_shared_paths(jail.mounts)
     declared = declared_channel_paths(channels)
 
     # Both writes reached the host: the control inside the declared channel directory,

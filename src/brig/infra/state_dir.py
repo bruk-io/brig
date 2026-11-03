@@ -67,3 +67,19 @@ def ensure(path: Path) -> Path:
     """
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def ensure_empty(state_dir: Path) -> Path:
+    """Make `<state_dir>/empty` exist as an empty directory nobody can write (mode 0555) and
+    hand it back: the source a jail mounts, read-only, over a masked directory or an absent
+    path (decision-0007).
+
+    Raises:
+        OSError: it could not be made, or something is already in it.
+    """
+    empty = state_dir / "empty"
+    empty.mkdir(mode=0o555, exist_ok=True)
+    os.chmod(empty, 0o555)
+    if any(empty.iterdir()):
+        raise OSError(f"{empty} is not empty")
+    return empty

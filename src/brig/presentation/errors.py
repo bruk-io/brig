@@ -8,74 +8,33 @@ place -- an embedder handles brig's own types without ever needing infra's.
 """
 
 from brig.domain.effects import Process
-from brig.domain.policy.paths import Bind
 
 
-class StateDirectoryUnreachable(Exception):
-    """Raised when a caller's own `FsPolicy` names a read-only ancestor bind of
-    brig's own state directory whose source does not already contain that
-    directory's own leaf (TASK-0001.22) -- refused here, before bwrap is ever
-    invoked, in place of letting this surface as `JailExitUnknown` (then
-    `JailTeardownFailed` on the following `destroy_jail`) once bwrap itself
-    cannot create the mountpoint (`bwrap: Can't mkdir <state_dir>: Read-only
-    file system`, measured against real bwrap).
+class PolicyPathNotAbsolute(Exception):
+    """Raised when a path in a caller's `FsPolicy` is not absolute and normalised: a policy
+    names each path as it is on the host and in the jail (decision-0007)."""
 
-    `presentation/api.py`'s `_check_state_dir_reachable` is the one place this
-    is raised, using `domain/jail_types/bwrap.py`'s own pure
-    `covering_ancestor_bind` to find the offending bind and then doing the one
-    host filesystem check (I/O, rule 2) that decides whether it actually
-    blocks `state_dir`.
-
-    Args:
-        state_dir: Brig's own resolved state directory (`infra/state_dir.py`)
-            that the jail's policy would leave unreachable.
-        ancestor: The policy's own bind whose read-only ancestor mount blocks it.
-    """
-
-    def __init__(self, state_dir: str, ancestor: Bind) -> None:
+    def __init__(self, path: str) -> None:
         super().__init__(
-            f"policy names a read-only ancestor bind of brig's own state directory "
-            f"({state_dir!r}) at {ancestor.jail_path!r} (sourced from "
-            f"{ancestor.host_path!r}), which does not contain the directory's own "
-            f"leaf -- make that bind writable, include the leaf in its source, or "
-            f"move BRIG_HOME outside it"
+            f"policy names {path!r}, which is not an absolute, normalised path -- write it as "
+            "it is on the host, starting with / and with no '.', '..' or empty component"
         )
-        self.state_dir = state_dir
-        self.ancestor = ancestor
+        self.path = path
 
 
-class ChannelDirectoryUnreachable(Exception):
-    """Raised when a caller's own `FsPolicy` names a read-only ancestor bind of a
-    jail's per-jail channel directory that brig itself cannot repair by creating the
-    directory's leaf (TASK-0001.26) -- refused here, before anything starts or is
-    created, in place of letting this surface as `JailExitUnknown` once bwrap cannot
-    create the channel bind's mountpoint (the same `Can't mkdir ... Read-only file
-    system` shape `StateDirectoryUnreachable` documents).
+class PolicyMaskHides(Exception):
+    """Raised when a mask in a caller's `FsPolicy` hides a path the jail must see: one of
+    the policy's roots, or brig's own state or channel directory. A mask is an empty
+    read-only directory, so nothing beneath it can be mounted (decision-0007)."""
 
-    `presentation/api.py`'s `_check_channel_directory_reachable` is the one place
-    this is raised: the same `covering_ancestor_bind` guard as
-    `_check_state_dir_reachable`, generalised by handing it `policy`'s binds plus
-    the unconditional mask over `state_dir` `compile_supervisor_launch` adds. A channel
-    directory beneath `state_dir` is therefore never refused (brig creates its leaf
-    inside `state_dir` itself, which it owns); one outside it, under a read-only
-    ancestor bind of the policy's, is.
-
-    Args:
-        channel_dir: The channel directory's host path that the jail's policy would
-            leave unreachable.
-        ancestor: The bind whose read-only ancestor mount blocks it.
-    """
-
-    def __init__(self, channel_dir: str, ancestor: Bind) -> None:
+    def __init__(self, mask: str, path: str) -> None:
         super().__init__(
-            f"policy names a read-only ancestor bind of the channel directory "
-            f"({channel_dir!r}) at {ancestor.jail_path!r} (sourced from "
-            f"{ancestor.host_path!r}), which brig cannot create the directory's "
-            f"leaf in -- make that bind writable, or put the channel directory "
-            f"under brig's own state directory"
+            f"policy masks {mask!r}, which hides {path!r} beneath it -- mask the paths inside "
+            f"{mask!r} you mean to hide instead, or set BRIG_HOME outside it if {path!r} is "
+            "brig's own state directory"
         )
-        self.channel_dir = channel_dir
-        self.ancestor = ancestor
+        self.mask = mask
+        self.path = path
 
 
 class ChannelDirectoryCreateFailed(Exception):

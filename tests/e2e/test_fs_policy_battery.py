@@ -8,7 +8,7 @@ directory this test creates for itself -- and grades the actual claim through th
 public API (`create_bwrap_jail`/`run_jail`/`destroy_jail`), with a positive control
 proving the exact same path *is* reachable under `WHOLE_HOST_READ_ONLY`, the
 default every jail got before this parameter existed (rule 11: evidence, not a
-happy path alone). A second pair of tests grades `Bind.writable` the same way:
+happy path alone). A second pair of tests grades a writable root the same way:
 AC#3's own text asks for "unreadable/unwritable", and translating `writable` into
 `--bind` (`tests/unit/test_bwrap_compile.py`) is not evidence that flag changes
 what the jail can actually do.
@@ -49,9 +49,7 @@ import pytest
 
 from brig import (
     WHOLE_HOST_READ_ONLY,
-    Bind,
     FsPolicy,
-    StateDirectoryUnreachable,
     create_bwrap_jail,
     destroy_jail,
     run_jail,
@@ -136,8 +134,8 @@ except OSError as exc:
 """The probe command for the writable-bind pair: tries to write `sys.argv[2]` to
 the path named by `sys.argv[1]` and reports the outcome through its exit code
 alone, the same discipline `_READ_PROBE` follows. `0`: the write succeeded. `2`:
-`EROFS` -- the bind covering this path is read-only, exactly what a `Bind` with
-`writable=False` (or no bind naming `writable=True`) should produce. `1`: some
+`EROFS` -- the mount covering this path is read-only, exactly what a path outside every
+writable root (or a write deny) should produce. `1`: some
 other `OSError`, which this battery never expects.
 """
 
@@ -198,12 +196,12 @@ def _mirror_policy_excluding(*excluded_names: str) -> FsPolicy:
     there at all.
     """
     skip = _VIRTUAL_FILESYSTEMS | set(excluded_names)
-    binds = tuple(
-        Bind(host_path=f"/{name}", jail_path=f"/{name}")
+    readable = tuple(
+        f"/{name}"
         for name in sorted(os.listdir("/"))
         if name not in skip and os.path.exists(f"/{name}")
     )
-    return FsPolicy(binds=binds)
+    return FsPolicy(readable=readable)
 
 
 @contextmanager
@@ -336,11 +334,9 @@ def _policy_excluding_tmp_and_the_state_dir_itself() -> FsPolicy:
 
     mirror = _mirror_policy_excluding("tmp", top_level_name)
     siblings = tuple(
-        Bind(host_path=str(parent / child), jail_path=str(parent / child))
-        for child in sorted(os.listdir(parent))
-        if child != state_path.name
+        str(parent / child) for child in sorted(os.listdir(parent)) if child != state_path.name
     )
-    return FsPolicy(binds=mirror.binds + siblings)
+    return FsPolicy(readable=mirror.readable + siblings)
 
 
 @pytest.mark.skipif(
@@ -370,76 +366,19 @@ def test_a_policy_excluding_tmp_still_lets_the_jail_start() -> None:
     shutil.which("bwrap") is None,
     reason="bwrap is not available; test skips on macOS, runs in CI on Linux",
 )
-def test_a_policy_bind_at_the_state_dirs_own_jail_path_does_not_shadow_it() -> None:
-    """TASK-0006's own plan named this as a risk, not merely assumed: the
-    unconditional bind has to land in the compiled argv at a position bwrap
-    actually honors over a *conflicting* policy bind, verified empirically
-    against real bwrap rather than by reading flag order alone -- bwrap applies
-    overlapping binds in argv order, later wins, and `_compile_binds(policy)`'s
-    own output always precedes the unconditional bind
-    (`domain/jail_types/bwrap.py`'s `compile_supervisor_launch`).
-
-    This builds a policy that names an unrelated, empty host directory at
-    exactly the state directory's own jail path -- not merely a policy that
-    leaves that path unnamed (the other two fs-policy tests above already cover
-    that shape). If the unconditional bind's position in the compiled argv ever
-    regressed to *before* the policy's own binds, this decoy would win instead,
-    the supervisor's script would not be where the jail's PID 1 looks for it,
-    and this would fail with TASK-0006's original signature (`JailExitUnknown`)
-    rather than merely passing for an unrelated reason.
-    """
+def test_a_policy_naming_the_state_dir_writable_neither_breaks_nor_opens_it() -> None:
+    """A writable root at brig's own state directory mounts before brig's mask over it, so the
+    jail still starts (its supervisor script is bound back) and still cannot write there."""
     state_path = _ensure_state_dir(_resolve_state_dir())
-    with tempfile.TemporaryDirectory() as decoy_dir:
-        policy = FsPolicy(
-            binds=(
-                *WHOLE_HOST_READ_ONLY.binds,
-                Bind(host_path=decoy_dir, jail_path=str(state_path)),
-            )
-        )
-
-        jail = create_bwrap_jail((sys.executable, "-c", "import sys; sys.exit(0)"), policy=policy)
-        exit_code = run_jail(jail)
-        destroy_jail(jail)
-
-    assert exit_code == 0  # the unconditional bind, compiled later, wins over the decoy
-
-
-def test_a_read_only_ancestor_bind_lacking_the_state_dirs_leaf_is_refused_loudly() -> None:
-    """TASK-0001.22: a *read-only* ancestor bind of brig's own state directory,
-    sourced from somewhere that does not already contain the state directory's
-    own leaf, is refused loudly (`StateDirectoryUnreachable`) before bwrap is
-    ever invoked -- rather than reaching bwrap and surfacing as
-    `JailExitUnknown` (then `JailTeardownFailed` on the following
-    `destroy_jail`).
-
-    Measured directly against real bwrap in `brig-probe-amd64:latest`, with
-    `BRIG_HOME` pointed at an otherwise-untouched ancestor (this task's own
-    filing): this exact shape produces `bwrap: Can't mkdir <state_dir>:
-    Read-only file system`, then `JailExitUnknown` -- the chosen outcome here
-    is to turn that into this dedicated exception, raised by
-    `_supervisors_for`'s own `_check_state_dir_reachable`
-    (`presentation/api.py`) before `create_bwrap_jail` gets anywhere near
-    starting a supervisor. Two candidate fixes that would instead make this
-    shape *work* were also measured against real bwrap and killed (both
-    `domain/jail_types/bwrap.py`'s own module docstring and TASK-0001.22's own
-    filing have the measurements) -- refusal is what is left.
-
-    This needs no real bwrap jail at all, unlike this battery's other tests:
-    the refusal happens in pure Python, before bwrap is ever invoked, so this
-    runs on every platform (including macOS, where the rest of this battery
-    skips) rather than being guarded by `shutil.which("bwrap")`.
-    """
-    state_path = _ensure_state_dir(_resolve_state_dir())
-    with tempfile.TemporaryDirectory() as empty_ancestor_source:
-        policy = FsPolicy(
-            binds=(Bind(host_path=empty_ancestor_source, jail_path=str(state_path.parent)),)
-        )
-
-        with pytest.raises(StateDirectoryUnreachable) as exc_info:
-            create_bwrap_jail((sys.executable, "-c", "import sys; sys.exit(0)"), policy=policy)
-
-    assert exc_info.value.state_dir == str(state_path)
-    assert exc_info.value.ancestor == policy.binds[0]
+    target_path = state_path / "planted-by-the-jail.txt"
+    policy = FsPolicy(readable=("/",), writable=(str(state_path),))
+    jail = create_bwrap_jail(
+        (sys.executable, "-c", _WRITE_PROBE, str(target_path), _PLANTED_CONTENT), policy=policy
+    )
+    exit_code = run_jail(jail)
+    destroy_jail(jail)
+    assert exit_code == 2  # EROFS: the sealed mask, not the writable root
+    assert not target_path.exists()
 
 
 @pytest.mark.skipif(
@@ -448,7 +387,7 @@ def test_a_read_only_ancestor_bind_lacking_the_state_dirs_leaf_is_refused_loudly
 )
 def test_positive_control_a_writable_bind_lets_the_jail_write_back_to_the_host() -> None:
     """Rule 11's positive control for the write half: change nothing but
-    `writable` on the one `Bind` covering this exact path -- added on top of
+    a writable root at this exact path -- added on top of
     `WHOLE_HOST_READ_ONLY`'s own read-only binds, the realistic shape of "mostly
     read-only, a few paths writable" -- and the identical probe, writing the
     identical content to the identical path, now succeeds and leaves that
@@ -459,12 +398,7 @@ def test_positive_control_a_writable_bind_lets_the_jail_write_back_to_the_host()
     """
     with _fresh_tmp_dir() as target_dir:
         target_path = Path(target_dir) / "out.txt"
-        policy = FsPolicy(
-            binds=(
-                *WHOLE_HOST_READ_ONLY.binds,
-                Bind(host_path=target_dir, jail_path=target_dir, writable=True),
-            )
-        )
+        policy = FsPolicy(readable=("/",), writable=(target_dir,))
 
         jail = create_bwrap_jail(
             (sys.executable, "-c", _WRITE_PROBE, str(target_path), _PLANTED_CONTENT),
@@ -514,3 +448,87 @@ def test_sys_inside_the_jail_is_empty() -> None:
     destroy_jail(jail)
 
     assert exit_code == 0  # /sys is empty: masked, not the host's real one
+
+
+_MASK_PROBE = """
+import os, sys
+code = 0
+try:
+    if open(sys.argv[1]).read() == "":
+        code |= 1
+except OSError:
+    code |= 1
+try:
+    if os.listdir(sys.argv[2]) == []:
+        code |= 2
+except OSError:
+    code |= 2
+sys.exit(code)
+"""
+"""Exit with bit 0 set when the masked file reads nothing (empty or refused), bit 1 when the
+masked directory lists nothing (empty or refused)."""
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bwrap is not available; test skips on macOS, runs in CI on Linux",
+)
+def test_a_write_deny_inside_a_writable_root_is_read_only() -> None:
+    """decision-0007: the deny is more specific than the root, so it wins. Control: the same
+    write beside it, in the root itself, lands."""
+    with _fresh_tmp_dir() as root:
+        hooks = Path(root) / "hooks"
+        hooks.mkdir()
+        policy = FsPolicy(readable=("/",), writable=(root,), write_denies=(str(hooks),))
+        denied = _run_write(policy, hooks / "pre-commit")
+        allowed = _run_write(policy, Path(root) / "beside.txt")
+        assert (denied, allowed) == (2, 0)
+        assert not (hooks / "pre-commit").exists()
+        assert (Path(root) / "beside.txt").read_text() == _PLANTED_CONTENT
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bwrap is not available; test skips on macOS, runs in CI on Linux",
+)
+def test_an_absent_write_deny_under_a_writable_root_cannot_be_created() -> None:
+    """An absent deny is held by brig's empty read-only directory, so the command cannot
+    create a file there. (The mountpoint bwrap makes for it is DRAFT-0015's.)"""
+    with _fresh_tmp_dir() as root:
+        envrc = Path(root) / ".envrc"
+        policy = FsPolicy(readable=("/",), writable=(root,), write_denies=(str(envrc),))
+        assert _run_write(policy, envrc) != 0
+        assert not envrc.is_file()
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bwrap is not available; test skips on macOS, runs in CI on Linux",
+)
+def test_a_masked_file_and_directory_show_nothing_of_the_host() -> None:
+    """A masked file reads as nothing, a masked directory lists nothing, though both hold
+    something on the host (the control: they do, read from the host)."""
+    with _fresh_tmp_dir() as root:
+        secret = Path(root) / "secret.env"
+        secret.write_text("TOKEN=hunter2\n")
+        keys = Path(root) / "keys"
+        keys.mkdir()
+        (keys / "id").write_text("key\n")
+        policy = FsPolicy(readable=("/",), writable=(root,), masks=(str(secret), str(keys)))
+        jail = create_bwrap_jail(
+            (sys.executable, "-c", _MASK_PROBE, str(secret), str(keys)), policy=policy
+        )
+        exit_code = run_jail(jail)
+        destroy_jail(jail)
+        assert exit_code == 3
+        assert secret.read_text() == "TOKEN=hunter2\n" and os.listdir(keys) == ["id"]
+
+
+def _run_write(policy: FsPolicy, target: Path) -> int:
+    """`_WRITE_PROBE`'s exit code for a write to `target` under `policy`."""
+    jail = create_bwrap_jail(
+        (sys.executable, "-c", _WRITE_PROBE, str(target), _PLANTED_CONTENT), policy=policy
+    )
+    exit_code = run_jail(jail)
+    destroy_jail(jail)
+    return exit_code

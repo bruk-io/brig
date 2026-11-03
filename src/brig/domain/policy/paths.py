@@ -1,48 +1,88 @@
-"""Which paths a jail may see (decision-0001's layout; TASK-0001.16): plain data,
-nothing else (rule 2) -- `domain/jail_types/bwrap.py`'s `compile_supervisor_launch`
-is what translates an `FsPolicy` into bwrap's own `--ro-bind`/`--bind` flags; this
-module states the policy, never the mechanism that enforces it.
+"""Which paths a jail may read and write: what the embedder means, not how a jail type
+mounts it (decision-0007). Plain data and the pure checks over it (rule 2). Each jail type's
+compile turns an `FsPolicy` into its own mechanism: bwrap's into an ordered tuple of mounts
+(`domain/jail_types/bwrap.py`).
+
+Every path is absolute and names the same place inside the jail as on the host. Where two
+entries overlap, the more specific path wins: a write deny inside a writable root is
+read-only, a mask inside a readable root is unreadable.
 """
 
 from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class Bind:
-    """One path this policy makes visible inside a jail.
-
-    `host_path` is bound at `jail_path` inside the jail's own root -- the two may
-    differ (a jail can see a host path under a different name than it has on the
-    host), though every caller in this codebase so far binds a path at the same
-    name it already has. Read-only unless `writable` is set, the safer default:
-    an embedder names a path writable only when it means to let the jailed command
-    change it.
-    """
-
-    host_path: str
-    jail_path: str
-    writable: bool = False
+from enum import StrEnum
 
 
 @dataclass(frozen=True)
 class FsPolicy:
-    """The complete set of paths visible inside a jail: exactly what `binds` names,
-    in the order given, nothing implied beyond it. A jail type's compile (`rule 3`)
-    is the one thing that reads this to build its own jail's filesystem; nothing
-    about *which* paths an embedder should ask for is decided here -- a real
-    per-embedder policy is that embedder's own choice, not this module's.
+    """What a jail's command may see of the host's filesystem.
+
+    `readable`: roots the command may read and not write. `writable`: roots it may read and
+    write. `write_denies`: paths inside a writable root it may read and not write (an absent
+    one it may not create). `masks`: paths it may not read, write or create, wherever they
+    are. Nothing outside the roots exists in the jail.
     """
 
-    binds: tuple[Bind, ...]
+    readable: tuple[str, ...] = ()
+    writable: tuple[str, ...] = ()
+    write_denies: tuple[str, ...] = ()
+    masks: tuple[str, ...] = ()
 
 
-WHOLE_HOST_READ_ONLY = FsPolicy(binds=(Bind(host_path="/", jail_path="/", writable=False),))
-"""The default policy every bwrap jail gets until an embedder states its own
-(decision-0001's order, step 4; `domain/jail_types/bwrap.py`'s own
-`compile_supervisor_launch`): the whole host root, bound read-only -- the thinnest
-thing that lets the supervisor's own file be reachable inside the jail at all.
-Reproduces exactly the flags the placeholder `--ro-bind / /` bind produced before
-this module existed (`tests/unit/test_bwrap_compile.py`'s own byte-exact assertion
-on `compile_supervisor_launch`'s output is the proof nothing currently passing
-regressed when this became the default rather than the only option).
-"""
+WHOLE_HOST_READ_ONLY = FsPolicy(readable=("/",))
+"""The default: the whole host, read-only, nothing writable and nothing masked."""
+
+
+class PathKind(StrEnum):
+    """What is at a write deny's or a mask's path on the host when a jail is compiled: the
+    one host fact a compile needs (rule 2: presentation looks, the domain decides)."""
+
+    FILE = "file"
+    DIRECTORY = "directory"
+    ABSENT = "absent"
+
+
+@dataclass(frozen=True)
+class PathNotAbsolute:
+    """A refusal: `path` in the policy is not absolute and normalised."""
+
+    path: str
+
+
+@dataclass(frozen=True)
+class MaskHides:
+    """A refusal: `mask` hides `path`, which the jail needs to see: a root of the policy, or
+    brig's own state or channel directory."""
+
+    mask: str
+    path: str
+
+
+def _is_normal_absolute(path: str) -> bool:
+    if not path.startswith("/") or "//" in path:
+        return False
+    parts = path.split("/")[1:]
+    return path == "/" or all(part not in {"", ".", ".."} for part in parts)
+
+
+def within(path: str, root: str) -> bool:
+    """Whether `path` is `root` or beneath it, comparing whole components."""
+    return path == root or root == "/" or path.startswith(root + "/")
+
+
+def refusal(policy: FsPolicy, needed: tuple[str, ...] = ()) -> PathNotAbsolute | MaskHides | None:
+    """Why `policy` cannot be compiled, or `None`. `needed` are the paths the jail must see
+    for brig's own sake (its state directory, a channel directory), refused under a mask the
+    same way a root is.
+
+    A mask can only hide: a root, or a path brig needs, at or beneath a mask would be mounted
+    inside an empty read-only directory, where nothing can be made to mount it on.
+    """
+    every = (*policy.readable, *policy.writable, *policy.write_denies, *policy.masks, *needed)
+    for path in every:
+        if not _is_normal_absolute(path):
+            return PathNotAbsolute(path)
+    for mask in policy.masks:
+        for path in (*policy.readable, *policy.writable, *needed):
+            if within(path, mask):
+                return MaskHides(mask, path)
+    return None

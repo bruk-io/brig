@@ -293,8 +293,7 @@ class ChannelReadinessPort(Protocol):
 
     Finding the jail's own PID namespace (`infra.sockets.jail_pid1_namespace`) is
     deliberately **not** behind a port: it is jail setup, called once from
-    `create_bwrap_jail` directly, the same way `_check_state_dir_reachable` calls
-    `bwrap.covering_ancestor_bind` directly. Nothing needs to fake "which pid is
+    `create_bwrap_jail` directly. Nothing needs to fake "which pid is
     bwrap's child"; a test needs to fake "is this channel ready yet", which is this
     port.
     """
