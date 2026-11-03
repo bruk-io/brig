@@ -94,3 +94,62 @@ def test_placeholders_outlive_no_jail_and_none_is_removed_under_another() -> Non
         assert _tree(root) == before
         assert (root / "kept.txt").read_text() == "the person's"
         assert not any(os.scandir(root / ".git"))
+
+
+_CRASHING_EMBEDDER = """
+import sys
+from brig import FsPolicy, create_bwrap_jail
+top = sys.argv[1]
+policy = FsPolicy(
+    readable=("/",),
+    writable=(top,),
+    write_denies=(top + "/.envrc", top + "/.git/hooks"),
+    masks=(top + "/secret.env",),
+)
+jail = create_bwrap_jail((sys.executable, "-c", "import time; time.sleep(600)"), policy=policy)
+print(jail.process.pid, flush=True)
+import time
+time.sleep(600)
+"""
+"""An embedder that makes a jail, says its bwrap's pid, and waits to be killed."""
+
+
+def _running(pid: int) -> bool:
+    """Whether `pid` is a process that has not exited (a zombie has)."""
+    try:
+        with open(f"/proc/{pid}/stat") as handle:
+            return handle.read().rsplit(")", 1)[1].split()[0] not in {"Z", "X"}
+    except OSError:
+        return False
+
+
+def test_a_crashed_embedders_placeholders_go_with_the_next_jail_over_the_tree() -> None:
+    """The reviewer's measurement: an embedder killed outright leaves its record behind, and its
+    bwrap may linger as a zombie. Once that bwrap has exited, the next jail's teardown removes the
+    dead jail's placeholders too, and the tree is as it was."""
+    import signal
+    import subprocess
+
+    with tempfile.TemporaryDirectory(dir="/tmp") as top:
+        root = Path(top)
+        (root / ".git").mkdir()
+        before = _tree(root)
+        crashing = subprocess.Popen(
+            [sys.executable, "-c", _CRASHING_EMBEDDER, top], stdout=subprocess.PIPE, text=True
+        )
+        assert crashing.stdout is not None
+        bwrap_pid = int(crashing.stdout.readline())
+        crashing.send_signal(signal.SIGKILL)
+        crashing.wait()
+        deadline = time.monotonic() + 10
+        while _running(bwrap_pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        policy = FsPolicy(
+            readable=("/",),
+            writable=(top,),
+            write_denies=(f"{top}/.envrc", f"{top}/.git/hooks"),
+            masks=(f"{top}/secret.env",),
+        )
+        jail = create_bwrap_jail((sys.executable, "-c", "pass"), policy=policy)
+        destroy_jail(jail)
+        assert _tree(root) == before
