@@ -16,10 +16,11 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import pytest
-from tests.integration.fakes import FakeChannelReadiness, FakeSupervisors
+from tests.integration.fakes import FakeChannelReadiness, FakeProcesses, FakeSupervisors
 
 from brig import (
     Channel,
+    ChannelJailFinished,
     ChannelNotReady,
     ChannelReadinessRefusal,
     ChannelReady,
@@ -75,6 +76,24 @@ def _reservation(name: str = "ctl") -> Reservation:
     return reservation
 
 
+def test_a_jail_whose_process_exits_after_its_namespace_was_held_reads_as_finished() -> None:
+    """TASK-0023: the scan held the jail's namespace, then its command finished. The first
+    attempt reads not ready and the peek shows the jail's process has exited, so the loop
+    answers `ChannelJailFinished` there, not after `timeout_s`, and releases nothing: a
+    peek, never a reap (decision-0003)."""
+    readiness = FakeChannelReadiness(outcomes=[ChannelNotReady()])
+    processes = FakeProcesses(leader_exited=True)
+
+    outcome = await_channel_ready(
+        _jail(), _reservation(), timeout_s=30.0, readiness=readiness, processes=processes
+    )
+
+    assert outcome == ChannelJailFinished()
+    assert len(readiness.asked) == 1
+    assert processes.peek_attempts == [_jail().process.pid]
+    assert processes.reaped == [] and processes.released == []
+
+
 @pytest.mark.parametrize(
     "outcomes",
     [
@@ -93,7 +112,9 @@ def test_the_loop_keeps_asking_until_the_channel_reads_ready(
     readiness = FakeChannelReadiness(outcomes=outcomes)
     reservation = _reservation()
 
-    outcome = await_channel_ready(_jail(), reservation, readiness=readiness)
+    outcome = await_channel_ready(
+        _jail(), reservation, readiness=readiness, processes=FakeProcesses()
+    )
 
     assert outcome == ChannelReady()
     assert len(readiness.asked) == len(outcomes)
@@ -113,7 +134,9 @@ def test_a_refusal_stops_the_loop_at_once_and_is_never_retried() -> None:
         ]
     )
 
-    outcome = await_channel_ready(_jail(), _reservation(), readiness=readiness)
+    outcome = await_channel_ready(
+        _jail(), _reservation(), readiness=readiness, processes=FakeProcesses()
+    )
 
     assert outcome == ChannelRefused(ChannelReadinessRefusal.PEER_OUTSIDE_JAIL)
     assert len(readiness.asked) == 1
@@ -126,7 +149,9 @@ def test_the_loop_gives_up_at_its_deadline_and_reports_the_last_not_ready() -> N
     """
     readiness = FakeChannelReadiness(outcomes=[ChannelNotReady()])
 
-    outcome = await_channel_ready(_jail(), _reservation(), timeout_s=0.05, readiness=readiness)
+    outcome = await_channel_ready(
+        _jail(), _reservation(), timeout_s=0.05, readiness=readiness, processes=FakeProcesses()
+    )
 
     assert outcome == ChannelNotReady()
     assert len(readiness.asked) >= 1
@@ -147,6 +172,8 @@ def test_every_refusal_reason_reaches_the_caller_unchanged(
     """
     readiness = FakeChannelReadiness(outcomes=[ChannelRefused(reason)])
 
-    outcome = await_channel_ready(_jail(), _reservation(), readiness=readiness)
+    outcome = await_channel_ready(
+        _jail(), _reservation(), readiness=readiness, processes=FakeProcesses()
+    )
 
     assert outcome == ChannelRefused(reason)

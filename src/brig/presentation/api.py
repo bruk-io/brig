@@ -804,6 +804,7 @@ def await_channel_ready(
     *,
     timeout_s: float = _DEFAULT_CHANNEL_READY_TIMEOUT_S,
     readiness: ChannelReadinessPort = _channel_readiness,
+    processes: ProcessPort = _processes,
 ) -> ChannelReady | ChannelNotReady | ChannelRefused | ChannelJailFinished:
     """Poll until `reservation`'s channel in `jail` reads ready or refused, or
     `timeout_s` passes -- and report which (decision-0002 item 2, decision-0005).
@@ -832,7 +833,10 @@ def await_channel_ready(
     namespace (`channel_directory` set, `channel_namespace_fd` `None`, TASK-0001.30)
     answers `ChannelJailFinished` at once, before any connect: nothing in it can
     listen, and a connect with no namespace to verify against would trust whatever
-    host process answered at that path.
+    host process answered at that path. One that finishes later, after the scan held
+    its namespace, answers the same as soon as an attempt reads not ready and
+    `processes.peek` shows the jail's own process has exited (TASK-0023): peeked, never
+    reaped (decision-0003), so `run_jail` and `destroy_jail` still find it.
 
     `jail.channel_namespace_fd` is `None` with no `channel_directory` for a jail that
     declared no channel, and
@@ -860,6 +864,8 @@ def await_channel_ready(
         outcome = readiness.ready(reservation.bound_path, jail.channel_namespace_fd)
         if not isinstance(outcome, ChannelNotReady):
             return outcome
+        if processes.peek(jail.process.pid) is not None:
+            return ChannelJailFinished()
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return outcome
