@@ -1,7 +1,7 @@
 ---
-id: DRAFT-0021
+id: TASK-0034
 title: A stdio path through a harmless link fails as a bare JailSpawnFailed
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T03:59:00Z'
 labels: []
