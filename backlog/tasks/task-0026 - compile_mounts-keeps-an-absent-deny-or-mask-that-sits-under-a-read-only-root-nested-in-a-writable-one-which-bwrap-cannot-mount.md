@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0021
+id: TASK-0026
 title: >-
   compile_mounts keeps an absent deny or mask that sits under a read-only root
   nested in a writable one, which bwrap cannot mount
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T03:06:00Z'
 labels: []
