@@ -1,7 +1,7 @@
 ---
-id: DRAFT-0022
+id: TASK-0039
 title: Two test doubles that break decision-0001 rule 5 the gate does not see
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T04:14:00Z'
 labels: []
