@@ -1,10 +1,11 @@
 ---
 id: TASK-0035
 title: A stdio file hard-linked by another jail is still written through
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-03T04:00:00Z'
-updated_date: '2026-11-03T04:03:00Z'
+updated_date: '2026-11-03T04:04:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -36,4 +37,6 @@ tests/e2e/test_cwd_stdio_battery.py:177: AssertionError
 FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_hard_linked_stdio_file_is_refused
 1 failed, 7 deselected in 0.15s
 ```
+
+Accepted 2026-11-03 under the owner's goal. The test commit e3bce5a's message names TASK-0033 and TASK-0034; it means TASK-0034 (the harmless link) and TASK-0035 (the hard link). The first repro recorded on TASK-0034 above was the hard-link case by mistake; the later one, the harmless-link case, is this task's.
 <!-- SECTION:NOTES:END -->
