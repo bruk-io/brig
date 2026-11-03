@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0029
+id: TASK-0048
 title: >-
   Egress per destination: a jail reaches only the hostnames or IP addresses and
   ports an embedder grants, through a proxy it cannot route around
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T18:23:00Z'
 labels:
