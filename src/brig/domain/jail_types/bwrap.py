@@ -173,13 +173,33 @@ def _depth(path: str) -> int:
     return 0 if path == "/" else path.count("/")
 
 
+def _governing_role(policy: FsPolicy, path: str) -> str | None:
+    """The role of the most specific entry strictly above `path` (at one path, the one that
+    mounts last), or `None` when no entry covers it: what the jail shows at `path`'s parent."""
+    above = [
+        (role, root)
+        for role, roots in (
+            ("readable", policy.readable),
+            ("writable", policy.writable),
+            ("deny", policy.write_denies),
+            ("mask", policy.masks),
+        )
+        for root in roots
+        if root != path and within(path, root)
+    ]
+    if not above:
+        return None
+    return max(above, key=lambda entry: (_depth(entry[1]), _RANK[entry[0]]))[0]
+
+
 def _kept(policy: FsPolicy, kinds: Mapping[str, PathKind]) -> list[tuple[str, str]]:
     """The policy's entries that need a mount, as `(role, path)`.
 
-    A write deny or mask whose path is absent needs one only under a writable root, where the
-    command could otherwise create it; elsewhere nothing in the jail can make it, and bwrap
-    could not make its mountpoint on a read-only mount either. A deny or mask beneath a mask is
-    hidden already. A write deny outside every writable root is read-only already.
+    A write deny or mask at an absent path needs one only where its parent is writable in the
+    jail (the most specific entry above it is a writable root): there the command could create
+    it; anywhere else nothing in the jail can, and bwrap could not make its mountpoint on a
+    read-only mount either. A deny or mask beneath a mask is hidden already. A write deny outside
+    every writable root is read-only already.
     """
     entries = [("readable", p) for p in policy.readable]
     entries += [("writable", p) for p in policy.writable]
@@ -187,11 +207,10 @@ def _kept(policy: FsPolicy, kinds: Mapping[str, PathKind]) -> list[tuple[str, st
         for path in paths:
             if any(other != path and within(path, other) for other in policy.masks):
                 continue
-            writable = any(within(path, root) for root in policy.writable)
-            absent = kinds.get(path, PathKind.ABSENT) is PathKind.ABSENT
-            if role == "deny" and not writable:
+            if role == "deny" and not any(within(path, root) for root in policy.writable):
                 continue
-            if absent and not writable:
+            absent = kinds.get(path, PathKind.ABSENT) is PathKind.ABSENT
+            if absent and _governing_role(policy, path) != "writable":
                 continue
             entries.append((role, path))
     return sorted(set(entries), key=lambda entry: (_depth(entry[1]), _RANK[entry[0]], entry[1]))

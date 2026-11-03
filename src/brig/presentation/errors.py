@@ -37,6 +37,34 @@ class PolicyMaskHides(Exception):
         self.path = path
 
 
+class PolicyRootAbsent(Exception):
+    """Raised when a readable or writable root in a caller's `FsPolicy` does not exist on the
+    host: a root is mounted from where it is, so it has to be there (decision-0007)."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"policy names {path!r} as a root, and nothing is there on the host -- create it "
+            "before the jail starts, or leave it out of the policy"
+        )
+        self.path = path
+
+
+class PolicyPathThroughLink(Exception):
+    """Raised when an entry in a caller's `FsPolicy` is reached through a symbolic link inside a
+    writable root: the command may replace that link, and a mount follows it, so the entry would
+    protect the link's target and not the path (TASK-0025)."""
+
+    def __init__(self, path: str, root: str) -> None:
+        super().__init__(
+            f"policy names {path!r}, which is reached through a symbolic link inside the writable "
+            f"root {root!r}; the command could replace that link, so nothing at {path!r} would "
+            "hold -- name the path the link leads to instead, or replace the link with what it "
+            "points at"
+        )
+        self.path = path
+        self.root = root
+
+
 class ChannelDirectoryCreateFailed(Exception):
     """Raised when the host refused to create a jail's per-jail channel directory
     (TASK-0001.29): a full disk, a permissions change under brig's own state

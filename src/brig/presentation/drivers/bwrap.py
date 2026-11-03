@@ -18,9 +18,12 @@ from brig.domain.policy.env import DENY_ALL, EnvPolicy
 from brig.domain.policy.paths import (
     WHOLE_HOST_READ_ONLY,
     FsPolicy,
+    HostPath,
     MaskHides,
     PathKind,
     PathNotAbsolute,
+    RootAbsent,
+    ThroughLink,
     refusal,
 )
 from brig.infra import files as _files
@@ -33,6 +36,8 @@ from brig.presentation.errors import (
     ChannelNamespaceNotFound,
     PolicyMaskHides,
     PolicyPathNotAbsolute,
+    PolicyPathThroughLink,
+    PolicyRootAbsent,
 )
 from brig.presentation.jail import (
     CHANNEL_DIRECTORIES,
@@ -120,6 +125,9 @@ def _supervisors_for(
     Raises:
         PolicyPathNotAbsolute: a path in `policy` is not absolute and normalised.
         PolicyMaskHides: a mask hides a root, the state directory or the channel directory.
+        PolicyRootAbsent: a readable or writable root does not exist on the host.
+        PolicyPathThroughLink: an entry is reached through a symbolic link inside a writable
+            root.
     """
     state_dir = resolved_state_dir()
     needed = (
@@ -130,17 +138,25 @@ def _supervisors_for(
             channels.directory.host_path,
         )
     )
-    match refusal(policy, needed):
+    every = (*policy.readable, *policy.writable, *policy.write_denies, *policy.masks)
+    host = {
+        path: HostPath(PathKind(kind), resolved)
+        for path, (kind, resolved) in _files.facts(every).items()
+    }
+    match refusal(policy, needed, host):
         case PathNotAbsolute(path=path):
             raise PolicyPathNotAbsolute(path)
         case MaskHides(mask=mask, path=path):
             raise PolicyMaskHides(mask, path)
+        case RootAbsent(path=path):
+            raise PolicyRootAbsent(path)
+        case ThroughLink(path=path, root=root):
+            raise PolicyPathThroughLink(path, root)
         case None:
             pass
         case _ as unreachable:
             assert_never(unreachable)
-    found = _files.kinds((*policy.write_denies, *policy.masks))
-    kinds = {path: PathKind(kind) for path, kind in found.items()}
+    kinds = {path: found.kind for path, found in host.items()}
     empty_dir = str(_state_dir_mod.ensure_empty(Path(state_dir)))
     supervisor_path = _supervisor_path()
     mounts = bwrap.compile_mounts(

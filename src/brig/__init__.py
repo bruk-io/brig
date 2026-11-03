@@ -29,6 +29,8 @@ from brig.presentation.errors import (
     JailWaitTimedOut,
     PolicyMaskHides,
     PolicyPathNotAbsolute,
+    PolicyPathThroughLink,
+    PolicyRootAbsent,
     StateDirectoryInvalid,
 )
 from brig.presentation.jail import Jail
@@ -72,6 +74,8 @@ __all__ = [
     "JailWaitTimedOut",
     "PolicyMaskHides",
     "PolicyPathNotAbsolute",
+    "PolicyPathThroughLink",
+    "PolicyRootAbsent",
     "ProcessUnknown",
     "Reservation",
     "Reservations",

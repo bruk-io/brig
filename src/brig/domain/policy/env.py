@@ -26,7 +26,7 @@ class EnvPolicy:
 
 DENY_ALL = EnvPolicy(allowed=())
 """The default `EnvPolicy`: nothing passed through. The safer default (the same
-reasoning `Bind`'s own `writable=False` default gives a filesystem bind,
+reasoning that leaves a path read-only unless a policy names it writable,
 `domain/policy/paths.py`) until an embedder names its own allow-list -- and exactly
 what `Plan.env`'s own docstring already called the honest, stated-rather-than-hidden
 gap before this policy existed: a jail's supervised command sees no environment at

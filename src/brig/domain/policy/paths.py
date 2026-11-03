@@ -8,6 +8,7 @@ entries overlap, the more specific path wins: a write deny inside a writable roo
 read-only, a mask inside a readable root is unreadable.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -42,6 +43,15 @@ class PathKind(StrEnum):
 
 
 @dataclass(frozen=True)
+class HostPath:
+    """What presentation found at a policy path on the host: its kind, and where it resolves to
+    once every symbolic link on the way is followed (`os.path.realpath`)."""
+
+    kind: PathKind
+    resolved: str
+
+
+@dataclass(frozen=True)
 class PathNotAbsolute:
     """A refusal: `path` in the policy is not absolute and normalised."""
 
@@ -57,6 +67,22 @@ class MaskHides:
     path: str
 
 
+@dataclass(frozen=True)
+class RootAbsent:
+    """A refusal: the readable or writable root `path` does not exist on the host."""
+
+    path: str
+
+
+@dataclass(frozen=True)
+class ThroughLink:
+    """A refusal: `path` is reached through a symbolic link inside the writable root `root`. The
+    command may replace that link, and a mount follows it, so nothing at `path` would hold."""
+
+    path: str
+    root: str
+
+
 def _is_normal_absolute(path: str) -> bool:
     if not path.startswith("/") or "//" in path:
         return False
@@ -69,13 +95,30 @@ def within(path: str, root: str) -> bool:
     return path == root or root == "/" or path.startswith(root + "/")
 
 
-def refusal(policy: FsPolicy, needed: tuple[str, ...] = ()) -> PathNotAbsolute | MaskHides | None:
-    """Why `policy` cannot be compiled, or `None`. `needed` are the paths the jail must see
-    for brig's own sake (its state directory, a channel directory), refused under a mask the
-    same way a root is.
+def _reached_through_link(path: str, root: str, host: Mapping[str, HostPath]) -> bool:
+    """Whether `path`, inside `root`, resolves anywhere but where `root` resolves plus the rest of
+    `path`: a link sits between them."""
+    found, base = host.get(path), host.get(root)
+    if found is None or base is None:
+        return False
+    rest = path if root == "/" else path[len(root) :]
+    return found.resolved != base.resolved.rstrip("/") + rest
 
-    A mask can only hide: a root, or a path brig needs, at or beneath a mask would be mounted
-    inside an empty read-only directory, where nothing can be made to mount it on.
+
+def refusal(
+    policy: FsPolicy,
+    needed: tuple[str, ...] = (),
+    host: Mapping[str, HostPath] | None = None,
+) -> PathNotAbsolute | MaskHides | RootAbsent | ThroughLink | None:
+    """Why `policy` cannot be compiled, or `None`. `needed` are the paths the jail must see for
+    brig's own sake (its state directory, a channel directory), refused under a mask the same way
+    a root is. `host` is what presentation found at each policy path; without it, only what the
+    policy says alone is checked.
+
+    A mask can only hide: a root, or a path brig needs, beneath a mask would be mounted inside an
+    empty read-only directory. A root must exist to be mounted. And no entry may be reached through
+    a symbolic link inside a writable root: the command could replace the link, and a mount onto a
+    link lands on its target, so the entry would protect the target and not the path.
     """
     every = (*policy.readable, *policy.writable, *policy.write_denies, *policy.masks, *needed)
     for path in every:
@@ -85,4 +128,13 @@ def refusal(policy: FsPolicy, needed: tuple[str, ...] = ()) -> PathNotAbsolute |
         for path in (*policy.readable, *policy.writable, *needed):
             if within(path, mask):
                 return MaskHides(mask, path)
+    known = host or {}
+    for root in (*policy.readable, *policy.writable):
+        if root in known and known[root].kind is PathKind.ABSENT:
+            return RootAbsent(root)
+    entries = (*policy.readable, *policy.writable, *policy.write_denies, *policy.masks)
+    for root in policy.writable:
+        for path in entries:
+            if path != root and within(path, root) and _reached_through_link(path, root, known):
+                return ThroughLink(path, root)
     return None

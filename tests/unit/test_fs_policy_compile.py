@@ -4,9 +4,12 @@ bwrap's `compile_mounts`, which turns one into ordered mounts, the more specific
 from brig.domain.jail_types.bwrap import Mount, MountKind, compile_mounts, render
 from brig.domain.policy.paths import (
     FsPolicy,
+    HostPath,
     MaskHides,
     PathKind,
     PathNotAbsolute,
+    RootAbsent,
+    ThroughLink,
     refusal,
 )
 
@@ -144,3 +147,49 @@ def test_a_mask_hiding_a_root_or_a_path_brig_needs_is_refused() -> None:
     assert refusal(FsPolicy(readable=("/",), masks=("/root",)), needed=("/root/.brig",)) == (
         MaskHides("/root", "/root/.brig")
     )
+
+
+def test_an_absent_entry_whose_parent_is_read_only_in_the_jail_needs_no_mount() -> None:
+    """TASK-0026: under a readable root or a present deny nested in a writable root, the command
+    cannot create the absent entry, and bwrap could not mount on a read-only bind."""
+    policy = FsPolicy(
+        readable=("/w/ro",),
+        writable=("/w",),
+        write_denies=("/w/d", "/w/ro/absent", "/w/d/absent"),
+    )
+
+    assert _policy_mounts(policy, {"/w/d": PathKind.DIRECTORY}) == (
+        Mount(MountKind.WRITABLE, "/w", "/w"),
+        Mount(MountKind.READ_ONLY, "/w/ro", "/w/ro"),
+        Mount(MountKind.READ_ONLY, "/w/d", "/w/d"),
+    )
+
+
+def test_a_root_absent_on_the_host_is_refused() -> None:
+    host = {"/w": HostPath(PathKind.ABSENT, "/w")}
+
+    assert refusal(FsPolicy(writable=("/w",)), host=host) == RootAbsent("/w")
+
+
+def test_an_entry_reached_through_a_link_inside_a_writable_root_is_refused() -> None:
+    """TASK-0025: `/w/hooks` resolves to `/w/real`, a link inside the writable root `/w`."""
+    host = {
+        "/w": HostPath(PathKind.DIRECTORY, "/w"),
+        "/w/hooks": HostPath(PathKind.DIRECTORY, "/w/real"),
+    }
+    policy = FsPolicy(writable=("/w",), write_denies=("/w/hooks",))
+
+    assert refusal(policy, host=host) == ThroughLink("/w/hooks", "/w")
+
+
+def test_a_link_above_the_writable_root_is_not_a_refusal() -> None:
+    """The command cannot change a link outside every writable root, so `/w` being reached
+    through one (here `/w` -> `/data/w`) refuses nothing beneath it."""
+    host = {
+        "/w": HostPath(PathKind.DIRECTORY, "/data/w"),
+        "/w/hooks": HostPath(PathKind.DIRECTORY, "/data/w/hooks"),
+        "/w/secret": HostPath(PathKind.ABSENT, "/data/w/secret"),
+    }
+    policy = FsPolicy(writable=("/w",), write_denies=("/w/hooks",), masks=("/w/secret",))
+
+    assert refusal(policy, host=host) is None
