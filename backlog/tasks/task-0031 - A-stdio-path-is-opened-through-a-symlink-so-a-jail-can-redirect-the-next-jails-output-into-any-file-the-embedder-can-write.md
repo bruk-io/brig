@@ -127,4 +127,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review 2026-11-03 (reviewer, not closed). Full gate passes. AC#2 met (e2e plants the link, next create refused, target untouched). AC#1 not met: the refusal is lexical, so a stdio path outside the writable roots that reaches one through a link in a parent directory is not refused, and O_NOFOLLOW covers only the last component. Measured: writable root R with R/logs, an outside link O/logs -> R/logs; jail 1 replaces R/logs with a link to victim dir V; jail 2 with stdout=O/logs/out.txt is accepted and V/out.txt becomes 'beforeappended'. Fix: check the stdio path's resolved parent (realpath) against the resolved writable roots, or open with openat2 RESOLVE_NO_SYMLINKS. Also not covered by design: a stdio path in a root another jail of the same embedder may write; brig cannot see that policy, so only no-symlink resolution (RESOLVE_NO_SYMLINKS on the whole path) closes it, or a documented embedder rule.
 <!-- SECTION:NOTES:END -->
