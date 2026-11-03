@@ -1,7 +1,7 @@
 ---
-id: DRAFT-0016
+id: TASK-0028
 title: An embedder cannot set the jailed command's working directory or its stdio
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-02T17:23:00Z'
 labels:
