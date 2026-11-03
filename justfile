@@ -22,7 +22,7 @@ gates:
 
 # run an explicit set of test paths (used by `check` and the layer recipes)
 test-selected *paths:
-    uv run pytest {{paths}} -rs
+    uv run pytest {{paths}} -rfEs
 
 # tests/unit: one pure function each, nothing mocked
 test-unit:

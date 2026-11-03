@@ -31,6 +31,11 @@ def just_test_layer(layer: str) -> tuple[int, str]:
     return code, output
 
 
+def failed_tests(output: str) -> list[str]:
+    """The lines of pytest's short summary that name a failed or erroring test."""
+    return [line for line in output.splitlines() if line.startswith(("FAILED ", "ERROR "))]
+
+
 def main() -> int:
     steps: list[tuple[str, tuple[int, str]]] = [
         ("lint", just("lint")),
@@ -47,6 +52,7 @@ def main() -> int:
     ]
 
     failed: list[str] = []
+    named: list[str] = []
     for name, (code, output) in steps:
         status = "PASS" if code == 0 else "FAIL"
         print(f"== {name}: {status} ==")
@@ -54,9 +60,13 @@ def main() -> int:
             print(output.rstrip())
         if code != 0:
             failed.append(name)
+            named.extend(f"  {name}: {line}" for line in failed_tests(output))
         print()
 
     if failed:
+        # Repeated here, last, because a record of this run may keep only its tail, and the
+        # steps after a test layer would push that layer's own summary out of it.
+        print(*named, sep="\n") if named else None
         print(f"done: {len(failed)} step(s) failed: {', '.join(failed)}")
         return 1
     print("done: all steps passed")
