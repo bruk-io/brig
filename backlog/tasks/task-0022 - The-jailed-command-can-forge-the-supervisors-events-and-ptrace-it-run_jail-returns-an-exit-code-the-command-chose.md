@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:22:00Z'
-updated_date: '2026-11-03T02:46:00Z'
+updated_date: '2026-11-03T02:48:00Z'
 labels:
   - size-5
 dependencies: []
@@ -126,4 +126,70 @@ decision-0006 records the fix and the measurements behind it (a stand-in PID 1 a
 Tests: `tests/e2e/test_supervisor_isolation_battery.py` (committed alone first, 88c7f82; its failing run is the repro above: run_jail trusted the forged done, 42, and the command held capabilities) plants the forged `done` through `/proc/1/fd` and asserts run_jail reports the real code (7) after the command's second; a positive control reopens a pipe of the command's own forked child through procfs and succeeds; a third asserts the command's CapEff is 0. The battery does not plant a ptrace attach on PID 1; decision-0006's measurements cover it (refused in both configurations the fix produces), and the non-dumpable flag that refuses `/proc/1/fd` is the same check ptrace makes. Unit argv assertions and the TIOCSTI copy include `--cap-drop ALL`.
 
 `uv run just done` passes at 08aaf4a, recorded above. Found on the way and filed as TASK-0023: a finished-jail readiness race that the supervisor's extra start-up work made lose every run; fixed there, in its own commits.
+
+Check `uv run just done` exited 0
+
+(247 earlier lines omitted)
+```text
+[2m02:48:19.990[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:react/[39m[95marchitecture[39m[0m
+[2m02:48:19.994[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:model/[39m[95marchitecture[39m[0m
+[2m02:48:20.137[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:icons/[39m[95marchitecture[39m[0m
+[2m02:48:26.234[0m [1m[32mINFO [0m [1m[36mlikec4.vite.webcomponent[0m ✓ built in 6.54s
+[2m02:48:26.295[0m [1m[32mINFO [0m [1m[36mlikec4.c4:codegen[0m [2mgenerated[22m /home/user/brig/site/assets/mkdocs_likec4/likec4_views.js[0m
+[2m02:48:26.305[0m [1m[32mINFO [0m [1m[36mlikec4.c4:codegen[0m [32mdone in 9.8s[39m[0m
+
+   ┌───────────────────────────────────────────────────────────────┐
+   │                                                               │
+   │                                                               │
+   │   [2mWebcomponents generated to:[22m                                 │
+   │    site/assets/mkdocs_likec4/likec4_views.js                  │
+   │                                                               │
+   │   [2mSetup and usage instructions:[22m                               │
+   │    [34mhttps://likec4.dev/tooling/code-generation/webcomponent/[39m   │
+   │                                                               │
+   │                                                               │
+   └───────────────────────────────────────────────────────────────┘
+
+uv run mkdocs build --strict
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+
+[31m │  ⚠  Warning from the Material for MkDocs team[0m
+[31m │[0m
+[31m │[0m  MkDocs 2.0, the underlying framework of Material for MkDocs,
+[31m │[0m  will introduce backward-incompatible changes, including:
+[31m │[0m
+[31m │  × [0mAll plugins will stop working – the plugin system has been removed
+[31m │  × [0mAll theme overrides will break – the theming system has been rewritten
+[31m │  × [0mNo migration path exists – existing projects cannot be upgraded
+[31m │  × [0mClosed contribution model – community members can't report bugs
+[31m │  × [0mCurrently unlicensed – unsuitable for production use
+[31m │[0m
+[31m │[0m  Our full analysis:
+[31m │[0m
+[31m │[0m  [4mhttps://squidfunk.github.io/mkdocs-material/blog/2026/02/18/mkdocs-2.0/[0m
+[0m
+INFO    -  mkdocs-likec4: No projects discovered, using default root project
+INFO    -  Cleaning site directory
+INFO    -  Building documentation to directory: /home/user/brig/site
+INFO    -  mkdocs-likec4: Generating web component for default project from /home/user/brig/docs
+INFO    -  Documentation built in 14.70 seconds
+
+== architecture validate: PASS ==
+[2m02:48:30.364[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mlayout[22m wasm[0m
+[2m02:48:30.438[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m /home/user/brig/docs/architecture[0m
+[2m02:48:30.502[0m [1m[32mINFO [0m [1m[36mlikec4.server.projects[0m add [32m'architecture'[39m
+[2m02:48:30.503[0m [1m[32mINFO [0m [1m[36mlikec4.server.workspace[0m loaded [33m1[39m projects
+[2m02:48:32.142[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m found 27 source files[0m
+[2m02:48:32.895[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32m✓ Valid[39m[2m (27 files)[22m[0m
+[2m02:48:32.895[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32mvalidate 2.5s[39m[0m
+npx -y likec4@1.60.0 validate docs/architecture
+
+== architecture lint: PASS ==
+
+c4lint: 0 error(s), 0 warning(s) across 20 elements, 20 relationships, 5 views
+uv run python3 scripts/c4lint.py docs/architecture
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+
+done: all steps passed
+```
 <!-- SECTION:NOTES:END -->
