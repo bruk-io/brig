@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:31:00Z'
-updated_date: '2026-11-03T03:44:00Z'
+updated_date: '2026-11-03T03:46:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -22,7 +22,7 @@ Found reviewing TASK-0028 (d98bc84). infra/supervisor/link.py _open_stdio opens 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 A stdio path whose last component is a symlink is refused (O_NOFOLLOW or equivalent), or a stdio path under a writable root is refused at create, with an error saying what to do
-- [ ] #2 An e2e test plants the symlink from inside a jail and shows the next create does not write through it
+- [x] #2 An e2e test plants the symlink from inside a jail and shows the next create does not write through it
 <!-- AC:END -->
 
 ## Implementation Notes
