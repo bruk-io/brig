@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T04:15:00Z'
+updated_date: '2026-11-03T04:32:00Z'
 labels:
   - size-3
 dependencies: []
@@ -60,9 +60,9 @@ Found by an architecture review, 2026-11-02, at 739dd94. 3,203 of 5,583 source l
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Docstrings state the contract; history lives on the board
-- [ ] #2 The SPEC describes what is built, and frozendict replaces the dict workarounds
-- [ ] #3 The unused effects and their ports are gone, and one name means one thing
+- [x] #1 Docstrings state the contract; history lives on the board
+- [x] #2 The SPEC describes what is built, and frozendict replaces the dict workarounds
+- [x] #3 The unused effects and their ports are gone, and one name means one thing
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -92,3 +92,30 @@ Measured at the start (worktree of claude/embedder-gaps, 37cb619): src/brig is 6
 - `grep` finds no `Spawn(`, `Reap(`, `reap_deadline`, `ProcessUnknown` outside infra and its tests, `SupervisorDoneUnknown` outside infra, `LiveSupervisors`, or "frozendict ... does not exist" in src.
 - The ast count of docstring lines before and after, reported with the source line count.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Worker's report (@claude, 2026-11-03)
+
+Commit 1d8e862 on claude/docs-drift (one commit; the board's own auto-commits sit around it). `uv run just done`: all steps passed.
+
+**Measured** (ast count of module/class/function/attribute docstrings in `src/brig`): 6,310 -> 3,984 source lines; 2,976 -> 980 docstring lines (47% -> 25%); TASK/DRAFT/decision references 323 -> 127. A code-only diff (docstrings stripped, `ast.unparse`) shows only the changes below.
+
+**#3 Dead code, one name one meaning.**
+- Removed `Spawn`, `Reap`, their driver arms, `ProcessPort.spawn/reap/reap_deadline`, `jail.py`'s `_reap`/`_reap_deadline` and the `_RealProcesses` fields, `infra.processes.reap_deadline` (its only caller was that adapter) with its two gateway tests, and `FakeProcesses.spawn/reap/reap_deadline` with `expires`, `next_pid`, `spawned*`, `reaped*` and the assertions on them. Kept, each checked by grep: `infra.processes.spawn`/`SpawnError` (link.py), `infra.processes.reap` (e2e tests reap what they spawn), `_ProcessIdentity` (`SupervisorPort.start`), `JailSpawnFailed`. `SpawnedProcess` lost its last outside caller and became `_SpawnedProcess` (pypeeker demote).
+- `domain/channels.ChannelRefused` -> `ChannelNameRefusal`; the readiness refusal keeps `ChannelRefused`.
+- Copies: `ports.ProcessUnknown` and `ports.SupervisorDoneUnknown` are gone. `ProcessPort.peek` returns `int | None | ExitCodeUnknown`, `SupervisorPort.await_done` returns `ExitOutcome`; `jail.py`'s wiring translates infra's sentinel straight into domain's, and the driver translates nothing. `brig` exports `ExitCodeUnknown` in their place. Kept: infra's `ProcessUnknown`, `SupervisorDoneUnknown` and readiness values (rule 1: infra imports no brig type); the ports' readiness outcomes, which are the embedder-facing values and have no domain copy.
+
+**#2 frozendict and the SPEC.** `Plan.env`, `StartSupervisedCommand.env`, `scrub_env`, `compile_run`/`create_bwrap_jail`'s `env` (now a `Mapping`), `grade`, `ceilings`, `Jail.report`, `_STRENGTH`, `_RANK` and the driver's `_SIGNALS` are `frozendict`; the false "no frozendict" statements are gone. `docs/spec/index.md`'s Domain, Infra and Presentation sections list what is built (files, state_dir, placeholders, sockets, supervisor, report) and what is not; the ten laws are untouched. `docs/glossary.md`'s effect, step, plan, process, jail and driver entries corrected.
+
+**`LiveSupervisors` -> `LiveSupervisor`**, holding the one supervisor its jail started; any other pid answers as a closed one, so the port contract is unchanged.
+
+**#1 Docstrings** in src cut to their contract; measured facts kept briefly with their numbers (EBADF on a CLOSE of a closed fd, `--as-pid-1` and PID 3, `setsid` compiled out of uv's CPython, bwrap's namespace being the host's, ENOPROTOOPT vs EINVAL, macOS EPERM from killpg, posix_spawnp searching the caller's PATH). Test docstrings changed only where they named removed things.
+
+**Beyond the brief, flagged for review.**
+- `JailExitUnknown`'s message said "already reaped elsewhere"; it now comes only from a lost supervisor report, so it reads "jail's exit code was lost before it was reported".
+- `tests/e2e/test_report_battery.py` assigned to `os.environ`, which `brig-no-patching` reported on the base branch too (the gate was red before this task); it now passes the candidate env as a mapping.
+
+**Not done, left for a follow-up:** `docs/architecture` (the LikeC4 model) still marks the supervisor "planned, not built"; it is outside the SPEC this task covers.
+<!-- SECTION:NOTES:END -->
