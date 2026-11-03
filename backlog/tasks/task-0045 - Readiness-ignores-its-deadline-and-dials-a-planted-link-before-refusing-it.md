@@ -1,7 +1,7 @@
 ---
 id: TASK-0045
 title: Readiness ignores its deadline and dials a planted link before refusing it
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-03T17:47:00Z'
 updated_date: '2026-11-03T18:57:00Z'
@@ -247,4 +247,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Reviewer, 2026-11-03: closed. Full check passed, including the recorded repro e2e (full backlog, live planted link). Reviewer probes in real /usr/bin/bwrap: dangling link -> PEER_OUTSIDE_JAIL at once; live link to a host listener -> refused, listener backlog empty; FIFO and regular file -> ChannelNotReady at the deadline (1.5 s), no hang; a good listener -> ChannelReady, connection blocking and live. A swap between the O_PATH open and the connect (rename the socket away, plant a link to a host listener) at the infra level: the host listener got nothing and the connection reached the opened inode. destroy_jail closed both the directory fd and the namespace fd; the failed-create path is covered by tests/integration/test_channel_directory_fd.py through dismantle. Findings, none filed: (design, belongs to DRAFT-0027) Jail now holds a second raw fd int, channel_directory_fd; same shape as the namespace fd, so it widens the leak surface of a Jail dropped without destroy_jail by one fd but adds no new kind of problem - DRAFT-0027 should name both; (info) a dangling link changed from not-ready to refused, recorded by the worker against decision-0005's facts; (info) not verified: pre-6.5 kernels, setuid bwrap, /proc absent.
 <!-- SECTION:NOTES:END -->
