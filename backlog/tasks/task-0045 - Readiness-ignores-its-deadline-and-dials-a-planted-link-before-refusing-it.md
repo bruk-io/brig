@@ -163,4 +163,22 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Worker, 2026-11-03 (branch claude/create-and-readiness).
+
+What changed:
+- infra/sockets.py: `open_directory(path)` returns an O_PATH|O_DIRECTORY|O_NOFOLLOW fd. `channel_ready(directory_fd, name, jail_namespace_fd)` opens the name beneath that fd with O_PATH|O_NOFOLLOW; S_ISLNK is refused as PEER_OUTSIDE_JAIL before any socket exists; anything else that is not S_ISSOCK (a file, a directory, nothing) is ChannelNotReady as before; the socket is connected non-blocking to /proc/self/fd/N, so EAGAIN from a full backlog is ChannelNotReady at once, and the verified connection is set back to blocking before it is handed out (ChannelReady's documented shape). The namespace check is unchanged.
+- The deadline: measured on this host that a non-blocking AF_UNIX connect to a full backlog returns EAGAIN, never EINPROGRESS, so there is nothing to poll inside one attempt; the poll until the deadline is await_channel_ready's existing loop, which now cannot be held by one attempt.
+- The fd is held from creation: create_bwrap_jail opens it right after `directories.create` (an OSError there is ChannelDirectoryCreateFailed) and puts it on the Jail as `channel_directory_fd`; TASK-0044's `dismantle` closes it, so destroy_jail and a failed create both do. It is opened in the driver, not by ChannelDirectoryPort.create, because changing that port's shape would break recorded repro files that define their own port (test_channel_readiness_battery.py, test_channel_directory_lifecycle.py).
+- await_channel_ready asks the port with (jail.channel_directory_fd, reservation.name, jail.channel_namespace_fd); a Jail with no directory fd is the existing ValueError.
+- A link at the name reuses PEER_OUTSIDE_JAIL rather than a new reason, so the readiness battery's planted-symlink case passes unchanged; its docstrings say a link is refused so. This changes one fact decision-0005 recorded: a dangling symlink at the name used to read not ready (connect failed) and is now refused.
+- Docs: spec (infra sockets bullet and presentation readiness paragraph, with what holds it), glossary readiness, the LikeC4 sockets component and the driver's edge.
+
+Public API change: ChannelReadinessPort.ready(directory_fd, name, jail_namespace_fd) instead of (path, jail_namespace_fd); Jail gains `channel_directory_fd: int | None = None`; infra.sockets.channel_ready takes (directory_fd, name, jail_namespace_fd) and infra.sockets.open_directory is new.
+
+Tests: the recorded repro tests/e2e/test_channel_readiness_dial.py (real bwrap: listen(0) with the jail filling its own backlog, timeout_s=2, came back blocked after 4 s before the fix; a planted link to a host listener left a connection in that listener's backlog). New: tests/e2e/test_channel_readiness_beneath.py (infra: blocking connection handed out, full backlog not ready in under 0.5 s, live and dangling links refused with no connection at the listener, non-sockets not ready, the lookup follows the held directory, not its path) and tests/integration/test_channel_directory_fd.py (the fd names the directory made, and no fd is left after destroy or after a create that fails at the scan). Changed to the new signatures, assertions kept: tests/integration/test_channel_readiness.py, tests/e2e/test_channel_readiness_refusals.py and test_channel_readiness_kernel.py (a helper holds a directory fd per call), and test_channel_reservations.py (the endpoint is compared with the fake's own path). FakeChannelDirectories now makes and removes its directory under a throwaway temp root, since the driver opens what was made.
+
+Commits: 7e43787 (repro), cfba449 (fix). `just done` passed (recorded above), with the same four pre-existing e2e skips as before.
+
+Not verified: a kernel before 6.5, Seatbelt, and setuid bwrap; whether /proc is always mounted where an embedder runs (the dial needs /proc/self/fd, as the namespace check already needs /proc).
 <!-- SECTION:NOTES:END -->
