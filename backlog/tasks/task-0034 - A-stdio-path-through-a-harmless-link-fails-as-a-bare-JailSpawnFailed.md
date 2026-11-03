@@ -1,8 +1,9 @@
 ---
 id: TASK-0034
 title: A stdio path through a harmless link fails as a bare JailSpawnFailed
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-03T03:59:00Z'
 updated_date: '2026-11-03T04:03:00Z'
 labels: []
@@ -47,4 +48,6 @@ tests/e2e/test_cwd_stdio_battery.py:158: AssertionError
 FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_stdio_path_through_any_link_is_refused_naming_it
 1 failed, 7 deselected in 0.08s
 ```
+
+Accepted 2026-11-03 under the owner's goal. The test commit e3bce5a's message names TASK-0033 and TASK-0034; it means TASK-0034 (the harmless link) and TASK-0035 (the hard link). The first repro recorded on TASK-0034 above was the hard-link case by mistake; the later one, the harmless-link case, is this task's.
 <!-- SECTION:NOTES:END -->
