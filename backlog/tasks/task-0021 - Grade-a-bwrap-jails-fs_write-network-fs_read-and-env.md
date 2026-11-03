@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-31T11:00:00Z'
-updated_date: '2026-11-03T04:20:00Z'
+updated_date: '2026-11-03T04:21:00Z'
 labels:
   - size-5
 dependencies: []
@@ -28,7 +28,7 @@ Each claim's grade must come from evidence, never be stated ahead of it (law: gr
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 A bwrap jail's compile states a claim for each of fs_write, network, fs_read and env, re-exported from brig like CHANNEL_EXCLUSIVITY_CLAIM
-- [ ] #2 Each claim is graded from evidence an e2e battery produces against real bwrap, and none grades stronger than that battery shows
+- [x] #2 Each claim is graded from evidence an e2e battery produces against real bwrap, and none grades stronger than that battery shows
 - [x] #3 With no evidence, each grades unenforced (TASK-0001.18's default)
 <!-- AC:END -->
 
