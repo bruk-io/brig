@@ -3,10 +3,11 @@ id: TASK-0031
 title: >-
   A stdio path is opened through a symlink, so a jail can redirect the next
   jail's output into any file the embedder can write
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-03T03:31:00Z'
-updated_date: '2026-11-03T03:40:00Z'
+updated_date: '2026-11-03T03:43:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -58,4 +59,6 @@ tests/e2e/test_cwd_stdio_battery.py:95: AssertionError
 FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_stdio_path_inside_a_writable_root_is_refused
 1 failed, 4 deselected in 0.21s
 ```
+
+Accepted 2026-11-03. Worker's report (Claude): fixed at 55336cd. Measured first: the committed repro (above) ran a jail whose stdout path was a link, inside the writable root, to a file outside it, and the jail's output was appended to that file ('beforeappended'). Fix: domain stdio_refusal refuses any named stdio path (but /dev/null) inside a writable root, raised as PolicyStdioInWritableRoot before anything starts; infra opens every stdio file with O_NOFOLLOW as well. The repro passes now (refused, the target untouched); unit cases cover the refusal; the cwd/stdio battery's own streams moved outside the writable root, as the refusal requires. uv run just done passes.
 <!-- SECTION:NOTES:END -->
