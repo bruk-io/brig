@@ -1,7 +1,7 @@
 ---
 id: TASK-0044
 title: A failed create_bwrap_jail leaves a running jail nothing can destroy
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-11-03T17:47:00Z'
 updated_date: '2026-11-03T18:37:00Z'
