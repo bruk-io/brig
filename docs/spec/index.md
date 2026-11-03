@@ -79,7 +79,10 @@ and the command may replace the link). Each jail type compiles the
 rest its own way: bwrap's `compile_mounts` into one ordered tuple of mounts, from which its argv
 and its `channel_exclusivity` enumeration are both read. `env.py`'s `EnvPolicy` is the
 environment's allow-list. `claims.py` and `grades.py` hold the claims a compile states and the
-one function that grades them from evidence.
+one function that grades them from evidence. A jail's runtime report is the ceiling its compile
+states per claim (`fs_write`, `fs_read`, `network`, `env`, `channel_exclusivity`; `BEST_EFFORT`
+where the host could undo a mount), and an e2e battery holds each ceiling to what it measures
+(decision-0008).
 
 Reserved, not yet built: `facts.py`, `records.py`, `identity.py`, `egress.py`, and a Seatbelt
 jail type beside bwrap's.

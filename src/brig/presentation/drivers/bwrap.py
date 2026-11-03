@@ -406,6 +406,7 @@ def create_bwrap_jail(
         channel_namespace_fd=namespace_fd,
         mounts=mounts,
         placeholders=record,
+        report=bwrap.ceilings(policy, mounts, channels) if mounts else {},
     )
 
 

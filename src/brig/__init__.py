@@ -4,9 +4,13 @@ grades). An e2e battery may import this and `brig.infra` only (decision-0001 rul
 
 from brig.domain.channels import Channel, ChannelDirectory, Reservation, Reservations
 from brig.domain.claims import Claim
-from brig.domain.grades import Evidence, Grade, grade
+from brig.domain.grades import Evidence, Grade, at_most, grade
 from brig.domain.jail_types.bwrap import (
     CHANNEL_EXCLUSIVITY_CLAIM,
+    ENV_CLAIM,
+    FS_READ_CLAIM,
+    FS_WRITE_CLAIM,
+    NETWORK_CLAIM,
     declared_channel_paths,
     writable_shared_paths,
 )
@@ -55,6 +59,10 @@ from brig.presentation.report import render
 
 __all__ = [
     "CHANNEL_EXCLUSIVITY_CLAIM",
+    "ENV_CLAIM",
+    "FS_READ_CLAIM",
+    "FS_WRITE_CLAIM",
+    "NETWORK_CLAIM",
     "Channel",
     "ChannelDirectory",
     "ChannelDirectoryPort",
@@ -93,6 +101,7 @@ __all__ = [
     "Stdio",
     "SupervisorDoneUnknown",
     "WHOLE_HOST_READ_ONLY",
+    "at_most",
     "await_channel_ready",
     "create_bwrap_jail",
     "declared_channel_paths",

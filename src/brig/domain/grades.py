@@ -18,13 +18,23 @@ from brig.domain.claims import Claim
 
 
 class Grade(StrEnum):
-    """What a claim's evidence showed: the only three words a report ever states
-    (rule 11).
-    """
+    """What a claim's evidence showed, the only four words a report ever states (rule 11),
+    strongest first. `BEST_EFFORT`: it holds unless the host itself changes what the jail mounts
+    (decision-0008), as replacing the entry a mask or deny is mounted on does."""
 
     ENFORCED = "ENFORCED"
-    VIOLATED = "VIOLATED"
+    BEST_EFFORT = "BEST_EFFORT"
     UNENFORCED = "UNENFORCED"
+    VIOLATED = "VIOLATED"
+
+
+_STRENGTH = {Grade.VIOLATED: 0, Grade.UNENFORCED: 1, Grade.BEST_EFFORT: 2, Grade.ENFORCED: 3}
+
+
+def at_most(stated: Grade, measured: Grade) -> bool:
+    """Whether `stated` claims no more than `measured` shows: what a battery asserts of a
+    jail's report against the grade its own evidence earns."""
+    return _STRENGTH[stated] <= _STRENGTH[measured]
 
 
 @dataclass(frozen=True)

@@ -21,6 +21,7 @@ from enum import StrEnum
 
 from brig.domain.channels import Reservations
 from brig.domain.claims import Claim
+from brig.domain.grades import Grade
 from brig.domain.plan import Plan
 from brig.domain.policy.paths import FsPolicy, PathKind, within
 
@@ -265,6 +266,58 @@ CHANNEL_EXCLUSIVITY_CLAIM = Claim(
 )
 """What the compile claims about the paths it mounts (old SPEC law 9). A claim, never a grade:
 `domain/grades.py`'s `grade` decides that from evidence a battery measured."""
+
+
+FS_WRITE_CLAIM = Claim(
+    name="fs_write",
+    description=(
+        "the command writes only inside the policy's writable roots and its declared channels, "
+        "and nothing a write deny names"
+    ),
+)
+FS_READ_CLAIM = Claim(
+    name="fs_read",
+    description="the command reads only the policy's roots, and nothing a mask names",
+)
+NETWORK_CLAIM = Claim(
+    name="network",
+    description="the command reaches no network: its own network namespace, with no interface",
+)
+ENV_CLAIM = Claim(
+    name="env",
+    description="the command's environment is exactly what the environment policy allows",
+)
+
+
+def ceilings(
+    policy: FsPolicy, mounts: tuple[Mount, ...], channels: Reservations | None
+) -> dict[Claim, Grade]:
+    """The strongest grade each claim can have for a jail compiled to `mounts` (decision-0008):
+    what this compile states, before any jail runs. An e2e battery holds every one of these to
+    what it measures (`at_most`), so none is stated stronger than the batteries show.
+
+    `fs_write` and `fs_read` are `BEST_EFFORT` while a write deny or a mask is mounted inside a
+    writable root: the mount is on the host's directory entry there, and the host replacing that
+    entry (an editor saving by rename) detaches it in the jail. `channel_exclusivity` is
+    `VIOLATED` when a writable path the jail shares with the host is not a declared channel, as
+    `CHANNEL_EXCLUSIVITY_CLAIM` says (a writable root included).
+    """
+    inside = [
+        mount.target
+        for mount in mounts
+        if mount.kind is MountKind.READ_ONLY
+        and any(mount.target != root and within(mount.target, root) for root in policy.writable)
+    ]
+    denies = any(path in policy.write_denies for path in inside)
+    masks = any(path in policy.masks for path in inside)
+    exclusive = set(writable_shared_paths(mounts)) <= set(declared_channel_paths(channels))
+    return {
+        FS_WRITE_CLAIM: Grade.BEST_EFFORT if denies else Grade.ENFORCED,
+        FS_READ_CLAIM: Grade.BEST_EFFORT if masks else Grade.ENFORCED,
+        NETWORK_CLAIM: Grade.ENFORCED,
+        ENV_CLAIM: Grade.ENFORCED,
+        CHANNEL_EXCLUSIVITY_CLAIM: Grade.ENFORCED if exclusive else Grade.VIOLATED,
+    }
 
 
 def _governing(mounts: tuple[Mount, ...], path: str) -> Mount | None:

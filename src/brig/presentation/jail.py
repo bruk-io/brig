@@ -6,12 +6,14 @@ import functools
 import os
 import secrets
 import signal
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import assert_never
 
+from brig.domain.claims import Claim
 from brig.domain.effects import Process
+from brig.domain.grades import Grade
 from brig.domain.jail_types import bwrap
 from brig.infra import sockets as _sockets
 from brig.infra import state_dir as _state_dir_mod
@@ -276,6 +278,7 @@ class Jail:
     channel_namespace_fd: int | None = None
     mounts: tuple[bwrap.Mount, ...] = ()
     placeholders: Path | None = None
+    report: Mapping[Claim, Grade] = field(default_factory=dict)
 
 
 def close_namespace_fd(fd: int) -> None:
