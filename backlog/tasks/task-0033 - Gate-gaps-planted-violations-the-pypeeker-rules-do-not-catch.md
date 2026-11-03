@@ -1,11 +1,11 @@
 ---
 id: TASK-0033
 title: 'Gate gaps: planted violations the pypeeker rules do not catch'
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T05:06:00Z'
+updated_date: '2026-11-03T05:07:00Z'
 labels:
   - size-3
 dependencies: []
@@ -268,4 +268,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review (reviewer, 2026-11-03): CLOSED. record-check --tier full: uv run just done passed, gates included. The earlier blocker is fixed: tests/e2e/test_report_battery.py no longer writes os.environ (it hands the environment over as data; the only os.environ left is read-only, inside the jailed script's text). No new findings. The two drafts from the last review stay as filed.
 <!-- SECTION:NOTES:END -->
