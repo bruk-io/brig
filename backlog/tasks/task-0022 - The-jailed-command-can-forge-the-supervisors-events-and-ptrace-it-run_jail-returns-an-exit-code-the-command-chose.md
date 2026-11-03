@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:22:00Z'
-updated_date: '2026-11-03T02:44:00Z'
+updated_date: '2026-11-03T02:46:00Z'
 labels:
   - size-5
 dependencies: []
@@ -81,5 +81,41 @@ tests/e2e/test_supervisor_isolation_battery.py:119: AssertionError
 FAILED tests/e2e/test_supervisor_isolation_battery.py::test_a_command_cannot_forge_the_supervisors_done
 FAILED tests/e2e/test_supervisor_isolation_battery.py::test_the_command_holds_no_capability
 2 failed, 1 passed in 0.58s
+```
+
+Check `uv run just done` exited 0
+
+(271 earlier lines omitted)
+```text
+[31m │  × [0mClosed contribution model – community members can't report bugs
+[31m │  × [0mCurrently unlicensed – unsuitable for production use
+[31m │[0m
+[31m │[0m  Our full analysis:
+[31m │[0m
+[31m │[0m  [4mhttps://squidfunk.github.io/mkdocs-material/blog/2026/02/18/mkdocs-2.0/[0m
+[0m
+INFO    -  mkdocs-likec4: No projects discovered, using default root project
+INFO    -  Cleaning site directory
+INFO    -  Building documentation to directory: /home/user/brig/site
+INFO    -  mkdocs-likec4: Generating web component for default project from /home/user/brig/docs
+INFO    -  Documentation built in 5.75 seconds
+
+== architecture validate: PASS ==
+[2m02:46:22.815[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mlayout[22m wasm[0m
+[2m02:46:22.831[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m /home/user/brig/docs/architecture[0m
+[2m02:46:22.872[0m [1m[32mINFO [0m [1m[36mlikec4.server.projects[0m add [32m'architecture'[39m
+[2m02:46:22.873[0m [1m[32mINFO [0m [1m[36mlikec4.server.workspace[0m loaded [33m1[39m projects
+[2m02:46:23.394[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m found 27 source files[0m
+[2m02:46:23.627[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32m✓ Valid[39m[2m (27 files)[22m[0m
+[2m02:46:23.627[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32mvalidate 813ms[39m[0m
+npx -y likec4@1.60.0 validate docs/architecture
+
+== architecture lint: PASS ==
+
+c4lint: 0 error(s), 0 warning(s) across 20 elements, 20 relationships, 5 views
+uv run python3 scripts/c4lint.py docs/architecture
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+
+done: all steps passed
 ```
 <!-- SECTION:NOTES:END -->
