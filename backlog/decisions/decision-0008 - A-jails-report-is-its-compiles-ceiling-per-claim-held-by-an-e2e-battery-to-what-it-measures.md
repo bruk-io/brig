@@ -20,9 +20,11 @@ proves it (rule 11: honest grades).
 1. **The compile states a ceiling per claim** (`bwrap.ceilings`): the strongest grade the jail it
    compiled can have, decided from what it compiled, pure. The `Jail` carries it as `report`.
 2. **A fourth grade, `BEST_EFFORT`**: it holds unless the host itself changes what the jail
-   mounts. `fs_write` and `fs_read` are best-effort while a write deny or a mask is mounted inside
-   a writable root: the mount is on the host's directory entry there, and the host replacing that
-   entry (an editor saving by rename) detaches it in the jail.
+   mounts. `fs_write` and `fs_read` are best-effort while any write deny or mask is mounted: the
+   mount is on the host's directory entry, and the host replacing that entry (an editor saving by
+   rename) can detach it in the jail, wherever it is. Measured both ways (TASK-0021's review: one
+   kernel read the new file through a mask under a read-only root; this CI's kept the mask), so
+   the grade allows for it everywhere.
 3. **Each ceiling is held to evidence**: `tests/e2e/test_report_battery.py` plants each claim's
    violation against a real jail with a positive control beside it, grades it with `grade`, and
    asserts the jail's report is no stronger (`at_most`). It runs in `just done`, so a commit
