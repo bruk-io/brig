@@ -3,7 +3,7 @@ id: TASK-0022
 title: >-
   The jailed command can forge the supervisor's events and ptrace it: run_jail
   returns an exit code the command chose
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:22:00Z'
@@ -283,4 +283,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Re-reviewed (reviewer, 2026-11-03): closed. The finish-moved restatement of the battery criterion is justified: the attach and read-only opens of /proc/1/environ and /proc/1/mem are gated by the same kernel ptrace access check (non-dumpable without CAP_SYS_PTRACE; mem uses the attach mode itself), the label, reason and decision-0006 item 5 are committed, and the review brief itself ruled out attach tooling. #3 met: test_the_command_cannot_read_the_supervisors_environment_or_memory asserts PID 1's environ and mem are refused and the command's own child's are granted (positive control), and the recorded repro with 88c7f82's program.py and bwrap.py shows it failing before the fix. Reviewer ran the battery (4 passed) and uv run just done (passed, recorded). Earlier evidence stands: real supervisor refused as root and uid 1000, run_jail returned 7, never 42. No findings left open.
 <!-- SECTION:NOTES:END -->
