@@ -1,7 +1,7 @@
 ---
-id: DRAFT-0019
+id: TASK-0033
 title: 'Gate gaps: planted violations the pypeeker rules do not catch'
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-02T17:23:00Z'
 labels:
