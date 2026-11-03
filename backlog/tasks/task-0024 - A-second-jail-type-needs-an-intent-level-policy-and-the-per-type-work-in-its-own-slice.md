@@ -4,11 +4,17 @@ title: >-
   A second jail type needs an intent-level policy and the per-type work in its
   own slice
 status: To Do
-assignee: []
+assignee:
+  - '@claude'
 created_date: '2026-11-02T17:23:00Z'
+updated_date: '2026-11-03T03:01:00Z'
 labels:
   - size-8
 dependencies: []
+references:
+  - >-
+    backlog/decisions/decision-0007 -
+    An-embedder-states-an-intent-level-FsPolicy-each-jail-type-compiles-it-bwrap-into-one-ordered-tuple-of-mounts.md
 type: design
 ---
 
@@ -29,3 +35,9 @@ Proposed shape, for the decision: an intent policy (writable roots; read roots o
 <!-- AC:BEGIN -->
 - [ ] #1 Decision recorded: the policy type an embedder writes, how each jail type compiles it, and where per-type orchestration lives
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Accepted 2026-11-03 under the owner's goal for the migration. Decided as decision-0007 (above). Built in two tasks below: the policy and mount compile (done, c4ef292), then the slice move.
+<!-- SECTION:NOTES:END -->
