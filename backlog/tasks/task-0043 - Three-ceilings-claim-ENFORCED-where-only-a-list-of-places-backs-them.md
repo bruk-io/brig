@@ -22,10 +22,10 @@ Architecture review 2026-11-03. (a) fs_write is ENFORCED with a readable root ne
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 fs_write's ceiling is computed from the compiled mounts: any read-only mount beneath a writable one (a deny, a mask, a nested readable root) caps it at BEST_EFFORT; e2e: the host replaces a nested readable root and the jail writes into it, and the ceiling it reported allowed for that
-- [ ] #2 channel_exclusivity is at most BEST_EFFORT whenever the jail sees any host path a socket could sit in beyond its own channel directory (a list of places is not a mechanism); VIOLATED stays for a visible SOCKET_DIRECTORIES entry or a writable shared root; e2e plants a socket outside the listed places and dials it
-- [ ] #3 network is never stronger than channel_exclusivity, since a dialable host socket can carry the network; a unit test pins the ordering
-- [ ] #4 decision-0008 is amended (a dated note) with the rule that ENFORCED needs a kernel mechanism, and a draft names the mechanism that could earn channel_exclusivity and network back (Landlock here is ABI 7: abstract sockets only; a supervisor-held listening fd plus a seccomp filter on socket(AF_UNIX) is the candidate)
+- [x] #1 fs_write's ceiling is computed from the compiled mounts: any read-only mount beneath a writable one (a deny, a mask, a nested readable root) caps it at BEST_EFFORT; e2e: the host replaces a nested readable root and the jail writes into it, and the ceiling it reported allowed for that
+- [x] #2 channel_exclusivity is at most BEST_EFFORT whenever the jail sees any host path a socket could sit in beyond its own channel directory (a list of places is not a mechanism); VIOLATED stays for a visible SOCKET_DIRECTORIES entry or a writable shared root; e2e plants a socket outside the listed places and dials it
+- [x] #3 network is never stronger than channel_exclusivity, since a dialable host socket can carry the network; a unit test pins the ordering
+- [x] #4 decision-0008 is amended (a dated note) with the rule that ENFORCED needs a kernel mechanism, and a draft names the mechanism that could earn channel_exclusivity and network back (Landlock here is ABI 7: abstract sockets only; a supervisor-held listening fd plus a seccomp filter on socket(AF_UNIX) is the candidate)
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -162,4 +162,22 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+## Worker report (2026-11-03)
+
+**What changed** (commits 394ee41 repro, 7babce8 fix; DRAFT filed as 1554398):
+- `ceilings` (src/brig/domain/jail_types/bwrap.py): `fs_write` is read from the compiled mounts (`_beneath_writable`): any mount that is not writable whose nearest mount above is writable (a deny, a mask, a nested readable root, brig's tmpfs over a state directory inside a writable root) makes it BEST_EFFORT; pins (writable over writable) do not count. `channel_exclusivity`: VIOLATED for a writable path shared beyond the declared channels or a visible SOCKET_DIRECTORIES entry (unchanged); otherwise BEST_EFFORT while the jail sees any readable or writable root (`_sees_host_paths`; a file root counts too, since the host can rename a socket over it); ENFORCED only with no root, which `interpreter_refusal` never lets through, so no bwrap jail states it today. `network` is never stronger than `channel_exclusivity`. Claim texts for fs_write, network and channel_exclusivity say this; `Grade`'s docstring widens BEST_EFFORT to "unless the host changes what the jail sees".
+- The repro (tests/e2e/test_ceiling_host_change_battery.py) is AC #1's and #2's e2e: the host renames a nested readable root away and makes a new one and the jail writes into it; a socket under the home directory (outside every listed place) is dialled; and for network, that socket relays the jail's bytes to a host TCP listener. Each holds the report to at most BEST_EFFORT when the host's help got the violation through. It needed the host to wait for the jail's first write before renaming: renaming before bwrap had mounted made bwrap bind the new directory, and the jail could not write (measured).
+- AC #3: `test_network_is_never_stronger_than_channel_exclusivity` in tests/unit/test_report_ceilings.py, over policies that reach all three of ENFORCED, BEST_EFFORT and VIOLATED.
+- AC #4: decision-0008 has a dated note (2026-11-03). The backlog CLI can edit only a decision's status, so the body was edited by hand as earlier amendments were. The draft is "A kernel mechanism to earn channel_exclusivity and network back from best-effort" (type design): Landlock measured ABI 7 here (abstract sockets only); candidate a supervisor-held listening fd per channel plus seccomp on socket(AF_UNIX).
+- Spec: law 1 (ENFORCED needs a kernel mechanism), law 9 (any root leaves channel_exclusivity best-effort), the domain section's ceilings paragraph.
+
+**Batteries held to the new ceilings** (the change itself, not a weakening):
+- tests/e2e/test_report_battery.py, the narrow-policy socket case: the report now says BEST_EFFORT for channel_exclusivity, not ENFORCED. The battery still measures the dial into /tmp blocked there; the claim now also covers sockets no list names, which the new battery dials.
+- tests/unit/test_report_ceilings.py: the default policy's network is VIOLATED (it shows /run and /tmp); the two no-listed-socket-place cases (readable /usr and /etc; / with the socket places masked) are BEST_EFFORT. New cases for nested readable roots, masks inside a writable root, writable over writable, a mask outside writable roots (fs_write stays ENFORCED), and the no-root ENFORCED case.
+- tests/e2e/test_pin_rename_battery.py needed no edit: its at_most check holds with BEST_EFFORT.
+
+**What an embedder sees** (computed with ceilings): a writable project, the system read-only (readable /), credentials masked (~/.ssh, ~/.aws): fs_write ENFORCED, fs_read BEST_EFFORT, network VIOLATED (was ENFORCED), env ENFORCED, channel_exclusivity VIOLATED. The same with a write deny in the project (.git/hooks): fs_write BEST_EFFORT. A narrow system (/usr, /etc, home) with a writable project: the same as the first. A read-only project with a narrow system and no writable root: fs_write ENFORCED, fs_read ENFORCED, network BEST_EFFORT, env ENFORCED, channel_exclusivity BEST_EFFORT. network follows channel_exclusivity literally (AC #3), so a writable shared root alone makes network VIOLATED; a reviewer may prefer to cap network only by the socket half of the rule (VIOLATED for a visible socket place, BEST_EFFORT for any root), which this change does not do.
+
+**Not verified**: the fs_write host rename on another filesystem than ext4 or another kernel than 6.18 (here it moves the mount with the entry, as the review measured); a socket renamed over a file root; any kernel mechanism for the draft.
 <!-- SECTION:NOTES:END -->
