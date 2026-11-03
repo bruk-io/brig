@@ -100,6 +100,22 @@ class StdioInWritableRoot:
 
 
 @dataclass(frozen=True)
+class StdioThroughLink:
+    """A refusal: the stdio path `path` goes through a symbolic link; brig opens stdio files
+    through no link at all, so name the path it leads to (TASK-0034)."""
+
+    path: str
+
+
+@dataclass(frozen=True)
+class StdioHardLinked:
+    """A refusal: the stdio file `path` has another name; appending to it writes to whatever
+    else that name is (TASK-0035)."""
+
+    path: str
+
+
+@dataclass(frozen=True)
 class InterpreterUnreachable:
     """A refusal: `path`, on the way to the interpreter brig runs its supervisor under, is in no
     root of the policy (or under a mask), so the supervisor could not start (TASK-0029)."""
@@ -181,20 +197,28 @@ def stdio_refusal(
     policy: FsPolicy,
     streams: tuple[str | None, ...],
     chains: Mapping[str, tuple[str, ...]] | None = None,
-) -> PathNotAbsolute | StdioInWritableRoot | None:
-    """Why the stdio paths `streams` cannot be used with `policy`, or `None`: each named one must
-    be absolute, and neither it nor any path its lookup passes through (`chains`, from
-    `infra/files.py`'s `link_chain`) may be inside a writable root, since a jail could replace
-    what is there with a link (TASK-0031). `"/dev/null"` is always fine."""
+    links: Mapping[str, int] | None = None,
+) -> PathNotAbsolute | StdioInWritableRoot | StdioThroughLink | StdioHardLinked | None:
+    """Why the stdio paths `streams` cannot be used with `policy`, or `None`. Each named one must
+    be absolute; neither it nor any path its lookup passes through (`chains`, from `link_chain`)
+    may be inside a writable root, since a jail could replace what is there with a link
+    (TASK-0031); it may go through no link at all (TASK-0034); and an existing file must have no
+    other name (`links`, its hard-link count, TASK-0035). `"/dev/null"` is always fine."""
     known = chains or {}
+    counts = links or {}
     for path in streams:
         if path is None or path == "/dev/null":
             continue
         if not _is_normal_absolute(path):
             return PathNotAbsolute(path)
-        for step in known.get(path, (path,)):
+        chain = known.get(path, (path,))
+        for step in chain:
             if any(within(step, root) for root in policy.writable):
                 return StdioInWritableRoot(path)
+        if len(chain) > 1:
+            return StdioThroughLink(path)
+        if counts.get(path, 1) > 1:
+            return StdioHardLinked(path)
     return None
 
 

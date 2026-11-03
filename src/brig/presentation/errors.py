@@ -62,6 +62,30 @@ class PolicyStdioInWritableRoot(Exception):
         self.path = path
 
 
+class PolicyStdioThroughLink(Exception):
+    """Raised when a stdio path goes through a symbolic link: brig opens stdio files through no
+    link at all, so a link swapped in by a jail cannot redirect them (TASK-0034)."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"stdio path {path!r} goes through a symbolic link -- name the path it leads to "
+            "(os.path.realpath) instead"
+        )
+        self.path = path
+
+
+class PolicyStdioHardLinked(Exception):
+    """Raised when an existing stdio file has another name (a hard link): appending to it would
+    write to that other file too (TASK-0035)."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"stdio file {path!r} has another name (a hard link) -- remove it, or name a fresh "
+            "path brig creates"
+        )
+        self.path = path
+
+
 class PolicyInterpreterUnreachable(Exception):
     """Raised when the policy does not mount the interpreter brig runs its supervisor under
     (this process's own), or a link on the way to it: the supervisor could not start

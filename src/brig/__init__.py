@@ -40,7 +40,9 @@ from brig.presentation.errors import (
     PolicyPathNotAbsolute,
     PolicyPathThroughLink,
     PolicyRootAbsent,
+    PolicyStdioHardLinked,
     PolicyStdioInWritableRoot,
+    PolicyStdioThroughLink,
     StateDirectoryInvalid,
 )
 from brig.presentation.jail import Jail
@@ -93,7 +95,9 @@ __all__ = [
     "PolicyPathNotAbsolute",
     "PolicyPathThroughLink",
     "PolicyRootAbsent",
+    "PolicyStdioHardLinked",
     "PolicyStdioInWritableRoot",
+    "PolicyStdioThroughLink",
     "ProcessUnknown",
     "Reservation",
     "Reservations",

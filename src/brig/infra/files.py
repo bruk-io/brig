@@ -46,3 +46,12 @@ def link_chain(path: str) -> tuple[str, ...]:
         else:
             return tuple(dict.fromkeys(chain))
     return tuple(dict.fromkeys(chain))
+
+
+def link_count(path: str) -> int:
+    """How many names `path`'s file has (`st_nlink`, not following a link at `path`); 1 when
+    nothing is there."""
+    try:
+        return os.lstat(path).st_nlink
+    except OSError:
+        return 1

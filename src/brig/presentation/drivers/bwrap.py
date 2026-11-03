@@ -27,7 +27,9 @@ from brig.domain.policy.paths import (
     PathKind,
     PathNotAbsolute,
     RootAbsent,
+    StdioHardLinked,
     StdioInWritableRoot,
+    StdioThroughLink,
     ThroughLink,
     cwd_refusal,
     interpreter_refusal,
@@ -51,7 +53,9 @@ from brig.presentation.errors import (
     PolicyPathNotAbsolute,
     PolicyPathThroughLink,
     PolicyRootAbsent,
+    PolicyStdioHardLinked,
     PolicyStdioInWritableRoot,
+    PolicyStdioThroughLink,
 )
 from brig.presentation.jail import (
     CHANNEL_DIRECTORIES,
@@ -147,6 +151,8 @@ def _supervisors_for(
             root.
         PolicyCwdOutsideRoots: `cwd` is in no root of the policy.
         PolicyStdioInWritableRoot: a stdio path is inside a writable root.
+        PolicyStdioThroughLink: a stdio path goes through a symbolic link.
+        PolicyStdioHardLinked: an existing stdio file has another name.
         PolicyInterpreterUnreachable: the policy does not mount the interpreter the supervisor
             runs under, or a link on the way to it.
     """
@@ -192,11 +198,16 @@ def _supervisors_for(
     streams = (stdio.stdin, stdio.stdout, stdio.stderr)
     named = tuple(path for path in streams if path is not None and path != "/dev/null")
     chains = {path: _files.link_chain(path) for path in named}
-    match stdio_refusal(policy, streams, chains):
+    counts = {path: _files.link_count(path) for path in named}
+    match stdio_refusal(policy, streams, chains, counts):
         case PathNotAbsolute(path=path):
             raise PolicyPathNotAbsolute(path)
         case StdioInWritableRoot(path=path):
             raise PolicyStdioInWritableRoot(path)
+        case StdioThroughLink(path=path):
+            raise PolicyStdioThroughLink(path)
+        case StdioHardLinked(path=path):
+            raise PolicyStdioHardLinked(path)
         case None:
             pass
         case _ as unreachable:
@@ -378,7 +389,7 @@ def create_bwrap_jail(
         process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
         if record is not None:
             try:
-                _placeholders.attach(record, process.pid)
+                _placeholders.attach(state_dir, record, process.pid)
             except OSError as error:
                 raise PlaceholdersFailed(absent) from error
         if channel_directory is not None:

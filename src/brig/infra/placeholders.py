@@ -3,7 +3,8 @@ removal once no jail mounts over them (TASK-0027). Plain data in and out.
 
 bwrap creates a missing mountpoint on the writable source beneath it, and removing one while
 another jail mounts over it detaches that jail's mount. So each jail records, under brig's state
-directory, the paths it holds and the directories it made (each by its `(st_dev, st_ino)`), and
+directory, the paths it holds and the directories it made (each by its `(st_dev, st_ino)` and
+an extended attribute brig sets on it, since a recreated directory can reuse the inode), and
 who holds them: the embedder process and, once it starts, the jail's bwrap, each by pid and start
 time, so a recycled pid is not taken for the jail. Under one per-user lock, a jail's teardown
 removes its record and every dead jail's, and removes a directory one of them made only when no
@@ -34,6 +35,7 @@ class _Made:
     path: str
     device: int
     inode: int
+    marked: bool
 
 
 @dataclass(frozen=True)
@@ -44,14 +46,38 @@ class _Record:
     made: tuple[_Made, ...]
 
 
+_MARK = "user.brig.placeholder"
+"""The extended attribute brig sets on a placeholder it made, naming the record that made it: what
+tells brig's directory from one the embedder made in its place, which may have the same inode."""
+
+
 def _start_time(pid: int) -> str | None:
-    """`pid`'s start time in clock ticks since boot (`/proc/<pid>/stat` field 22), or `None`."""
+    """`pid`'s start time in clock ticks since boot (`/proc/<pid>/stat` field 22), or `None` once
+    it has exited: a zombie (state Z) or a dead process (X) holds no mount, so it counts as gone."""
     try:
         with open(f"/proc/{pid}/stat") as handle:
             stat = handle.read()
     except OSError:
         return None
-    return stat.rsplit(")", 1)[1].split()[19]
+    fields = stat.rsplit(")", 1)[1].split()
+    return None if fields[0] in {"Z", "X"} else fields[19]
+
+
+def _marked(directory: Path, jail_id: str) -> bool:
+    """Mark `directory` as brig's (`_MARK`) and say whether that worked: a filesystem without user
+    extended attributes leaves it to the inode alone, which the record says."""
+    try:
+        os.setxattr(directory, _MARK, jail_id.encode(), follow_symlinks=False)
+    except OSError:
+        return False
+    return True
+
+
+def _write(path: Path, record: _Record) -> None:
+    """Replace `path` with `record` whole: a reader sees the old record or the new, never half."""
+    partial = path.with_name(path.name + ".partial")
+    partial.write_text(_encode(record))
+    os.replace(partial, path)
 
 
 def _holder(pid: int) -> _Holder | None:
@@ -75,7 +101,7 @@ def _encode(record: _Record) -> str:
             "embedder": holder(record.embedder),
             "jail": holder(record.jail),
             "holds": list(record.holds),
-            "made": [[m.path, m.device, m.inode] for m in record.made],
+            "made": [[m.path, m.device, m.inode, m.marked] for m in record.made],
         }
     )
 
@@ -91,7 +117,7 @@ def _decode(text: str) -> _Record | None:
             embedder=holders[0],
             jail=holders[1],
             holds=tuple(str(path) for path in raw["holds"]),
-            made=tuple(_Made(str(p), int(d), int(i)) for p, d, i in raw["made"]),
+            made=tuple(_Made(str(p), int(d), int(i), bool(m)) for p, d, i, m in raw["made"]),
         )
     except ValueError, KeyError, TypeError, IndexError:
         return None
@@ -151,24 +177,26 @@ def hold(state_dir: Path, jail_id: str, paths: tuple[str, ...]) -> Path:
                 for directory in reversed(missing):
                     directory.mkdir(mode=0o755)
                     info = directory.lstat()
-                    made.append(_Made(str(directory), info.st_dev, info.st_ino))
+                    made.append(
+                        _Made(str(directory), info.st_dev, info.st_ino, _marked(directory, jail_id))
+                    )
             record = records / f"{jail_id}.json"
             entry = _Record(_holder(os.getpid()), None, tuple(holds), tuple(made))
-            record.write_text(_encode(entry))
+            _write(record, entry)
         except OSError:
             _remove(tuple(made), held=frozenset())
             raise
         return record
 
 
-def attach(record: Path, jail_pid: int) -> None:
+def attach(state_dir: Path, record: Path, jail_pid: int) -> None:
     """Note in `record` that its jail's bwrap is `jail_pid`, which from now on says whether the
-    jail is alive. An `OSError` rewriting it propagates.
+    jail is alive; under the lock, replaced whole. An `OSError` rewriting it propagates.
     """
-    entry = _read(record)
-    if entry is not None:
-        entry = _Record(entry.embedder, _holder(jail_pid), entry.holds, entry.made)
-        record.write_text(_encode(entry))
+    with _locked(state_dir):
+        entry = _read(record)
+        if entry is not None:
+            _write(record, _Record(entry.embedder, _holder(jail_pid), entry.holds, entry.made))
 
 
 def release(state_dir: Path, record: Path) -> None:
@@ -190,13 +218,11 @@ def release(state_dir: Path, record: Path) -> None:
         for path, entry in done:
             kept = _remove(entry.made, frozenset(held))
             if kept and path != record:
-                path.write_text(_encode(_Record(entry.embedder, entry.jail, (), kept)))
+                _write(path, _Record(entry.embedder, entry.jail, (), kept))
             elif kept:
                 # Ours, but a live jail still mounts over some of it: hand it to a record no
                 # process holds, so the next release after that jail's removes it.
-                (records / f"{path.stem}.left.json").write_text(
-                    _encode(_Record(None, None, (), kept))
-                )
+                _write(records / f"{path.stem}.left.json", _Record(None, None, (), kept))
                 path.unlink(missing_ok=True)
             else:
                 path.unlink(missing_ok=True)
@@ -213,7 +239,8 @@ def _remove(made: tuple[_Made, ...], held: frozenset[str]) -> tuple[_Made, ...]:
             continue
         try:
             info = os.lstat(dead.path)
-            if (info.st_dev, info.st_ino) == (dead.device, dead.inode):
+            same = (info.st_dev, info.st_ino) == (dead.device, dead.inode)
+            if same and (not dead.marked or os.getxattr(dead.path, _MARK, follow_symlinks=False)):
                 os.rmdir(dead.path)
         except OSError:
             continue

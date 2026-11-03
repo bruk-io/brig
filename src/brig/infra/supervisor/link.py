@@ -276,8 +276,12 @@ _NO_STDIO: Stdio = (None, None, None)
 def _open_through_no_link(path: str, flags: int) -> int:
     """Open `path` with `flags` one component at a time, following no symbolic link anywhere on
     the way (TASK-0031): a link in a parent swapped in after the policy was checked fails the open
-    (`ELOOP`/`ENOTDIR`) instead of carrying it somewhere else. An `OSError` (a component missing,
-    a link, or the file unopenable) propagates.
+    (`ELOOP`/`ENOTDIR`) instead of carrying it somewhere else, and a file with another name (a
+    hard link) is refused once opened (TASK-0035).
+
+    Raises:
+        OSError: a component is missing or a link, the file cannot be opened, or it has another
+            name.
     """
     if path == "/dev/null":
         return os.open(path, flags | os.O_CLOEXEC)
@@ -289,9 +293,13 @@ def _open_through_no_link(path: str, flags: int) -> int:
             following = os.open(part, walk, dir_fd=current)
             os.close(current)
             current = following
-        return os.open(parts[-1], flags | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=current)
+        opened = os.open(parts[-1], flags | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=current)
     finally:
         os.close(current)
+    if os.fstat(opened).st_nlink > 1:
+        os.close(opened)
+        raise OSError(f"{path} has another name (a hard link); refusing to write through it")
+    return opened
 
 
 def _open_stdio(stdio: Stdio) -> dict[int, int]:
