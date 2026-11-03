@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T03:45:00Z'
+updated_date: '2026-11-03T03:46:00Z'
 labels:
   - size-2
 dependencies: []
@@ -22,7 +22,7 @@ Found by an architecture review, 2026-11-02, at 739dd94. The supervisor runs und
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 create refuses, before bwrap runs, a policy under which the supervisor's interpreter or a link on the way to it is not reachable, with a typed error naming the path
+- [x] #1 create refuses, before bwrap runs, a policy under which the supervisor's interpreter or a link on the way to it is not reachable, with a typed error naming the path
 <!-- AC:END -->
 
 ## Implementation Notes
