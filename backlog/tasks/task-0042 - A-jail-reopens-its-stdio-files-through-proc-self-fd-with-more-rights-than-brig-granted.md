@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T18:15:00Z'
+updated_date: '2026-11-03T18:17:00Z'
 labels:
   - brig
   - stdio
@@ -24,10 +24,10 @@ Architecture review 2026-11-03 (demonstrated in real bwrap 0.9.0): a jail with n
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 No jail is handed an fd on a host inode for stdio: a PATH or INHERIT stdio reaches the jail as a pipe the host pumps to and from the file (or the embedder's own stream), so reopening /proc/self/fd/N reaches only the pipe
-- [ ] #2 An e2e battery reopens each stdio fd through /proc/self/fd with a wider mode (truncate stdin's file, read the append-only stdout file) and fails if the host file changes or is read; recorded failing before the fix
-- [ ] #3 Pumping ends with the jail: destroy_jail drains and closes the pumps, and a jail that never reads stdin or floods stdout cannot block the host past destroy (law 7)
-- [ ] #4 The spec counts stdio among the media law 9 names, and channel_exclusivity's claim text says what stdio carries
+- [x] #1 No jail is handed an fd on a host inode for stdio: a PATH or INHERIT stdio reaches the jail as a pipe the host pumps to and from the file (or the embedder's own stream), so reopening /proc/self/fd/N reaches only the pipe
+- [x] #2 An e2e battery reopens each stdio fd through /proc/self/fd with a wider mode (truncate stdin's file, read the append-only stdout file) and fails if the host file changes or is read; recorded failing before the fix
+- [x] #3 Pumping ends with the jail: destroy_jail drains and closes the pumps, and a jail that never reads stdin or floods stdout cannot block the host past destroy (law 7)
+- [x] #4 The spec counts stdio among the media law 9 names, and channel_exclusivity's claim text says what stdio carries
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -164,4 +164,21 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+## Worker report (2026-11-03)
+
+**What changed** (commits 52685e6 repro, 492ab7d fix):
+- New src/brig/infra/supervisor/pumps.py: `Pumps`, one daemon thread per jail moving bytes along three `Flow`s with `poll`. link.py's `_start` now makes a pipe per stream (`_plumb`) and hands the supervisor only the pipes' jail ends as fd 0, 1 and 2 (the inherited-fd allow-list past the wire is now empty); the host's end of each is the file opened through no link as before, or a `dup` of the embedder's own fd for INHERIT (`/dev/null` if that fd is closed). No jail is handed an fd on a host inode, for PATH, `/dev/null` or INHERIT.
+- Who pumps: the host's end of the supervisor (`link.Supervisor`, which LiveSupervisor starts and closes), since it already owns the jail's process lifetime: `Supervisor.close()` runs when `run_jail` sees `done` and from `destroy_jail` after the kill ladder, and it finishes the pumps. It needs a thread: an embedder is not inside `run_jail` while it talks to a channel, and a command writing more than a pipe holds would block until it was. infra does the I/O; the domain has no new decision (every stream is a pipe, unconditionally), so `Stdio` only changed its docstring.
+- Law 7: the jail's ends are non-blocking and the thread writes only what poll says fits (`PIPE_BUF` per write), so it never blocks on the jail. `finish` stops feeding stdin, pumps the command's output to end of file for at most 2 s (`_DRAIN_S`; normally milliseconds, since the jail is gone by then), then stops and closes every flow. A sink that fails ends stdin's flow, and makes an output flow discard rather than stop reading, so the command never blocks on a full pipe. SIGPIPE is blocked in the pump thread. Writes go through `open(fd, 'wb', closefd=False)` file objects, which brig-one-writer requires (it refuses a raw os.write).
+- tests/e2e/test_stdio_reopen_battery.py is AC #2's battery (PATH and INHERIT). tests/e2e/test_stdio_pumps_battery.py holds AC #3: 8 MB of stdin a command never reads, a flood into a stdout file, a flood into an embedder's stdout pipe nobody reads (destroy took about 2 s, the drain bound), each `destroy_jail` under 8 s and no host fd left open; and that output is all in the files when `run_jail` returns.
+- Spec: law 9 counts stdio among the shared media and says why pipes; law 7 names the pumps and the new battery; the infra section describes pumps.py; the domain section says the command always gets pipes. The channel_exclusivity claim text says stdio carries only the bytes the embedder sends and the command writes. C4: supervisor-link names pumps.py.
+
+**Behaviour an embedder will see**:
+- The command's fd 0, 1 and 2 are pipes: `isatty` is false even with INHERIT on a terminal, so a command that colours or pages on a tty stops doing so; a terminal never reaches a jail through its stdio. tests/e2e/test_tiocsti_battery.py's real-jail case now skips for that reason (ENOTTY before TIOCSTI is tried); its skip message says so, and the --new-session differential still runs.
+- INHERIT stdin: the pump reads the embedder's fd 0 ahead of the command by up to one read (64 KiB) plus the pipe's capacity, and bytes read but never consumed are not given back when the jail ends.
+- `run_jail` returns once the output is pumped (normally at once). A `destroy_jail` whose output cannot be written on (the embedder's own stdout a pipe nobody reads) takes up to about 2.5 s more and leaves the rest unwritten.
+- Grades: unchanged by this task. For the typical policy (a writable project, readable /, credentials masked) the report is fs_write ENFORCED, fs_read BEST_EFFORT, network VIOLATED, env ENFORCED, channel_exclusivity VIOLATED (TASK-0043's ceilings); before this task that report overstated fs_write, fs_read and channel_exclusivity whenever a stdio path was given, which is what is closed.
+
+**Not verified**: a terminal or a stopped terminal as the embedder's stdout (only pipes and files were measured); behaviour under an embedder that sets SIGPIPE to its default (reasoned from the per-thread mask, not measured); macOS (no Seatbelt slice yet; pumps.py uses poll and pthread_sigmask, both available there).
 <!-- SECTION:NOTES:END -->
