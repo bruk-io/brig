@@ -115,7 +115,8 @@ Each jail type's own presentation is its slice (decision-0007 item 5):
 script, starts the jail through the driver and holds its PID namespace for readiness, and exports
 `create_bwrap_jail`. What every jail type shares is beside it: `src/brig/presentation/jail.py`
 (the `Jail`, brig's state directory, and the real ports' default wiring onto infra) and
-`src/brig/presentation/api.py` (reserving channels, readiness, waiting, teardown).
+`src/brig/presentation/api.py` (reserving channels, readiness, waiting, interrupting the command
+with `SIGINT` through its supervisor, teardown).
 `src/brig/__init__.py` re-exports exactly this layer's surface and the domain's plain data, nothing
 from infra directly. `src/brig/presentation/errors.py` is where every raise an embedder can see is named: one
 exception per failure, so an embedder handles brig's own types and never infra's.

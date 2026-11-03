@@ -15,6 +15,7 @@ from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, FsPolicy
 from brig.presentation.api import (
     await_channel_ready,
     destroy_jail,
+    interrupt_jail,
     reserve_channels,
     run_jail,
 )
@@ -87,6 +88,7 @@ __all__ = [
     "declared_channel_paths",
     "destroy_jail",
     "grade",
+    "interrupt_jail",
     "render",
     "reserve_channels",
     "run_jail",

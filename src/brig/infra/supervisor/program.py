@@ -235,8 +235,9 @@ def _forward_signal(child_pid: int, sig: int, frame: FrameType | None) -> None:
     `pid_namespaces(7)`) -- without a handler installed here, decision-0002's
     teardown ladder's TERM rung would reach this process and do nothing, and
     only the later KILL rung (which no process can ignore) would ever act.
-    Installed for `SIGTERM` only; `SignalGroup`'s `KILL` already bypasses
-    this process entirely; see `_main`.
+    Installed for `SIGTERM` (teardown's TERM rung) and `SIGINT` (an embedder
+    interrupting the command, TASK-0020); `SignalGroup`'s `KILL` already
+    bypasses this process entirely; see `_main`.
     """
     del frame
     try:
@@ -300,7 +301,8 @@ def _main() -> None:
     # Nothing here has a further use for it.
     os.close(_REQUEST_FD)
     _emit({"kind": "started", "pid": child_pid})
-    signal.signal(signal.SIGTERM, lambda sig, frame: _forward_signal(child_pid, sig, frame))
+    for forwarded in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(forwarded, lambda sig, frame: _forward_signal(child_pid, sig, frame))
     exit_code = _reap_until_gone(child_pid)
     _emit({"kind": "done", "exit_code": exit_code})
 

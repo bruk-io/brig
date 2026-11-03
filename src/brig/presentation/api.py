@@ -2,6 +2,7 @@
 the command's exit, tear the jail down (decision-0001). Creating a jail is each jail type's own
 (`presentation/drivers/<type>.py`)."""
 
+import signal
 import time
 from typing import assert_never
 
@@ -15,6 +16,7 @@ from brig.domain.channels import (
 )
 from brig.domain.channels import ChannelRefused as _ChannelNameRefused
 from brig.domain.effects import ExitCodeUnknown, GroupState
+from brig.infra import sockets as _sockets
 from brig.presentation.driver import run
 from brig.presentation.errors import (
     ChannelNameRefused,
@@ -309,3 +311,14 @@ def destroy_jail(
         close_namespace_fd(jail.channel_namespace_fd)
     if state is not GroupState.GONE:
         raise JailTeardownFailed(jail.process)
+
+
+def interrupt_jail(jail: Jail) -> bool:
+    """Interrupt `jail`'s command: send `SIGINT` to its supervisor, which forwards it to the
+    command (TASK-0020), and say whether it was sent. `False`, never a raise, when the jail's
+    command has already finished: there is nothing left to interrupt.
+
+    The command decides what an interrupt means (a Python program sees `KeyboardInterrupt` and
+    may carry on); the jail keeps running either way, and `destroy_jail` still tears it down.
+    """
+    return _sockets.signal_jail_pid1(jail.process.pid, signal.SIGINT)

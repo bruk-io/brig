@@ -19,6 +19,7 @@ probe's own code, and decision-0005 item 1 states what each step is for.
 import errno
 import os
 import shutil
+import signal
 import socket
 import stat
 import struct
@@ -257,6 +258,38 @@ def jail_pid1_namespace(
         if remaining <= 0:
             return JailPid1NotFound()
         time.sleep(min(_POLL_INTERVAL_S, remaining))
+
+
+def signal_jail_pid1(bwrap_pid: int, sig: int, proc_root: str = "/proc") -> bool:
+    """Send `sig` to the jail's PID 1 (its supervisor), found under `bwrap_pid` as
+    `jail_pid1_namespace` finds it, and say whether it was sent.
+
+    Through a pidfd, opened first and the candidate checked again after it (its parent still
+    `bwrap_pid`, its innermost pid still 1), so a pid recycled between the scan and the signal
+    is never signalled. `False` when no PID 1 is there, or it is a zombie, or it has no child
+    left: the jail's command has finished, or never started.
+    """
+    for child in _children(bwrap_pid, proc_root):
+        try:
+            pidfd = os.pidfd_open(child)
+        except OSError:
+            continue
+        try:
+            with open(f"{proc_root}/{child}/status") as handle:
+                fields = dict(line.split(":", 1) for line in handle if ":" in line)
+            if fields.get("PPid", "").strip() != str(bwrap_pid):
+                continue
+            if fields.get("NSpid", "").split()[-1:] != ["1"]:
+                continue
+            if fields.get("State", "").split()[:1] == ["Z"] or not _children(child, proc_root):
+                return False  # the supervisor is exiting, or its command already has
+            signal.pidfd_send_signal(pidfd, sig)
+            return True
+        except OSError:
+            continue
+        finally:
+            os.close(pidfd)
+    return False
 
 
 def channel_ready(
