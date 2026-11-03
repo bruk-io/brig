@@ -31,4 +31,6 @@ Accepted 2026-11-03. Half fixed at fe3f40d: tests/integration/test_policy_refusa
 Review 2026-11-03 (reviewer): not closed. AC#2 met and ticked: test_policy_refusal uses FakeChannelDirectories(fail_create=True), and no method is replaced. AC#1 not met: tests/e2e/test_supervisor_assemble.py:120 still builds fake_sys, a SimpleNamespace double, in e2e. To close it, the preamble's version refusal must take the version as data so that a unit test drives it, or the test must move to integration. Either way the infra assembly changes, which needs the decision the worker's note asks for.
 
 Worker, 2026-11-03: the remaining half fixed at 384024f without a design change: the host has a real Python older than 3.15 (/usr/bin/python3, 3.13), so the test runs the real assembled file under it (skips where none exists) and asserts stderr == refusal_message(installed) + newline and exit 1; the faked-sys tests and their helper are gone; the not-firing case is the real journey test under 3.15. No SimpleNamespace or double remains in tests/e2e. uv run just done passes.
+
+No repro: the defect was a test double sitting in e2e, against decision-0001 rule 5. No test fails on it, and the gate cannot see a double that is not named as one (this task's own description).
 <!-- SECTION:NOTES:END -->
