@@ -1,7 +1,7 @@
 ---
 id: TASK-0043
 title: Three ceilings claim ENFORCED where only a list of places backs them
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-03T17:47:00Z'
@@ -355,4 +355,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review (reviewer, 2026-11-03): closed. record-check --tier full passed. ceilings: fs_write from compiled mounts (_beneath_writable), network = _socket_reach only (writable shared root does not lower it), channel_exclusivity BEST_EFFORT for any root, VIOLATED for a socket place or unshared writable root; no bwrap jail can state channel_exclusivity or network ENFORCED while a root is visible. decision-0008's 2026-11-03 note matches the code, including the network revision. Battery changes each follow the new rule: report_battery still measures the /tmp dial blocked under the narrow policy and now expects BEST_EFFORT; unit expectations moved to VIOLATED/BEST_EFFORT exactly where the rule says, with new cases for each fs_write and network branch. No findings.
 <!-- SECTION:NOTES:END -->
