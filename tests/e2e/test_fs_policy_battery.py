@@ -50,6 +50,8 @@ import pytest
 from brig import (
     WHOLE_HOST_READ_ONLY,
     FsPolicy,
+    PolicyPathThroughLink,
+    PolicyRootAbsent,
     create_bwrap_jail,
     destroy_jail,
     run_jail,
@@ -499,6 +501,7 @@ def test_an_absent_write_deny_under_a_writable_root_cannot_be_created() -> None:
         policy = FsPolicy(readable=("/",), writable=(root,), write_denies=(str(envrc),))
         assert _run_write(policy, envrc) != 0
         assert not envrc.is_file()
+        assert _run_write(policy, Path(root) / "beside.txt") == 0  # control: the jail runs
 
 
 @pytest.mark.skipif(
@@ -532,3 +535,54 @@ def _run_write(policy: FsPolicy, target: Path) -> int:
     exit_code = run_jail(jail)
     destroy_jail(jail)
     return exit_code
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bwrap is not available; test skips on macOS, runs in CI on Linux",
+)
+def test_a_deny_reached_through_a_link_inside_a_writable_root_is_refused() -> None:
+    """TASK-0025: a mount onto a symlink lands on its target, and the link itself stays an entry
+    the command may replace, so a deny at a linked path would hold nothing. Refused before
+    anything starts, naming the path."""
+    with _fresh_tmp_dir() as root:
+        (Path(root) / "real").mkdir()
+        (Path(root) / "hooks").symlink_to("real")
+        policy = FsPolicy(readable=("/",), writable=(root,), write_denies=(f"{root}/hooks",))
+        with pytest.raises(PolicyPathThroughLink) as refused:
+            create_bwrap_jail((sys.executable, "-c", "pass"), policy=policy)
+        assert refused.value.path == f"{root}/hooks"
+        assert (Path(root) / "hooks").is_symlink()
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bwrap is not available; test skips on macOS, runs in CI on Linux",
+)
+def test_an_absent_entry_under_a_read_only_root_inside_a_writable_one_needs_no_mount() -> None:
+    """TASK-0026: the command cannot create the absent entry there (its parent is read-only), so
+    it needs no mount, and bwrap could not make one on a read-only bind: the jail starts."""
+    with _fresh_tmp_dir() as root:
+        (Path(root) / "ro").mkdir()
+        policy = FsPolicy(
+            readable=("/", f"{root}/ro"),
+            writable=(root,),
+            write_denies=(f"{root}/ro/absent",),
+        )
+        assert _run_write(policy, Path(root) / "beside.txt") == 0
+        assert not (Path(root) / "ro" / "absent").exists()
+
+
+@pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bwrap is not available; test skips on macOS, runs in CI on Linux",
+)
+def test_a_root_absent_on_the_host_is_refused() -> None:
+    """TASK-0026: a root must exist to be mounted; refused before anything starts, naming it."""
+    with _fresh_tmp_dir() as root:
+        missing = f"{root}/not-there"
+        with pytest.raises(PolicyRootAbsent) as refused:
+            create_bwrap_jail(
+                (sys.executable, "-c", "pass"), policy=FsPolicy(readable=("/", missing))
+            )
+        assert refused.value.path == missing
