@@ -1,7 +1,7 @@
 ---
 id: TASK-0044
 title: A failed create_bwrap_jail leaves a running jail nothing can destroy
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-03T17:47:00Z'
 updated_date: '2026-11-03T18:57:00Z'
@@ -225,4 +225,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Reviewer, 2026-11-03: closed. Full check (record-check --tier full) passed. One dismantle in presentation/jail.py serves destroy_jail and create_bwrap_jail's failure path; placeholders are released only when destroy reports GONE; JailTeardownFailed (cause the step's error) is raised only when a started process survives teardown, which is right since the embedder holds no Jail. PlaceholderPort is a Protocol faked structurally (FakePlaceholders), no patches; not re-exported, consistent with ProcessPort/SupervisorPort. Findings, none filed: (low) dismantle documents 'raises nothing' but an OSError from run(operations.destroy) or supervisors.close would escape and mask the step's error; (low) a failure inside run(operations.create) after the bwrap process spawned leaves process None, so dismantle skips the ladder - pre-existing, outside this task's criteria; (info) the worker's own note of untranslated OSErrors before the start (_supervisor_path, ensure_empty).
 <!-- SECTION:NOTES:END -->
