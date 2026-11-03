@@ -58,7 +58,7 @@ brig.destroy_jail(jail)
 <!-- AC:BEGIN -->
 - [x] #1 Decision recorded on how the supervisor is kept out of the supervised command's reach (which fix, and what it leaves)
 - [x] #2 program.py's docstring states what authenticates the exit code, and it is true
-- [ ] #3 An e2e battery plants the forgery (a write onto the supervisor's events pipe through /proc/1/fd) and opens the supervisor's /proc/1/environ and /proc/1/mem from the command (the kernel's ptrace access check, the one a ptrace attach makes), and fails if run_jail returns the forged exit code or either open succeeds, with positive controls against a process of the command's own
+- [x] #3 An e2e battery plants the forgery (a write onto the supervisor's events pipe through /proc/1/fd) and opens the supervisor's /proc/1/environ and /proc/1/mem from the command (the kernel's ptrace access check, the one a ptrace attach makes), and fails if run_jail returns the forged exit code or either open succeeds, with positive controls against a process of the command's own
 <!-- AC:END -->
 
 ## Implementation Notes
