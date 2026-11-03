@@ -3,10 +3,10 @@ id: TASK-0046
 title: >-
   Errors that still escape create_bwrap_jail untranslated, and a dismantle that
   can mask the step's error
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-03T18:58:00Z'
-updated_date: '2026-11-03T19:22:00Z'
+updated_date: '2026-11-03T19:23:00Z'
 labels:
   - brig
   - errors
@@ -247,4 +247,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Reviewer, 2026-11-03: closed. Full check (record-check --tier full) exit 0, nothing reformatted. e2e tests/e2e/test_supervisor_link_spawned_then_failed.py passes in real /usr/bin/bwrap; repro and type tests pass. Repro fake change: at e14be84 FakeSupervisors(fail_after_start=True) raised OSError after recording a spawn, which is what the real link did then (it waited on the child and raised SupervisorSpawnError with nothing handed back); the recorded failure is signalled == [], i.e. the spawned process was never torn down. That is the bug. The fix changed the port contract, and the fake follows it. The real port's half is held by the e2e test. Accepted. Edge 1 in child Pythons: real host failures (ENOTDIR, a non-empty empty dir, EFBIG under RLIMIT_FSIZE) against real brig code with fake ports, isolated because resolved_state_dir is cached per process. That is real evidence, stronger than a fake. API: StateDirectoryWriteFailed is in presentation/errors.py; Process is domain plain data, which __init__ may re-export (decision-0001 layout, like ExitCodeUnknown); JailSpawnFailed.process is optional. destroy_jail's JailTeardownFailed in place of a bare OSError is stated in its docstring, JailTeardownFailed's docstring and the spec section 7. Minor, not filed: no changelog exists to note the destroy_jail change; KeyboardInterrupt between spawn and the end of link._start is still not handed back (the worker noted it). Filed DRAFT-0030 for files.facts/link_chain bare OSErrors and assembled_source read misreported as StateDirectoryWriteFailed.
 <!-- SECTION:NOTES:END -->
