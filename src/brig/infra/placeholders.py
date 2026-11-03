@@ -9,9 +9,11 @@ who holds them: the embedder process and, once it starts, the jail's bwrap, each
 time, so a recycled pid is not taken for the jail. Under one per-user lock, a jail's teardown
 removes its record and every dead jail's, and removes a directory one of them made only when no
 live record holds a path at or beneath it, it is still the directory that was made, and it is
-empty.
+empty. It sweeps them all together, deepest first, so what is removed does not depend on the order
+the records are read in, and keeps in a record each it could not remove yet, for a later sweep.
 """
 
+import errno
 import fcntl
 import json
 import os
@@ -201,47 +203,74 @@ def attach(state_dir: Path, record: Path, jail_pid: int) -> None:
 
 def release(state_dir: Path, record: Path) -> None:
     """Remove `record` and every dead jail's record, and each directory one of them made that no
-    live jail holds, is still the directory that was made, and is empty, deepest first. An
-    `OSError` opening the lock or the records directory propagates.
+    live jail holds, is still the directory that was made, and is empty: all of them together,
+    deepest first, so a directory one record made inside another's goes before it whichever record
+    is read first. One that cannot be removed for a reason other than being gone or replaced (not
+    empty yet, say) stays in a record no process holds, so a later release tries it again. An
+    `OSError` opening the lock or the records directory, or writing that record, propagates.
     """
     with _locked(state_dir) as records:
-        done: list[tuple[Path, _Record]] = []
+        done: list[Path] = []
+        made: list[_Made] = []
         held: set[str] = set()
         for path in sorted(records.glob("*.json")):
             entry = _read(path)
             if entry is None:
                 continue
             if path == record or not _alive(entry):
-                done.append((path, entry))
+                done.append(path)
+                made.extend(entry.made)
             else:
                 held.update(entry.holds)
-        for path, entry in done:
-            kept = _remove(entry.made, frozenset(held))
-            if kept and path != record:
-                _write(path, _Record(entry.embedder, entry.jail, (), kept))
-            elif kept:
-                # Ours, but a live jail still mounts over some of it: hand it to a record no
-                # process holds, so the next release after that jail's removes it.
-                _write(records / f"{path.stem}.left.json", _Record(None, None, (), kept))
-                path.unlink(missing_ok=True)
-            else:
+        kept = _remove(tuple(made), frozenset(held))
+        left = records / f"{record.stem}.left.json"
+        if kept:
+            # Written before the records it replaces go, so a crash between loses none of them.
+            _write(left, _Record(None, None, (), kept))
+        for path in done:
+            if not (kept and path == left):
                 path.unlink(missing_ok=True)
         record.unlink(missing_ok=True)
 
 
 def _remove(made: tuple[_Made, ...], held: frozenset[str]) -> tuple[_Made, ...]:
     """Remove each of `made` no path in `held` is at or beneath, deepest first; return the ones
-    kept because a live jail holds them. One that is gone, replaced or not empty is dropped."""
-    kept: list[_Made] = []
-    for dead in sorted(made, key=lambda m: -m.path.count("/")):
-        if any(h == dead.path or h.startswith(dead.path + "/") for h in held):
-            kept.append(dead)
-            continue
-        try:
-            info = os.lstat(dead.path)
-            same = (info.st_dev, info.st_ino) == (dead.device, dead.inode)
-            if same and (not dead.marked or os.getxattr(dead.path, _MARK, follow_symlinks=False)):
-                os.rmdir(dead.path)
-        except OSError:
-            continue
-    return tuple(kept)
+    kept: those a live jail holds, and those that could not be removed for a reason other than
+    being gone or replaced. One that is gone or replaced is dropped."""
+    return tuple(
+        dead
+        for dead in sorted(made, key=lambda m: -m.path.count("/"))
+        if any(h == dead.path or h.startswith(dead.path + "/") for h in held) or not _gone(dead)
+    )
+
+
+def _gone(made: _Made) -> bool:
+    """Remove `made` if it is still the directory brig made, and say whether it is gone now:
+    removed, already gone, or replaced by an entry brig did not make (another inode, or brig's
+    mark missing). `False` when it is still brig's but could not be removed or checked."""
+    try:
+        info = os.lstat(made.path)
+        if (info.st_dev, info.st_ino) != (made.device, made.inode):
+            return True
+        if made.marked and not _has_mark(made.path):
+            return True
+        os.rmdir(made.path)
+    except FileNotFoundError, NotADirectoryError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _has_mark(path: str) -> bool:
+    """Whether `path` carries brig's mark (`_MARK`).
+
+    Raises:
+        OSError: the attribute could not be read for a reason other than its absence.
+    """
+    try:
+        return bool(os.getxattr(path, _MARK, follow_symlinks=False))
+    except OSError as error:
+        if error.errno in {errno.ENODATA, errno.ENOTSUP}:
+            return False
+        raise

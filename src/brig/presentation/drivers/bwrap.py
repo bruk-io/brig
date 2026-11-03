@@ -188,6 +188,8 @@ def _supervisors_for(
         case _ as unreachable:
             assert_never(unreachable)
     kinds = {path: found.kind for path, found in host.items()}
+    for path, (kind, _) in _files.facts(bwrap.pin_candidates(policy)).items():
+        kinds.setdefault(path, PathKind(kind))
     empty_dir = str(_state_dir_mod.ensure_empty(Path(state_dir)))
     supervisor_path = _supervisor_path()
     mounts = bwrap.compile_mounts(

@@ -9,10 +9,14 @@ the order by hand.
 
 The order is the policy's meaning. Entries mount shallowest path first, so the more specific
 one wins where two overlap (bwrap applies mounts in argv order; a later mount replaces the
-view beneath it). Then brig's own: an empty tmpfs over its state directory, with this jail's
-supervisor script and channel directory bound back inside it, the tmpfs remounted read-only
-(TASK-0019: the directory holds every jail's scripts and channels, and a Unix socket accepts a
-connect through a read-only mount); then the virtual filesystems and the namespace flags.
+view beneath it). Among them are the pins (TASK-0001.31, old SPEC decision-168): each directory
+strictly between a writable root and a write deny or mask, bound writable over itself, so the
+command cannot rename it (a mount point inside the jail's mount namespace refuses `rename(2)`
+with `EBUSY`) and take the deny or mask with it. Then brig's own: an empty tmpfs over its state
+directory, with this jail's supervisor script and channel directory bound back inside it, the
+tmpfs remounted read-only (TASK-0019: the directory holds every jail's scripts and channels, and
+a Unix socket accepts a connect through a read-only mount); then the virtual filesystems and the
+namespace flags.
 """
 
 from collections.abc import Mapping
@@ -80,9 +84,9 @@ class Mount:
 _DEV_NULL = "/dev/null"
 """What a masked file is replaced with: reads are empty and writes refused, read-only."""
 
-_RANK = frozendict({"readable": 0, "writable": 1, "deny": 2, "mask": 3})
+_RANK = frozendict({"readable": 0, "writable": 1, "pin": 1, "deny": 2, "mask": 3})
 """At one path, which entry mounts last and so wins: a mask over a deny over a writable root
-over a readable one."""
+over a readable one. A pin is never at an entry's path, and binds like a writable root."""
 
 
 def _depth(path: str) -> int:
@@ -108,8 +112,64 @@ def _governing_role(policy: FsPolicy, path: str) -> str | None:
     return max(above, key=lambda entry: (_depth(entry[1]), _RANK[entry[0]]))[0]
 
 
+def _entries(policy: FsPolicy) -> frozenset[str]:
+    return frozenset((*policy.readable, *policy.writable, *policy.write_denies, *policy.masks))
+
+
+def _between(path: str, roots: tuple[str, ...]) -> tuple[str, ...]:
+    """The directories strictly between `path` and each of `roots` it is inside, shallowest
+    first."""
+    parts = path.split("/")
+    ancestors = ["/".join(parts[:depth]) for depth in range(2, len(parts))]
+    return tuple(
+        ancestor
+        for ancestor in ancestors
+        if any(ancestor != root and within(ancestor, root) for root in roots)
+    )
+
+
+def pin_candidates(policy: FsPolicy) -> tuple[str, ...]:
+    """Every path strictly between a writable root and a write deny or mask inside it: where
+    `compile_mounts` may pin a directory, so what presentation looks up on the host for it."""
+    return tuple(
+        dict.fromkeys(
+            ancestor
+            for path in (*policy.write_denies, *policy.masks)
+            for ancestor in _between(path, policy.writable)
+        )
+    )
+
+
+def _pins(
+    policy: FsPolicy, kinds: Mapping[str, PathKind], protected: list[tuple[str, str]]
+) -> set[tuple[str, str]]:
+    """The directories to pin on the way to each `protected` `(role, path)`, as `("pin", path)`.
+
+    One is pinned where the jail shows it writable (the most specific entry above it is a
+    writable root), it is no entry of the policy (an entry is a mount point already), and it is a
+    directory when the jail starts: one on the host, or one brig makes then, missing on the way
+    to an absent deny or mask (its placeholders). One absent on the way to an entry that exists
+    is not there to pin.
+    """
+    entries = _entries(policy)
+    pins: set[tuple[str, str]] = set()
+    for _, path in protected:
+        made = kinds.get(path, PathKind.ABSENT) is PathKind.ABSENT
+        for directory in _between(path, policy.writable):
+            kind = kinds.get(directory, PathKind.ABSENT)
+            there = kind is PathKind.DIRECTORY or (made and kind is PathKind.ABSENT)
+            if (
+                there
+                and directory not in entries
+                and _governing_role(policy, directory) == "writable"
+            ):
+                pins.add(("pin", directory))
+    return pins
+
+
 def _kept(policy: FsPolicy, kinds: Mapping[str, PathKind]) -> list[tuple[str, str]]:
-    """The policy's entries that need a mount, as `(role, path)`.
+    """The policy's entries that need a mount, as `(role, path)`, and the pins on the way to
+    each deny and mask among them (`_pins`).
 
     A write deny or mask at an absent path needs one only where its parent is writable in the
     jail (the most specific entry above it is a writable root): there the command could create
@@ -119,6 +179,7 @@ def _kept(policy: FsPolicy, kinds: Mapping[str, PathKind]) -> list[tuple[str, st
     """
     entries = [("readable", p) for p in policy.readable]
     entries += [("writable", p) for p in policy.writable]
+    protected: list[tuple[str, str]] = []
     for role, paths in (("deny", policy.write_denies), ("mask", policy.masks)):
         for path in paths:
             if any(other != path and within(path, other) for other in policy.masks):
@@ -128,8 +189,9 @@ def _kept(policy: FsPolicy, kinds: Mapping[str, PathKind]) -> list[tuple[str, st
             absent = kinds.get(path, PathKind.ABSENT) is PathKind.ABSENT
             if absent and _governing_role(policy, path) != "writable":
                 continue
-            entries.append((role, path))
-    return sorted(set(entries), key=lambda entry: (_depth(entry[1]), _RANK[entry[0]], entry[1]))
+            protected.append((role, path))
+    kept = {*entries, *protected, *_pins(policy, kinds, protected)}
+    return sorted(kept, key=lambda entry: (_depth(entry[1]), _RANK[entry[0]], entry[1]))
 
 
 def _mount_for(role: str, path: str, kind: PathKind, empty_dir: str) -> Mount:
@@ -137,7 +199,7 @@ def _mount_for(role: str, path: str, kind: PathKind, empty_dir: str) -> Mount:
         case "readable" | "deny":
             source = empty_dir if kind is PathKind.ABSENT and role == "deny" else path
             return Mount(MountKind.READ_ONLY, path, source)
-        case "writable":
+        case "writable" | "pin":
             return Mount(MountKind.WRITABLE, path, path)
         case _:
             source = _DEV_NULL if kind is PathKind.FILE else empty_dir
@@ -155,11 +217,11 @@ def compile_mounts(
 ) -> tuple[Mount, ...]:
     """Every mount a bwrap jail for `policy` needs, in argv order.
 
-    `kinds` is what is at each write deny's and mask's path on the host (presentation looks;
-    a path it does not name reads as absent). `empty_dir` is an empty, read-only host
-    directory brig owns: the source for a masked directory, and for a deny or mask at an
-    absent path, so the command can neither read nor create anything there. `refusal` in
-    `domain/policy/paths.py` must have passed first.
+    `kinds` is what is at each write deny's and mask's path on the host, and at each of
+    `pin_candidates` (presentation looks; a path it does not name reads as absent). `empty_dir`
+    is an empty, read-only host directory brig owns: the source for a masked directory, and for
+    a deny or mask at an absent path, so the command can neither read nor create anything there.
+    `refusal` in `domain/policy/paths.py` must have passed first.
     """
     mounts = [
         _mount_for(role, path, kinds.get(path, PathKind.ABSENT), empty_dir)
@@ -202,7 +264,9 @@ FS_WRITE_CLAIM = Claim(
     name="fs_write",
     description=(
         "the command writes only inside the policy's writable roots and its declared channels, "
-        "and nothing a write deny names"
+        "and nothing a write deny names; nor can it rename a directory on the way to a write "
+        "deny or mask that was there when the jail started, to make its own file at that path "
+        "for the host to read"
     ),
 )
 FS_READ_CLAIM = Claim(
@@ -251,6 +315,12 @@ def ceilings(
     `fs_write` and `fs_read` are `BEST_EFFORT` while any write deny or mask is mounted: the mount
     is on the host's directory entry, and the host replacing that entry (an editor saving by
     rename) can detach it in the jail, wherever it is (measured on one kernel, not on another).
+    What `fs_write` does cover beside the deny itself: the command cannot rename a directory
+    strictly between a writable root and a deny or mask, since each that is there when the jail
+    starts (on the host, or made by brig for an absent entry) is pinned, a mount point of its own
+    (`EBUSY`; a rename across one fails with `EXDEV`). What it does not: a directory the host
+    itself creates, removes or renames on the way while the jail runs, which the pins do not
+    see, the same host change that makes the grade best-effort.
     `channel_exclusivity` is `VIOLATED` when a writable path the jail shares with the host is not
     a declared channel, as `CHANNEL_EXCLUSIVITY_CLAIM` says (a writable root included), or when
     the jail can see one of `socket_directories`, whose sockets it could dial.
