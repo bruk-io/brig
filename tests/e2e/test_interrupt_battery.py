@@ -69,3 +69,18 @@ def test_interrupting_a_finished_jail_answers_false() -> None:
         assert interrupt_jail(jail) is False
     finally:
         destroy_jail(jail)
+
+
+def test_an_interrupt_sent_as_soon_as_the_jail_exists_is_not_lost() -> None:
+    """The supervisor holds SIGINT back from the moment it starts until it can forward it, so
+    an interrupt sent right after `create_bwrap_jail` returns still reaches the command: it dies
+    of it instead of sleeping on and exiting 0. Twenty times, since the lost case is a window."""
+    for _ in range(20):
+        jail = create_bwrap_jail((sys.executable, "-I", "-c", "import time; time.sleep(3)"))
+        try:
+            delivered = interrupt_jail(jail)
+            exit_code = run_jail(jail, timeout_s=15)
+        finally:
+            destroy_jail(jail)
+        assert not (delivered and exit_code == 0), "interrupt_jail said True and nothing arrived"
+        assert delivered, "the jail's command was running, yet nothing was signalled"
