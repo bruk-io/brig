@@ -67,10 +67,14 @@ root. So:
   stays for `VIOLATED`: a visible `SOCKET_DIRECTORIES` entry, where hosts do keep sockets, or a
   writable shared root (item 4). Since every bwrap jail mounts its interpreter
   (`interpreter_refusal`), no bwrap jail is `ENFORCED` here today.
-- **`network`** is never stronger than `channel_exclusivity`: the jail's own network namespace has
-  no interface, but a host socket it can dial can carry the network (measured: a relay on a socket
-  under a readable root carried the jail's bytes to a TCP listener). The default policy's
-  `network` is so `VIOLATED`.
+- **`network`** is capped by the socket half of `channel_exclusivity` only: the jail's own network
+  namespace has no interface, but a host socket it can dial can carry the network (measured: a
+  relay on a socket under a readable root carried the jail's bytes to a TCP listener). So it is
+  `VIOLATED` where a `SOCKET_DIRECTORIES` place is visible (the default policy's is) and at most
+  `BEST_EFFORT` while the jail sees any root. A writable shared root alone, which violates
+  `channel_exclusivity` because it carries files, is not a route out and does not lower
+  `network` (revised the same day: TASK-0043's first criterion tied `network` to the whole of
+  `channel_exclusivity`, which graded every writable project `VIOLATED` for network).
 
 What could earn the two back is a design draft ("A kernel mechanism to earn channel_exclusivity
 and network back from best-effort"): this kernel's Landlock is ABI 7, whose socket scoping covers

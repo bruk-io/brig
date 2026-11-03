@@ -126,8 +126,10 @@ jail writing there; the pins, writable over writable, do not count. `fs_read` is
 while a mask is mounted. `channel_exclusivity` is `VIOLATED` for a writable path shared beyond the
 declared channels or a visible place where hosts keep sockets (`SOCKET_DIRECTORIES`), else
 `BEST_EFFORT` while the jail sees any readable or writable root, where the host could keep a socket
-it can dial. `network` is never stronger than `channel_exclusivity`, since a dialable host socket
-can carry the network.
+it can dial. `network` follows the socket half of that rule only, since a dialable host socket can
+carry the network: `VIOLATED` for a visible `SOCKET_DIRECTORIES` place, `BEST_EFFORT` while the
+jail sees any root; a writable shared root alone carries files, not a route out, and does not
+lower it.
 
 Where the domain and the world alternate, the exchange is a value too. `effects.py` names the
 closed set a generator may yield: start the supervised command, await the supervisor's report,

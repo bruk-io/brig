@@ -25,7 +25,7 @@ from enum import StrEnum
 
 from brig.domain.channels import Reservations
 from brig.domain.claims import Claim
-from brig.domain.grades import Grade, at_most
+from brig.domain.grades import Grade
 from brig.domain.plan import Plan
 from brig.domain.policy.paths import FsPolicy, PathKind, within
 
@@ -287,9 +287,11 @@ FS_READ_CLAIM = Claim(
 NETWORK_CLAIM = Claim(
     name="network",
     description=(
-        "the command reaches no network: its own network namespace, with no interface. Never "
-        "stronger than channel_exclusivity, since a host socket the jail can dial can carry the "
-        "network for it"
+        "the command reaches no network: its own network namespace, with no interface. A host "
+        "socket the jail can dial can carry the network for it, so this is violated where the "
+        "jail sees a place where hosts keep sockets (/run, /tmp and the like), and at best "
+        "best-effort while it sees any host root a socket could sit in. A writable shared root "
+        "alone carries files, not a route out, and does not lower it"
     ),
 )
 ENV_CLAIM = Claim(
@@ -347,6 +349,18 @@ def _beneath_writable(mounts: tuple[Mount, ...]) -> bool:
     return False
 
 
+def _socket_reach(policy: FsPolicy, socket_directories: tuple[str, ...]) -> Grade:
+    """How well the jail is kept from dialling a socket the host keeps: `VIOLATED` where one of
+    `socket_directories` is visible, `BEST_EFFORT` while any root shows host paths a socket could
+    sit in, `ENFORCED` with none. The ceiling of `network`, and of `channel_exclusivity` beside
+    its writable half."""
+    if _dialable(policy, socket_directories):
+        return Grade.VIOLATED
+    if _sees_host_paths(policy):
+        return Grade.BEST_EFFORT
+    return Grade.ENFORCED
+
+
 def ceilings(
     policy: FsPolicy,
     mounts: tuple[Mount, ...],
@@ -375,25 +389,23 @@ def ceilings(
       (`_sees_host_paths`), since a socket the host keeps there can be dialled through a
       read-only mount; `ENFORCED` only with no root, which `interpreter_refusal` never lets
       through today.
-    - `network` is never stronger than `channel_exclusivity`: the jail's own network namespace
-      has no interface, but a host socket it can dial can carry the network.
+    - `network` is capped by the socket half of `channel_exclusivity` only (`_socket_reach`):
+      the jail's own network namespace has no interface, but a host socket it can dial can carry
+      the network, so it is `VIOLATED` where one of `socket_directories` is visible and
+      `BEST_EFFORT` while any root is. A writable shared root alone carries files, not a route
+      out, and does not lower it.
     """
     masks = any(
         mount.target in policy.masks for mount in mounts if mount.kind is MountKind.READ_ONLY
     )
-    if not set(writable_shared_paths(mounts)) <= set(declared_channel_paths(channels)):
-        exclusivity = Grade.VIOLATED
-    elif _dialable(policy, socket_directories):
-        exclusivity = Grade.VIOLATED
-    elif _sees_host_paths(policy):
-        exclusivity = Grade.BEST_EFFORT
-    else:
-        exclusivity = Grade.ENFORCED
+    reach = _socket_reach(policy, socket_directories)
+    shared = set(writable_shared_paths(mounts)) <= set(declared_channel_paths(channels))
+    exclusivity = reach if shared else Grade.VIOLATED
     return frozendict(
         {
             FS_WRITE_CLAIM: Grade.BEST_EFFORT if _beneath_writable(mounts) else Grade.ENFORCED,
             FS_READ_CLAIM: Grade.BEST_EFFORT if masks else Grade.ENFORCED,
-            NETWORK_CLAIM: Grade.ENFORCED if at_most(Grade.ENFORCED, exclusivity) else exclusivity,
+            NETWORK_CLAIM: reach,
             ENV_CLAIM: Grade.ENFORCED,
             CHANNEL_EXCLUSIVITY_CLAIM: exclusivity,
         }

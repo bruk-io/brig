@@ -109,29 +109,31 @@ def test_a_writable_root_inside_another_or_over_a_readable_one_keeps_fs_write() 
     assert _ceilings(policy, {})[FS_WRITE_CLAIM.name] is Grade.ENFORCED
 
 
-def test_network_is_never_stronger_than_channel_exclusivity() -> None:
-    """TASK-0043 AC#3: a host socket the jail can dial can carry the network, so whatever
-    `channel_exclusivity` comes to, `network` is no stronger."""
-    policies: tuple[tuple[FsPolicy, dict[str, PathKind]], ...] = (
-        (FsPolicy(), {}),
-        (FsPolicy(readable=("/usr",)), {}),
-        (FsPolicy(readable=("/usr",), writable=("/w",)), {}),
-        (WHOLE_HOST_READ_ONLY, {}),
-        (
-            FsPolicy(readable=("/",), masks=("/run", "/tmp")),
-            {
-                "/run": PathKind.DIRECTORY,
-                "/tmp": PathKind.DIRECTORY,
-            },
-        ),
+def test_network_is_violated_where_a_socket_place_is_visible() -> None:
+    """TASK-0043 AC#4: a host socket in `/run` or `/tmp` the jail can dial can carry the
+    network for it."""
+    assert _ceilings(WHOLE_HOST_READ_ONLY, {})[NETWORK_CLAIM.name] is Grade.VIOLATED
+    inside = FsPolicy(readable=("/usr", "/run/user/1000/app"))
+    assert _ceilings(inside, {})[NETWORK_CLAIM.name] is Grade.VIOLATED
+
+
+def test_network_is_at_most_best_effort_while_any_host_root_is_seen() -> None:
+    """A root that is no listed socket place still shows host paths a socket could sit in."""
+    assert _ceilings(FsPolicy(readable=("/usr", "/etc")), {})[NETWORK_CLAIM.name] is (
+        Grade.BEST_EFFORT
     )
-    seen: set[Grade] = set()
-    for policy, kinds in policies:
-        found = _ceilings(policy, kinds)
-        exclusivity = found[CHANNEL_EXCLUSIVITY_CLAIM.name]
-        seen.add(exclusivity)
-        assert at_most(found[NETWORK_CLAIM.name], exclusivity), (policy, found)
-    assert seen == {Grade.ENFORCED, Grade.BEST_EFFORT, Grade.VIOLATED}
+    masked = FsPolicy(readable=("/",), masks=("/run", "/var/run", "/tmp", "/var/tmp", "/dev/shm"))
+    kinds = {path: PathKind.DIRECTORY for path in masked.masks}
+    assert _ceilings(masked, kinds)[NETWORK_CLAIM.name] is Grade.BEST_EFFORT
+
+
+def test_a_writable_shared_root_alone_does_not_lower_network() -> None:
+    """A writable shared root violates `channel_exclusivity` (it carries files), but it is no
+    route out: `network` keeps what the socket rule gives it."""
+    found = _ceilings(FsPolicy(readable=("/usr",), writable=("/w",)), {})
+
+    assert found[CHANNEL_EXCLUSIVITY_CLAIM.name] is Grade.VIOLATED
+    assert found[NETWORK_CLAIM.name] is Grade.BEST_EFFORT
 
 
 def test_no_deny_or_mask_keeps_fs_read_and_fs_write_enforced() -> None:
