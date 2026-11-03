@@ -135,3 +135,20 @@ def test_no_directory_on_the_way_to_an_absent_deny_can_be_renamed() -> None:
         found, jail = _renames(root, policy, (root / ".git", root / "cfg", root / "cfg" / "deep"))
 
         _held(jail, found)
+
+
+def test_no_directory_on_the_way_to_a_nested_readable_root_nor_the_root_can_be_renamed() -> None:
+    """TASK-0001.33: a readable root two directories into the writable root (an embedder's own
+    code, kept read-only inside a project). Neither directory on the way, nor the readable root
+    itself, moves, and the host's file there is still the one it wrote."""
+    with tempfile.TemporaryDirectory(dir="/tmp") as top:
+        root = Path(top)
+        tool = root / "z" / "y" / "r" / "tool"
+        tool.parent.mkdir(parents=True)
+        tool.write_text("the host's")
+        policy = FsPolicy(readable=("/", str(tool.parent)), writable=(top,))
+
+        found, jail = _renames(root, policy, (root / "z", root / "z" / "y", root / "z" / "y" / "r"))
+
+        _held(jail, found)
+        assert tool.read_text() == "the host's"
