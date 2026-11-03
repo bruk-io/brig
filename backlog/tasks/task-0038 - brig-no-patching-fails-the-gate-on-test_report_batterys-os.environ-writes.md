@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T04:14:00Z'
-updated_date: '2026-11-03T04:18:00Z'
+updated_date: '2026-11-03T04:21:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -19,8 +19,8 @@ At HEAD of claude/embedder-gaps, uv run just gates (and so just done) exits 1. T
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 test_report_battery's env case hands the jail its environment as data, with no write to os.environ, and uv run just done passes at HEAD
-- [ ] #2 The message for a subscript write through an import names it as one
+- [x] #1 test_report_battery's env case hands the jail its environment as data, with no write to os.environ, and uv run just done passes at HEAD
+- [x] #2 The message for a subscript write through an import names it as one
 <!-- AC:END -->
 
 ## Implementation Notes
