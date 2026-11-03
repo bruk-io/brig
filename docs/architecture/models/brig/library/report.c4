@@ -1,0 +1,9 @@
+// Component: presentation/report.py.
+model {
+  extend brig.library {
+    report = component 'Report' {
+      technology 'Python 3.15'
+      description 'Renders a jail\'s report as text, one line per claim with its grade and what it asserts. Returned, never printed (rule 14).'
+    }
+  }
+}

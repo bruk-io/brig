@@ -1,0 +1,9 @@
+// Component: domain/policy/paths.py, domain/policy/env.py and domain/policy/stdio.py.
+model {
+  extend brig.library {
+    policy = component 'Policy' {
+      technology 'Python 3.15'
+      description 'What an embedder states of a jail, as intent any jail type compiles (decision-0007): the FsPolicy of readable and writable roots, write denies and masks, the EnvPolicy and its scrub, and where stdio goes, with the pure refusals of what cannot compile, judged from host facts passed in as data.'
+    }
+  }
+}

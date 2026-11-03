@@ -1,0 +1,10 @@
+// Component: presentation/driver.py -- the effect interpreter every jail type
+// shares (decision-0001 rule 10, decision-0007 item 5).
+model {
+  extend brig.library {
+    driver = component 'Driver' {
+      technology 'Python 3.15'
+      description 'The effect interpreter every jail type shares: performs each effect an operation or teardown yields through a ProcessPort or SupervisorPort and sends the result back, turning what was measured crossing a start or a read into brig\'s own errors.'
+    }
+  }
+}

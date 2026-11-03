@@ -1,46 +1,79 @@
 // Intra-system relationships for Brig (container<->container,
 // component<->component). Explicit endpoints only — no it/this, no sourceless
 // `-> x`. Inter-process edges carry a nested `technology`.
+//
+// Every component edge below is an import in src/brig. decision-0001 rule 1
+// at component scope: domain and infra components depend on neither
+// presentation nor each other's layer; presentation's components depend on
+// both.
 model {
+  // The library -> supervisor container edge is derived from this one
+  // (decision-0002): the host's end of the wire starts the supervisor, inside
+  // bwrap, as PID 1 of the jail's own PID namespace. It names the container,
+  // not a part of it, since the supervisor is not decomposed.
   extend brig {
-    // decision-0002: the library spawns the supervisor as a separate process
-    // (PID 1 inside the jail's own PID namespace) and talks to it over a
-    // pipe. #planned because the supervisor is designed, not built.
-    library -> supervisor 'spawns, and exchanges wire-protocol messages with,' {
-      #planned
-      technology 'newline-delimited JSON over a pipe'
+    library.supervisorLink -> supervisor 'starts as the jail\'s PID 1, and exchanges wire messages with,' {
+      technology 'newline-delimited JSON over pipes on fds 3 and 4'
     }
   }
 
-  // Component relationships inside the library container. decision-0001
-  // rule 1 at component scope: domain and infra components depend on
-  // neither presentation nor each other's layer; presentation's components
-  // depend on both.
   extend brig.library {
     // domain, internal to the layer
     operations -> effects 'yields effect values from'
-    operations -> plan 'reads the compiled argv from'
+    operations -> plan 'reads the argv and candidate environment from'
     operations -> teardown 'delegates the kill ladder to'
+    operations -> policy 'scrubs the environment with'
     teardown -> effects 'yields effect values from'
     bwrapJailType -> plan 'compiles a request into'
+    bwrapJailType -> policy 'compiles the FsPolicy of'
+    bwrapJailType -> channels 'binds the channel directory of'
+    bwrapJailType -> grades 'states each claim\'s ceiling as'
+
+    // infra, internal to the layer
+    supervisorLink -> processes 'spawns the supervisor through'
 
     // presentation, internal to the layer
+    api -> driver 'runs start and destroy through'
+    api -> jail 'tears down, and finds the real ports in,'
     api -> errors 'raises failures as'
-    api -> ports 'satisfies the ProcessPort protocol defined in'
-    api -> bwrapDriver 'runs a jail operation through'
-    bwrapDriver -> errors 'raises infra failures as'
-    bwrapDriver -> ports 'calls infra via the protocol defined in'
+    api -> ports 'calls infra through'
+    bwrapDriver -> driver 'runs create through'
+    bwrapDriver -> jail 'builds the Jail, and finds the real ports in,'
+    bwrapDriver -> errors 'raises refusals and infra failures as'
+    bwrapDriver -> ports 'calls infra through'
+    driver -> errors 'raises a failed start as'
+    driver -> ports 'performs each effect through'
+    jail -> errors 'raises an invalid state directory as'
+    jail -> ports 'wires real infra behind the protocols of'
 
     // presentation -> domain (rule 1: presentation knows domain)
-    api -> operations 'drives the create, start, and destroy generators of'
-    api -> bwrapJailType 'compiles a bwrap request with'
-    api -> effects 'narrows driver replies using'
-    bwrapDriver -> effects 'performs the effects defined in'
+    api -> operations 'drives the start and destroy generators of'
+    api -> channels 'reserves channels with'
+    api -> effects 'narrows exit and teardown outcomes using'
+    bwrapDriver -> operations 'drives the create generator of'
+    bwrapDriver -> bwrapJailType 'compiles the mounts, the supervisor launch and the ceilings with'
+    bwrapDriver -> policy 'refuses what cannot compile with'
+    bwrapDriver -> channels 'binds the reservations of'
+    driver -> effects 'performs the effects defined in'
+    jail -> effects 'names the supervisor\'s process with'
+    jail -> grades 'carries the report as'
+    jail -> bwrapJailType 'carries the compiled mounts of'
     errors -> effects 'names the failed process using'
+    ports -> effects 'states exit outcomes with'
+    report -> grades 'renders the claims and grades of'
 
     // presentation -> infra (rule 1: presentation knows infra)
-    api -> processes 'binds the real implementation of its port from'
-    bwrapDriver -> processes 'translates spawn failures from'
-    api -> sockets 'creates and removes the channel directory, and verifies channel readiness, through'
+    api -> placeholders 'releases the jail\'s placeholder record through'
+    api -> sockets 'interrupts the jail\'s PID 1 through'
+    bwrapDriver -> files 'looks up the policy\'s host facts through'
+    bwrapDriver -> placeholders 'holds and attaches placeholder records through'
+    bwrapDriver -> sockets 'finds the jail\'s PID namespace through'
+    bwrapDriver -> stateDir 'makes the empty read-only directory through'
+    bwrapDriver -> supervisorLink 'assembles the supervisor file, and builds the live supervisor, with'
+    driver -> supervisorLink 'catches start and wire failures from'
+    jail -> processes 'wires the process port onto'
+    jail -> sockets 'wires the channel ports onto'
+    jail -> stateDir 'resolves brig\'s state directory through'
+    jail -> supervisorLink 'wires the supervisor port onto'
   }
 }

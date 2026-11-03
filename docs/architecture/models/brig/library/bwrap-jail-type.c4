@@ -3,7 +3,7 @@ model {
   extend brig.library {
     bwrapJailType = component 'Bwrap Jail Type' {
       technology 'Python 3.15'
-      description 'bwrap\'s slice of the domain: compiles a jail request into a Plan of bwrap\'s own flags ahead of the command it runs as the jail\'s one process. No I/O itself.'
+      description 'bwrap\'s slice of the domain: compiles an FsPolicy into one ordered tuple of mounts and renders bwrap\'s flags from it (decision-0007), builds the supervisor\'s launch argv and the Plan it runs, and states each claim\'s ceiling, the jail\'s report (decision-0008). No I/O itself.'
     }
   }
 }

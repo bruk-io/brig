@@ -1,0 +1,9 @@
+// Component: domain/claims.py and domain/grades.py.
+model {
+  extend brig.library {
+    grades = component 'Grades' {
+      technology 'Python 3.15'
+      description 'Claims a compile states and the four grades a report may give them (decision-0008): grade(claims, evidence) is the one producer of a graded report from e2e evidence, and at_most holds a stated ceiling to what was measured. No I/O itself.'
+    }
+  }
+}

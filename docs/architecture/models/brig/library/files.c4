@@ -1,0 +1,9 @@
+// Component: infra/files.py.
+model {
+  extend brig.library {
+    files = component 'Host Files' {
+      technology 'Python 3.15, stdlib only'
+      description 'What is at a path on the host and where it leads: its kind once links are followed, every path a lookup passes through, its link count, and whether it is the caller\'s own regular file -- the facts a policy\'s refusal and compile need. Plain data out.'
+    }
+  }
+}

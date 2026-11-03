@@ -5,7 +5,7 @@ model {
     ociDriver = component 'Oci Driver' {
       #paused
       technology 'Python 3.15'
-      description 'oci\'s driver: would perform the effects an operation or teardown generator yields, translating each one into an infra/docker call and back. Paused indefinitely (decision-0001) -- it keeps its place in the layout but has no order of work yet.'
+      description 'oci\'s slice of presentation: would start a jail through the shared driver, with infra/docker standing in for a host pid and a supervisor program. Paused indefinitely (decision-0001) -- it keeps its place in the layout but has no order of work yet.'
     }
   }
 }

@@ -1,5 +1,7 @@
-// Components -- the Library container (the only container with components
-// today; the supervisor is planned and has no code to show yet).
+// Components -- the Library container. The supervisor container is not
+// decomposed (one small program whose parts are code; see
+// models/brig/supervisor.c4), so it appears here only as the container the
+// Supervisor Link starts.
 views {
   view brigLibraryComponents of brig.library {
     title 'Components -- Brig Library'
@@ -8,13 +10,13 @@ views {
     // Visual grouping only (decision-0001 rule 1), not a fourth abstraction
     // level: domain and infra depend on neither presentation nor each other.
     group 'domain' {
-      include effects, operations, teardown, plan, bwrapJailType
+      include effects, operations, teardown, plan, policy, channels, grades, bwrapJailType
     }
     group 'infra' {
-      include processes, sockets
+      include processes, sockets, files, placeholders, stateDir, supervisorLink
     }
     group 'presentation' {
-      include api, errors, ports, bwrapDriver
+      include api, jail, driver, bwrapDriver, ports, errors, report
     }
   }
 }

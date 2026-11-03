@@ -3,7 +3,7 @@ model {
   extend brig.library {
     processes = component 'Processes' {
       technology 'Python 3.15, stdlib only'
-      description 'Spawns a process, signals its group, reaps it, and checks whether a pid is alive. Plain data in and out -- never a brig type -- so only a presentation driver knows what the data means.'
+      description 'Spawns a process leading its own group with an explicit fd allow-list, signals the group, peeks at an exit without releasing the pid and releases it later (decision-0003), and asks whether the group is alive. Plain data in and out -- never a brig type.'
     }
   }
 }

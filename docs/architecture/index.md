@@ -20,21 +20,15 @@ Source: [`views/brig/context.c4`](views/brig/context.c4),
 
 ## Containers
 
-brig has exactly one container that is actually built today: the **library**
-an embedder links, running inside the embedder's own process -- there is no
-separate brig process yet. The **supervisor** box below is decision-0002's
-design, not shipped code: none of `infra/supervisor/{wire,program,link}.py`
-exist under `src/brig` as of this writing. Once built, `wire.py` and
-`program.py` assemble into the one file dropped as PID 1 inside the jail
-(decision-0001 rule 17) and cross into this container; `link.py` is the
-host's end of that same wire protocol and stays in **library**, on the host
-side of the boundary -- not depicted below, since this view shows containers,
-not the components inside them. Whether `wire.py`'s own message format needs
-sharing with `link.py` rather than crossing wholly into `supervisor` is still
-open (DRAFT-0009), for whoever builds it. The supervisor box is drawn here,
-tagged `#planned`, specifically so the boundary can be read and questioned
-before anything is built against it -- do not mistake it for a built
-container.
+brig has two containers. The **library** is what an embedder links, running
+inside the embedder's own process -- there is no separate library process. The
+**supervisor** is the one file the library assembles from
+`infra/supervisor/wire.py` and `program.py` (decision-0001 rule 17) and starts,
+inside bwrap, as PID 1 of each jail's own PID namespace (decision-0002): it
+makes itself non-dumpable before anything else (decision-0006), runs the
+command as its child, reaps everything reparented to it, and reports one
+outcome over its wire. `link.py`, the host's end of that wire, stays in the
+library (its Supervisor Link component), on the host side of the boundary.
 
 ```likec4-view
 brigContainers
@@ -47,11 +41,21 @@ Source: [`views/brig/containers.c4`](views/brig/containers.c4),
 
 ## Components
 
-The library container's components, one per real module under
-`src/brig/{domain,infra,presentation}/`. The grouping shown is visual only
-(decision-0001 rule 1): domain's and infra's components depend on neither
-presentation's nor each other's layer; presentation's components depend on
-both. The supervisor has no components yet -- it has no code.
+The library container's components, one per module under
+`src/brig/{domain,infra,presentation}/`, or one per tight group of modules
+behind a single interface (the policy package; claims and grades; the
+supervisor's host end). Each component's file names its modules. The grouping
+shown is visual only (decision-0001 rule 1): domain's and infra's components
+depend on neither presentation's nor each other's layer; presentation's
+components depend on both. Every edge is an import in `src/brig`. The shared
+**Driver** (`presentation/driver.py`) is the effect interpreter every jail
+type uses; the **Bwrap Driver** (`presentation/drivers/bwrap.py`) is bwrap's
+slice, `create_bwrap_jail`; the **API** (`presentation/api.py`) is what every
+jail type shares, and **Jail** (`presentation/jail.py`) the value an embedder
+holds and the real ports' wiring (decision-0007 item 5). The supervisor
+container is not decomposed: it is one small program with no interface inside
+it, so its parts are code, and it appears here only as the container the
+Supervisor Link starts.
 
 ```likec4-view
 brigLibraryComponents
@@ -71,9 +75,10 @@ jail type is a slice... no module of one type imports another's"), not
 illustrative. Rule 3 names exactly two files per type (`domain/jail_types/<type>.py`,
 `presentation/drivers/<type>.py`), so this view holds every type to that same
 two-component shape; oci's own `infra/docker.py` is modeled (tagged `#paused`)
-but deliberately left out of this view, the same way bwrap's own
-`infra/processes.py` is -- a jail type's infra primitive is real and correlated
-with that type, but it is not part of rule 3's slice claim.
+but deliberately left out of this view, as is every infra component -- a jail
+type's infra primitive is real and correlated with that type, but it is not
+part of rule 3's slice claim. The one edge drawn is inside bwrap's slice: its
+driver compiling with its own jail type.
 
 ```likec4-view
 brigJailTypes

@@ -1,11 +1,15 @@
-// Container: the library itself -- the only container that exists today.
+// Container: the library itself, linked into the embedder's process.
 // Components live under models/brig/library/ via
-// `extend brig.library { <name> = component ... }`.
+// `extend brig.library { <name> = component ... }`, one module (or one
+// tight group with a single interface) each, its file named in the
+// component's header comment. Every package __init__.py under src/brig only
+// re-exports (decision-0001 rule 6) and is no component; src/brig/__init__.py,
+// the public surface, is named in the API component.
 model {
   extend brig {
     library = container 'Library' {
       technology 'Python 3.15, stdlib only'
-      description 'The jailing library an embedder links: compiles a jail type\'s plan, performs its effects through a driver, and exposes the public API. Runs inside the embedder\'s own process -- there is no separate library process.'
+      description 'The jailing library an embedder links: compiles a jail type\'s policy and plan, performs its effects through the shared driver, starts and talks to the supervisor, and exposes the public API. Runs inside the embedder\'s own process -- there is no separate library process.'
     }
   }
 }

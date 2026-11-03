@@ -1,0 +1,9 @@
+// Component: domain/channels.py.
+model {
+  extend brig.library {
+    channels = component 'Channels' {
+      technology 'Python 3.15'
+      description 'A jail\'s declared channels and each one\'s reservation in its channel directory (decision-0002 item 2), made before the jail starts so the endpoint goes in argv, never env; a name that would escape the directory is refused as a value. No I/O itself.'
+    }
+  }
+}

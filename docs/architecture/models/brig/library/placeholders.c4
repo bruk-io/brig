@@ -1,0 +1,9 @@
+// Component: infra/placeholders.py.
+model {
+  extend brig.library {
+    placeholders = component 'Placeholders' {
+      technology 'Python 3.15, stdlib only'
+      description 'Records, under brig\'s state directory and one per-user lock, the absent paths a jail mounts over and the directories bwrap made for them, and removes a made directory only once no live jail holds a path at or beneath it. Plain data in and out.'
+    }
+  }
+}

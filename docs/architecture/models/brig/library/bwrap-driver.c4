@@ -1,9 +1,10 @@
-// Component: presentation/drivers/bwrap.py and presentation/driver.py.
+// Component: presentation/drivers/bwrap.py -- bwrap's slice of presentation
+// (decision-0001 rule 3, decision-0007 item 5).
 model {
   extend brig.library {
     bwrapDriver = component 'Bwrap Driver' {
       technology 'Python 3.15'
-      description 'bwrap\'s slice of presentation: refuses and compiles the policy, writes the supervisor script and starts the jail, through the shared driver that performs the effects an operation or teardown yields, translating each into a port call and back.'
+      description 'bwrap\'s slice of presentation (create_bwrap_jail): looks up the policy\'s host facts, refuses or compiles the policy into mounts, holds placeholders for absent mountpoints, writes the assembled supervisor script, starts the jail through the shared driver, and holds its PID namespace for channel readiness.'
     }
   }
 }

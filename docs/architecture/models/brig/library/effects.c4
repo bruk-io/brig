@@ -3,7 +3,7 @@ model {
   extend brig.library {
     effects = component 'Effects' {
       technology 'Python 3.15'
-      description 'Effect values an operation or teardown may yield one at a time -- spawn a process, reap its exit, signal its group, verify it is gone -- for a driver to perform. No I/O itself.'
+      description 'Effect values an operation or teardown may yield one at a time -- start the supervised command, await the supervisor\'s done, signal the group, verify it is gone, release its pid -- for a driver to perform. No I/O itself.'
     }
   }
 }

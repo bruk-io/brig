@@ -1,0 +1,9 @@
+// Component: infra/state_dir.py.
+model {
+  extend brig.library {
+    stateDir = component 'State Directory' {
+      technology 'Python 3.15, stdlib only'
+      description 'Resolves and makes brig\'s state directory (BRIG_HOME, else ~/.brig), where it keeps supervisor scripts, channel directories, placeholder records and its empty read-only directory, instead of the shared /tmp. Plain data in and out.'
+    }
+  }
+}

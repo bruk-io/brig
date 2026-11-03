@@ -1,9 +1,10 @@
-// Component: presentation/api.py and presentation/jail.py.
+// Component: presentation/api.py, re-exported whole (with each jail type's
+// create and the domain's plain data) by src/brig/__init__.py.
 model {
   extend brig.library {
     api = component 'API' {
       technology 'Python 3.15'
-      description 'What an embedder calls for any jail type: reserving channels, waiting for one to be ready, waiting for the command\'s exit, and teardown; with the Jail value and the real ports\' default wiring onto infra.'
+      description 'What an embedder calls for any jail type (decision-0007 item 5): reserving channels, waiting for one to be ready, waiting for the command\'s exit, interrupting it, and tearing the jail down, verified. Creating a jail is each jail type\'s own driver\'s.'
     }
   }
 }
