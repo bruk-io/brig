@@ -1,7 +1,7 @@
 ---
 id: TASK-0038
 title: brig-no-patching fails the gate on test_report_battery's os.environ writes
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-03T04:14:00Z'
@@ -29,4 +29,6 @@ At HEAD of claude/embedder-gaps, uv run just gates (and so just done) exits 1. T
 Accepted 2026-11-03. Fixed at fe3f40d: tests/e2e/test_report_battery.py's env case passes its candidate environment to create_bwrap_jail as data instead of writing os.environ, so brig-no-patching's new part passes; the part's message now says it covers item writes (os.environ[...]) as well as attributes. uv run just done passes.
 
 No repro: the failing check was the gate itself, not a test. Its failure is the 'uv run just done exited 1' recorded on TASK-0036 at the tree before fe3f40d, where brig-no-patching fired on test_report_battery.py:117-118. The full gate now exits 0 (recorded on TASK-0021).
+
+Review 2026-11-03 (reviewer): closed. Full gate exited 0 (recorded on TASK-0021). AC#1: the env case passes its environment as a tuple, and nothing writes os.environ. AC#2: the rule's message names item writes.
 <!-- SECTION:NOTES:END -->
