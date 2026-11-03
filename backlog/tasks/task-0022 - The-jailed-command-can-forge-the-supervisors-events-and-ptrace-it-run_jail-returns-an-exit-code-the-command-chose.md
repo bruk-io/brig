@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:22:00Z'
-updated_date: '2026-11-03T02:48:00Z'
+updated_date: '2026-11-03T02:51:00Z'
 labels:
   - size-5
 dependencies: []
@@ -55,9 +55,9 @@ brig.destroy_jail(jail)
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Decision recorded on how the supervisor is kept out of the supervised command's reach (which fix, and what it leaves)
+- [x] #1 Decision recorded on how the supervisor is kept out of the supervised command's reach (which fix, and what it leaves)
 - [ ] #2 An e2e battery plants the forgery (a write onto the supervisor's events pipe through /proc/1/fd) and a ptrace attach on the supervisor, and fails if run_jail returns the forged exit code or the attach succeeds, with a positive control
-- [ ] #3 program.py's docstring states what authenticates the exit code, and it is true
+- [x] #3 program.py's docstring states what authenticates the exit code, and it is true
 <!-- AC:END -->
 
 ## Implementation Notes
