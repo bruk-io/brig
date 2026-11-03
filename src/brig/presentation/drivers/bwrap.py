@@ -188,7 +188,10 @@ def _supervisors_for(
                 pass
             case _ as unreachable:
                 assert_never(unreachable)
-    match stdio_refusal(policy, (stdio.stdin, stdio.stdout, stdio.stderr)):
+    streams = (stdio.stdin, stdio.stdout, stdio.stderr)
+    named = tuple(path for path in streams if path is not None and path != "/dev/null")
+    chains = {path: _files.link_chain(path) for path in named}
+    match stdio_refusal(policy, streams, chains):
         case PathNotAbsolute(path=path):
             raise PolicyPathNotAbsolute(path)
         case StdioInWritableRoot(path=path):
@@ -216,7 +219,6 @@ def _supervisors_for(
         channels=channels,
     )
     supervisor_argv = bwrap.compile_supervisor_launch(supervisor_path, mounts, cwd)
-    streams = (stdio.stdin, stdio.stdout, stdio.stderr)
     port = real_supervisor_port(link.LiveSupervisors(supervisor_argv, streams))
     held = (*policy.write_denies, *policy.masks)
     placeholders = tuple(

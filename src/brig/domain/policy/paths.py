@@ -178,17 +178,23 @@ def cwd_refusal(policy: FsPolicy, cwd: str) -> PathNotAbsolute | CwdOutsideRoots
 
 
 def stdio_refusal(
-    policy: FsPolicy, streams: tuple[str | None, ...]
+    policy: FsPolicy,
+    streams: tuple[str | None, ...],
+    chains: Mapping[str, tuple[str, ...]] | None = None,
 ) -> PathNotAbsolute | StdioInWritableRoot | None:
     """Why the stdio paths `streams` cannot be used with `policy`, or `None`: each named one must
-    be absolute and outside every writable root (`"/dev/null"` is always fine)."""
+    be absolute, and neither it nor any path its lookup passes through (`chains`, from
+    `infra/files.py`'s `link_chain`) may be inside a writable root, since a jail could replace
+    what is there with a link (TASK-0031). `"/dev/null"` is always fine."""
+    known = chains or {}
     for path in streams:
         if path is None or path == "/dev/null":
             continue
         if not _is_normal_absolute(path):
             return PathNotAbsolute(path)
-        if any(within(path, root) for root in policy.writable):
-            return StdioInWritableRoot(path)
+        for step in known.get(path, (path,)):
+            if any(within(step, root) for root in policy.writable):
+                return StdioInWritableRoot(path)
     return None
 
 

@@ -230,3 +230,12 @@ def test_every_path_on_the_way_to_the_interpreter_must_be_mounted() -> None:
     assert interpreter_refusal(FsPolicy(readable=("/v", "/u"), masks=("/u/py-3.15",)), chain) == (
         InterpreterUnreachable("/u/py-3.15/bin/python3.15")
     )
+
+
+def test_a_stdio_path_whose_lookup_passes_through_a_writable_root_is_refused() -> None:
+    """TASK-0031: `/o/logs/out` is outside `/w`, but its lookup goes through `/w/logs`."""
+    policy = FsPolicy(readable=("/",), writable=("/w",))
+    chains = {"/o/logs/out": ("/o/logs/out", "/w/logs/out", "/v/out")}
+
+    assert stdio_refusal(policy, ("/o/logs/out",), chains) == StdioInWritableRoot("/o/logs/out")
+    assert stdio_refusal(policy, ("/o/logs/out",), {"/o/logs/out": ("/o/logs/out",)}) is None

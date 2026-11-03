@@ -273,10 +273,31 @@ type Stdio = tuple[str | None, str | None, str | None]
 _NO_STDIO: Stdio = (None, None, None)
 
 
+def _open_through_no_link(path: str, flags: int) -> int:
+    """Open `path` with `flags` one component at a time, following no symbolic link anywhere on
+    the way (TASK-0031): a link in a parent swapped in after the policy was checked fails the open
+    (`ELOOP`/`ENOTDIR`) instead of carrying it somewhere else. An `OSError` (a component missing,
+    a link, or the file unopenable) propagates.
+    """
+    if path == "/dev/null":
+        return os.open(path, flags | os.O_CLOEXEC)
+    parts = [part for part in path.split("/") if part]
+    walk = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    current = os.open("/", walk)
+    try:
+        for part in parts[:-1]:
+            following = os.open(part, walk, dir_fd=current)
+            os.close(current)
+            current = following
+        return os.open(parts[-1], flags | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=current)
+    finally:
+        os.close(current)
+
+
 def _open_stdio(stdio: Stdio) -> dict[int, int]:
     """Open each named stream (0 for reading; 1 and 2 for appending, created 0600), keyed by the
-    fd number the supervisor gets it on. Never through a link at the path itself (`O_NOFOLLOW`,
-    TASK-0031): a link there is refused as `OSError`.
+    fd number the supervisor gets it on. Never through a link anywhere on the path
+    (`_open_through_no_link`, TASK-0031): a link is refused as `OSError`.
 
     Raises:
         OSError: a path could not be opened; whatever was opened before it is closed.
@@ -287,7 +308,7 @@ def _open_stdio(stdio: Stdio) -> dict[int, int]:
             if path is None:
                 continue
             flags = os.O_RDONLY if number == 0 else os.O_WRONLY | os.O_APPEND | os.O_CREAT
-            opened[number] = os.open(path, flags | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+            opened[number] = _open_through_no_link(path, flags)
     except OSError:
         for fd in opened.values():
             os.close(fd)
