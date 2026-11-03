@@ -3,11 +3,11 @@ id: TASK-0031
 title: >-
   A stdio path is opened through a symlink, so a jail can redirect the next
   jail's output into any file the embedder can write
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:31:00Z'
-updated_date: '2026-11-03T03:59:00Z'
+updated_date: '2026-11-03T04:00:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -211,4 +211,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review 2026-11-03 (reviewer): closed. Full gate passes; cwd/stdio battery 3 runs in 3. AC#1 met: the parent-link repro is refused as PolicyStdioInWritableRoot (link_chain checks every path the lookup passes through), and every stdio file is opened component by component with no link followed, so a link swapped in after the check fails the start. Findings, filed as drafts: (medium) a stdio path through a harmless link outside every writable root now fails as a bare JailSpawnFailed caused by NotADirectoryError, naming no path or link (measured) -> 'A stdio path through a harmless link fails as a bare JailSpawnFailed'; (medium) the no-link open covers symbolic links only, so another jail of the same embedder can still redirect via a hard link, despite the worker's note (not measured) -> 'A stdio file hard-linked by another jail is still written through'. (low, notes only) the refusal text says the path 'is inside a writable root' when only a link on its lookup is.
 <!-- SECTION:NOTES:END -->
