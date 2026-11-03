@@ -3,10 +3,11 @@ id: TASK-0042
 title: >-
   A jail reopens its stdio files through /proc/self/fd with more rights than
   brig granted
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T17:50:00Z'
+updated_date: '2026-11-03T18:05:00Z'
 labels:
   - brig
   - stdio
