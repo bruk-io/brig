@@ -47,6 +47,7 @@ subprocess call, not an import), the same reasoning `wire.py`'s own
 docstring gives for its names.
 """
 
+import ctypes
 import json
 import os
 import signal
@@ -64,11 +65,42 @@ _EVENTS_FD = 4
 """Duplicates `wire.py`'s own `EVENTS_FD`, by value -- see `_REQUEST_FD`."""
 
 
+_PR_SET_DUMPABLE = 4
+"""`prctl(2)`'s option number for the dumpable flag (`<linux/prctl.h>`): `ctypes` has no name
+for it, and the standard library has no `prctl` of its own."""
+
+
 class _NoCommandError(Exception):
     """Raised when `_REQUEST_FD` closes before one `exec` request line arrives."""
 
     def __init__(self) -> None:
         super().__init__(f"fd {_REQUEST_FD} closed before an exec request arrived")
+
+
+class _NotProtectedError(Exception):
+    """Raised when this process cannot make itself non-dumpable, so the command would be able
+    to reach it (decision-0006): the supervisor refuses to start the command at all."""
+
+
+def _make_undumpable() -> None:
+    """Make this process non-dumpable before the command exists (decision-0006 item 1).
+
+    The command is this process's child, under the same uid, with the jail's own procfs:
+    while this process is dumpable the command can reopen `_EVENTS_FD` through
+    `/proc/1/fd/4` and write a `done` of its own, whatever `_start_child`'s closes did, and
+    `ptrace` this process outright. Non-dumpable, both are refused to a peer without
+    `CAP_SYS_PTRACE` in the jail's user namespace, which `--cap-drop ALL` (the bwrap
+    compile) ensures the command never holds. The command's own exec makes it dumpable again,
+    which protects nothing of brig's.
+
+    Raises:
+        _NotProtectedError: `prctl` refused the flag.
+    """
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(_PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+        raise _NotProtectedError(
+            f"prctl(PR_SET_DUMPABLE, 0) failed: {os.strerror(ctypes.get_errno())}"
+        )
 
 
 def _read_exec_request() -> tuple[list[str], dict[str, str]]:
@@ -177,6 +209,10 @@ def _start_child(argv: list[str], env: dict[str, str]) -> int:
     the host trusts stops being `waitpid(2)`-authenticated (unforgeable by
     the confined process) and becomes whatever the confined process
     chooses to write to a channel it was never supposed to reach.
+
+    The closes are necessary, not sufficient: a child can reopen its parent's fds through
+    `/proc/1/fd` while the parent is dumpable (TASK-0022). `_make_undumpable`, which `_main`
+    runs before this, is what makes the exit code `waitpid(2)`-authenticated in fact.
     """
     return os.posix_spawnp(
         argv[0],
@@ -251,9 +287,11 @@ def _reap_until_gone(child_pid: int) -> int:
 
 
 def _main() -> None:
-    """Run the supervisor's one journey: read the exec request, start the
-    command, report it started, reap until nothing remains, report it done.
+    """Run the supervisor's one journey: make this process unreachable from the command,
+    read the exec request, start the command, report it started, reap until nothing
+    remains, report it done.
     """
+    _make_undumpable()
     argv, env = _read_exec_request()
     child_pid = _start_child(argv, env)
     # `_read_exec_request`'s own docstring explains why this process's own

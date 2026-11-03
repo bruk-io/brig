@@ -135,12 +135,19 @@ _NAMESPACE_FLAGS: tuple[str, ...] = (
     "--unshare-all",
     "--die-with-parent",
     "--new-session",
+    "--cap-drop",
+    "ALL",
     "--as-pid-1",
     "--",
 )
 """bwrap's own namespace-isolation flags, after whatever `_compile_binds` names for
 a policy's binds and ahead of whatever this jail type's driver names as the jail's
 one process -- the supervisor (decision-0002), by way of `compile_supervisor_launch`.
+
+``--cap-drop ALL`` (decision-0006): bwrap run by root drops no capability by default, so a
+jail's command held nearly every capability in its namespaces, ``CAP_SYS_PTRACE`` among them,
+which overrides the supervisor's non-dumpable flag and lets the command reach PID 1. With it
+the jail holds none, whoever runs brig.
 
 A policy's binds have to come first: without at least one bind, bwrap pivots into an
 empty new root and `execvp` finds nothing there to run, regardless of exit code --

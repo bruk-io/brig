@@ -223,6 +223,8 @@ def _bwrap_argv_prefix(state_dir: str, supervisor_script: str) -> tuple[str, ...
         "--unshare-all",
         "--die-with-parent",
         "--new-session",
+        "--cap-drop",
+        "ALL",
         "--as-pid-1",
         "--",
     )

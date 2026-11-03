@@ -81,9 +81,15 @@ any of it means to a domain effect. `src/brig/infra/processes.py` is what exists
 a process as the leader of its own session and group, reaping it (with or without a deadline),
 signalling its group, and checking whether any member of it is still alive.
 
-Reserved, not yet built: `files.py`, `tether.py`, `sockets.py`, `sandbox_exec.py`, `log.py`, and
-the `supervisor/` and `proxy/` packages — decision-0001's layout for this directory, built out as
-later slices need them.
+`src/brig/infra/supervisor/` is the jail's PID 1 (decision-0002) and the host's end of its wire.
+The supervised command is its child, under the same uid, so the supervisor makes itself
+non-dumpable before the command exists, and the bwrap compile drops every capability
+(`--cap-drop ALL`): the command can neither reopen the supervisor's fds through `/proc/1` nor
+ptrace it, so the exit code the host reports is the one `waitpid(2)` gave (decision-0006).
+`src/brig/infra/sockets.py` holds the channel directory's lifecycle and the readiness check.
+
+Reserved, not yet built: `files.py`, `tether.py`, `sandbox_exec.py`, `log.py`, and the `proxy/`
+package — decision-0001's layout for this directory, built out as later slices need them.
 
 ## Presentation
 
