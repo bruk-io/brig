@@ -1,7 +1,7 @@
 ---
 id: TASK-0039
 title: Two test doubles that break decision-0001 rule 5 the gate does not see
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-03T04:14:00Z'
@@ -33,4 +33,6 @@ Review 2026-11-03 (reviewer): not closed. AC#2 met and ticked: test_policy_refus
 Worker, 2026-11-03: the remaining half fixed at 384024f without a design change: the host has a real Python older than 3.15 (/usr/bin/python3, 3.13), so the test runs the real assembled file under it (skips where none exists) and asserts stderr == refusal_message(installed) + newline and exit 1; the faked-sys tests and their helper are gone; the not-firing case is the real journey test under 3.15. No SimpleNamespace or double remains in tests/e2e. uv run just done passes.
 
 No repro: the defect was a test double sitting in e2e, against decision-0001 rule 5. No test fails on it, and the gate cannot see a double that is not named as one (this task's own description).
+
+Review 2026-11-03 (reviewer): closed. AC#1 met at 384024f: tests/e2e/test_supervisor_assemble.py has no SimpleNamespace and no double. The version refusal is tested by running the real assembled file under /usr/bin/python3 (3.13), asserting exit 1 and stderr == refusal_message(version). Run here, the file gave 6 passed with no skip. The full gate was not run again: this commit changes only this test file. AC#2 was already met. Answered here, no draft (low): on a host with no Python older than 3.15 the test skips, so there the refusal goes untested and only the skip line shows it.
 <!-- SECTION:NOTES:END -->
