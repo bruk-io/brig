@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:59:00Z'
-updated_date: '2026-11-03T04:18:00Z'
+updated_date: '2026-11-03T04:21:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -19,7 +19,7 @@ Found reviewing TASK-0031 (8b42a6a). _open_through_no_link refuses a link anywhe
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A stdio path whose lookup passes through a link is refused at create with an error that names the path and the link and says to give the resolved path, or is opened through a link no jail can write
+- [x] #1 A stdio path whose lookup passes through a link is refused at create with an error that names the path and the link and says to give the resolved path, or is opened through a link no jail can write
 <!-- AC:END -->
 
 ## Implementation Notes
