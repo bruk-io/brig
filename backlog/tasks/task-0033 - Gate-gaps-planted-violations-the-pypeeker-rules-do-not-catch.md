@@ -1,9 +1,11 @@
 ---
 id: TASK-0033
 title: 'Gate gaps: planted violations the pypeeker rules do not catch'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-02T17:23:00Z'
+updated_date: '2026-11-03T04:02:00Z'
 labels:
   - size-3
 dependencies: []
@@ -20,3 +22,22 @@ Found by an architecture review, 2026-11-02, at 739dd94. 30 violations planted i
 <!-- AC:BEGIN -->
 - [ ] #1 Each planted violation above fails the gate, with a pypeeker rule test that plants it
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+### Order of work
+1. brig-no-patching (pypeeker_rules/brig.py): the import part also refuses pytest.MonkeyPatch and _pytest.monkeypatch; a new references part refuses pytest.MonkeyPatch reached through an import of pytest (pytest.MonkeyPatch.context(), an annotation); a new imports part, through a trait anchored on the import, refuses setattr/delattr whose first argument is a name the file imports (setattr(brig, ...)); a references part refuses an attribute assignment through an imported name (brig.x = ...); a symbols part refuses a class named as a double (fake, stub, mock, dummy, spy as a word of its name) outside tests/integration/.
+2. brig-one-writer: a part refusing os.write/os.writev called through an import of os, or imported by name, outside the allow list (the supervisor's wire); a part refusing any import of logging under src/brig (no allow: the library logs nothing, and the wire writes its own JSON); the stream part also catches a chain that starts with sys.stdout/sys.stderr (sys.stdout.buffer.write).
+3. A new rule, brig-frozen-data (decision-0001 rule 8): a field of a @dataclass class under src/brig/domain whose annotation names a mutable container (list, dict, set, bytearray, their typing aliases, deque, defaultdict ...), ClassVar excluded. Enabled in pyproject.toml with root src/brig/domain.
+4. Every message says what to do instead. Each new part gets a planted-violation test and a clean case in pypeeker_rules/tests/test_brig_rules.py.
+5. just gates over the real code; any finding in real code is fixed in the code, never in the rule or an allow list.
+### Risks
+- The DSL sees no call arguments: os.write's fd cannot be read, so every os.write outside the wire is refused (brig's other writes go through file objects today). setattr's first argument is found as the first reference after the call's name in the same scope: a first argument holding no reference reads as clean (a false negative, never a false positive).
+- A double is recognised by its name only; an unnamed double (a port implementation with nothing real behind it, a SimpleNamespace) is not seen.
+- Rule 8's annotation match is textual over the binder's raw annotation; an alias of list imported under another name is not seen.
+### Proof
+- uv run just test-pypeeker-rules: every new part fires on its planted violation and stays quiet on its clean case.
+- uv run just gates green on the real tree; uv run just done green.
+- record-check --tier full on the task.
+<!-- SECTION:PLAN:END -->
