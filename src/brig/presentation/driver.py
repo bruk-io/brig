@@ -1,9 +1,9 @@
-"""bwrap's driver (decision-0001 rule 10): performs an operation or teardown
-generator's yielded effects.
+"""The effect interpreter every jail type shares (decision-0001 rule 10, decision-0007 item
+5): performs an operation or teardown generator's yielded effects.
 
 The only module that knows both `brig.domain`'s effects and a `ProcessPort`/
 `SupervisorPort`'s plain-data calls (rule 1): it translates one into the other, and
-nothing else in presentation or domain does. A unit test for this slice drives the
+nothing else in presentation or domain does. A unit test drives the
 domain generators by hand instead, exactly as this driver would, and needs no driver
 at all.
 

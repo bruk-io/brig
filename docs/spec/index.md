@@ -72,8 +72,10 @@ decision-0001's order reserves for a later slice.
 `src/brig/domain/policy/` is what an embedder states. `paths.py`'s `FsPolicy` is intent, not a
 mechanism (decision-0007): readable roots, writable roots, write denies inside them, and masks,
 each an absolute path that names the same place in the jail as on the host, the more specific
-path winning where two overlap. `refusal` says why a policy cannot be compiled (a path that is
-not absolute, or a mask hiding a root or a path brig needs), and each jail type compiles the
+path winning where two overlap. `refusal` says why a policy cannot be compiled: a path that is
+not absolute, a mask hiding a root or a path brig needs, a root absent on the host, or an entry
+reached through a symbolic link inside a writable root (a mount onto a link lands on its target,
+and the command may replace the link). Each jail type compiles the
 rest its own way: bwrap's `compile_mounts` into one ordered tuple of mounts, from which its argv
 and its `channel_exclusivity` enumeration are both read. `env.py`'s `EnvPolicy` is the
 environment's allow-list. `claims.py` and `grades.py` hold the claims a compile states and the

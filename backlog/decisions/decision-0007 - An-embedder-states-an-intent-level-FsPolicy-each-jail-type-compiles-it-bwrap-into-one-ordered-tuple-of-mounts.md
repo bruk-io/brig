@@ -23,12 +23,21 @@ reachability check (a synthetic bind standing in for it), each silently wrong if
    made reachability a puzzle. The more specific path wins where two overlap. `WHOLE_HOST_READ_ONLY`
    is `FsPolicy(readable=("/",))`.
 2. **The domain refuses what cannot compile** (`refusal`): a path that is not absolute and
-   normalised, and a mask that hides a root or a path brig needs (its state directory, a channel
-   directory). A mask is an empty read-only directory, so nothing can mount beneath it. These replace
+   normalised; a mask that hides a root or a path brig needs (its state directory, a channel
+   directory), since a mask is an empty read-only directory and nothing can mount beneath it; a
+   root absent on the host, since a root is mounted from where it is (TASK-0026); and any entry
+   reached through a symbolic link inside a writable root (TASK-0025), since a mount onto a link
+   lands on the link's target while the link stays an entry the command may replace, so the entry
+   would protect the target and not the path (measured: the command swapped a denied `hooks` link
+   for a writable directory). Refused, not followed: an embedder that means the target names it.
+   A link above every writable root refuses nothing, because nothing in the jail can change it.
+   The check and the mount happen at different moments, so something else sharing the writable
+   root could still swap a directory for a link between them; that window is noted on TASK-0025. These replace
    `StateDirectoryUnreachable` and `ChannelDirectoryUnreachable`: with every path at its real place
    and brig's state directory made before the jail starts, a mask is the one way left to hide one.
-3. **One host fact crosses in as data**: what is at each write deny's and mask's path (file,
-   directory, absent), looked up by presentation through `infra/files.py`.
+3. **Host facts cross in as data**: for every policy path, what is there (file, directory,
+   absent) and where it resolves once links are followed, looked up by presentation through
+   `infra/files.py` (`HostPath`).
 4. **bwrap compiles to one ordered tuple of `Mount`s** (`compile_mounts`), shallowest path first and,
    at one path, root before deny before mask. A masked file mounts `/dev/null`; a masked directory,
    and a deny or mask at an absent path, mounts brig's empty read-only directory
