@@ -5,12 +5,22 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T18:17:00Z'
+updated_date: '2026-11-03T18:18:00Z'
 labels:
   - brig
   - grades
   - size-3
 dependencies: []
+modified_files:
+  - >-
+    backlog/decisions/decision-0008 -
+    A-jails-report-is-its-compiles-ceiling-per-claim-held-by-an-e2e-battery-to-what-it-measures.md
+  - docs/spec/index.md
+  - src/brig/domain/grades.py
+  - src/brig/domain/jail_types/bwrap.py
+  - tests/e2e/test_ceiling_host_change_battery.py
+  - tests/e2e/test_report_battery.py
+  - tests/unit/test_report_ceilings.py
 type: bug
 ---
 
