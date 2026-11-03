@@ -3,7 +3,7 @@ id: TASK-0030
 title: >-
   A SIGINT that reaches the supervisor before it installs its forwarding handler
   is dropped, and interrupt_jail still answers True
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:21:00Z'
@@ -109,4 +109,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review (reviewer, not the worker): closed. Full gate passes, recorded above; the interrupt battery (20 interrupts straight after create, plus the two earlier tests) passed 8 runs in 8. Held-signal path: handlers go in before the exec request is read; a signal before started.append is held and forwarded once, one after is forwarded directly, and Python runs handlers between bytecodes in the main thread, so no signal is lost or sent twice. interrupt_jail's wait is bounded (5 s) and pidfd-checked, so it cannot hang or signal a recycled pid. Findings answered here, not filed (low): it cannot tell a PID 1 whose command has finished from one that has not started yet, so an interrupt in that short window waits the full 5 s before answering False, and the docstring's 'a PID 1 that started its command has none left' claims a distinction the code does not draw; interrupt_jail's own docstring should say it may block up to 5 s. A grandchild reparented to PID 1 after the command exits still counts as a child, so True can come back for a finished command (pre-existing, unchanged by this fix).
 <!-- SECTION:NOTES:END -->
