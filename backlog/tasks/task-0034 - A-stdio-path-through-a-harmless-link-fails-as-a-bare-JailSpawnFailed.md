@@ -35,4 +35,16 @@ tests/e2e/test_cwd_stdio_battery.py:177: AssertionError
 FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_hard_linked_stdio_file_is_refused
 1 failed, 7 deselected in 0.18s
 ```
+
+Repro at 1b0fed4d8ca8, test files: tests/e2e/test_cwd_stdio_battery.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_cwd_stdio_battery.py -k any_link` exited 1
+
+(26 earlier lines omitted)
+```text
+E             + JailSpawnFailed
+
+tests/e2e/test_cwd_stdio_battery.py:158: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_stdio_path_through_any_link_is_refused_naming_it
+1 failed, 7 deselected in 0.08s
+```
 <!-- SECTION:NOTES:END -->
