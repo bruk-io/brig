@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:59:00Z'
-updated_date: '2026-11-03T04:03:00Z'
+updated_date: '2026-11-03T04:06:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -50,4 +50,6 @@ FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_stdio_path_through_any_link_i
 ```
 
 Accepted 2026-11-03 under the owner's goal. The test commit e3bce5a's message names TASK-0033 and TASK-0034; it means TASK-0034 (the harmless link) and TASK-0035 (the hard link). The first repro recorded on TASK-0034 above was the hard-link case by mistake; the later one, the harmless-link case, is this task's.
+
+Worker's report (Claude): fixed at bc4508f. stdio_refusal refuses a stdio path whose lookup passes through any link (its link_chain has more than one entry) with StdioThroughLink, raised as PolicyStdioThroughLink naming the path and saying to name what it leads to. The repro above passes now. uv run just done passes.
 <!-- SECTION:NOTES:END -->
