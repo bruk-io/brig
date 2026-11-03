@@ -30,6 +30,27 @@ Architecture review 2026-11-03 (demonstrated in real bwrap 0.9.0): a jail with n
 - [x] #4 The spec counts stdio among the media law 9 names, and channel_exclusivity's claim text says what stdio carries
 <!-- AC:END -->
 
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Written after the change, as built (the brief from the owner was the plan).
+
+### Order of work
+1. Repro battery tests/e2e/test_stdio_reopen_battery.py (PATH and INHERIT), committed and recorded failing.
+2. src/brig/infra/supervisor/pumps.py and link.py: a pipe per stream, pumped by one thread per jail, finished by Supervisor.close (run_jail's done, destroy_jail).
+3. Law 7 battery tests/e2e/test_stdio_pumps_battery.py.
+4. Spec laws 7 and 9, infra and domain sections; the channel_exclusivity claim text; C4 supervisor-link; the TIOCSTI battery's skip reason.
+5. just done through record-check --tier full.
+
+### Risks
+- A pump blocking on the embedder's own stream: writes only after poll says they fit, a bounded drain, then stop.
+- SIGPIPE under an embedder that restored its default: blocked in the pump thread.
+- Commands now see pipes, not a terminal, under INHERIT.
+
+### Proof
+The repro passes after the fix; the pumps battery passes; just done passes (recorded on this task).
+<!-- SECTION:PLAN:END -->
+
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
