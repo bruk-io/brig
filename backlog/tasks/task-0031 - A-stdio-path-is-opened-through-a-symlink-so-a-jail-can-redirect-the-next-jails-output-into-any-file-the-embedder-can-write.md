@@ -42,4 +42,20 @@ tests/e2e/test_cwd_stdio_battery.py:86: AttributeError
 FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_stdio_path_inside_a_writable_root_is_refused
 1 failed, 4 deselected in 0.13s
 ```
+
+Repro at 3a62030d4e6b, test files: tests/e2e/test_cwd_stdio_battery.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_cwd_stdio_battery.py -k writable_root` exited 1
+
+(26 earlier lines omitted)
+```text
+E           AssertionError: the jail's output went through the link
+E           assert 'beforeappended\n' == 'before'
+E             
+E             - before
+E             + beforeappended
+
+tests/e2e/test_cwd_stdio_battery.py:95: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_stdio_path_inside_a_writable_root_is_refused
+1 failed, 4 deselected in 0.21s
+```
 <!-- SECTION:NOTES:END -->
