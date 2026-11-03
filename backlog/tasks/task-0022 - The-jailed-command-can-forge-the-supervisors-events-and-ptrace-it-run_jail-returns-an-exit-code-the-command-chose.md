@@ -3,9 +3,11 @@ id: TASK-0022
 title: >-
   The jailed command can forge the supervisor's events and ptrace it: run_jail
   returns an exit code the command chose
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-02T17:22:00Z'
+updated_date: '2026-11-03T02:37:00Z'
 labels:
   - size-5
 dependencies: []
@@ -57,3 +59,9 @@ brig.destroy_jail(jail)
 - [ ] #2 An e2e battery plants the forgery (a write onto the supervisor's events pipe through /proc/1/fd) and a ptrace attach on the supervisor, and fails if run_jail returns the forged exit code or the attach succeeds, with a positive control
 - [ ] #3 program.py's docstring states what authenticates the exit code, and it is true
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Accepted 2026-11-03 under the owner's goal for the migration (bh-02's TASK-0176 waits on it).
+<!-- SECTION:NOTES:END -->
