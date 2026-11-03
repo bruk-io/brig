@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T04:14:00Z'
-updated_date: '2026-11-03T04:18:00Z'
+updated_date: '2026-11-03T04:21:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -20,7 +20,7 @@ tests/e2e/test_supervisor_assemble.py:120,141 builds fake_sys, a types.SimpleNam
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 The preamble guard is tested without a double in e2e: the version enters as data, or the test moves to tests/integration with a fake
-- [ ] #2 test_policy_refusal stops at create through the fake's own fail_create, with no method replaced
+- [x] #2 test_policy_refusal stops at create through the fake's own fail_create, with no method replaced
 <!-- AC:END -->
 
 ## Implementation Notes
