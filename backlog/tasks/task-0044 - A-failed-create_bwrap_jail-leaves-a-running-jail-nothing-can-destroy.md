@@ -140,4 +140,21 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Worker, 2026-11-03 (branch claude/create-and-readiness).
+
+What changed:
+- One cleanup, `dismantle` in src/brig/presentation/jail.py, run by both `destroy_jail` and `create_bwrap_jail`'s failure path (AC#3). With a process it runs `operations.destroy` through the shared driver and closes the supervisor's pipe; then, whatever the ladder found, it removes the script and the channel directory and closes the namespace fd (OSError swallowed); it releases the placeholder record only when the result is GONE. With no process (a failure before the start) the result is GONE and everything is removed and released at once.
+- `create_bwrap_jail`: a failure after the start (placeholder attach, the namespace scan, or any BaseException there) tears the jail down through `dismantle`; the step's own error propagates when the group is gone, and `JailTeardownFailed(process)` with that error as `__cause__` when it survives (the embedder has no Jail to destroy, so it must hear the jail still runs). The supervisor's pipe is now closed on a failed create too; it was not before.
+- Placeholders go through a new `PlaceholderPort` (hold, attach, release; presentation/ports.py) wired to infra in jail.py as `PLACEHOLDERS`, so a test can fail the attach with a fake. `hold` is always called; the real port returns None for no paths, so nothing is written for a jail with nothing absent.
+- An OSError listing proc_root in the namespace scan is now `ChannelNamespaceNotFound` (cause the OSError) instead of an untranslated infra exception (the driver exception boundary rule).
+- Docs: spec law 7 and the presentation section, the error docstrings (PlaceholdersFailed, ChannelNamespaceNotFound, JailTeardownFailed), create/destroy docstrings, and the LikeC4 model (api and the bwrap driver no longer import infra.placeholders; jail does, and runs destroy through the driver).
+
+Public API change: `create_bwrap_jail` and `destroy_jail` take `placeholders: PlaceholderPort = PLACEHOLDERS`; `Jail.placeholders` is now `str | None` (the port's record) instead of `Path | None`; `close_namespace_fd` became private (only jail.py uses it now). `PlaceholderPort` is not re-exported from brig (as ProcessPort and SupervisorPort are not); a fake satisfies it structurally.
+
+Tests: the recorded repro tests/integration/test_create_failure_tears_down.py (scan step, group gone after TERM); tests/integration/test_create_failure_cleanup.py adds the attach and scan steps each with the group gone (released after teardown) and alive (JailTeardownFailed, nothing released), a failure before the start (released at once, nothing signalled), and destroy_jail's same gate with FakePlaceholders. FakePlaceholders is in tests/integration/fakes.py.
+
+Commits: 228b298 (repro), 687b660 (fix). `just done` passed (recorded above); one e2e skip, test_spawn_close_action_race, which skips on this host as before.
+
+Not verified: a real-bwrap failure after the start (there is no seam to fail attach or the scan on a real jail; the fake-driven tests cover the path). Not changed: other infra calls in the driver that can still raise an untranslated OSError before the start (the supervisor script write in `_supervisor_path`, `state_dir.ensure_empty`), observed while grepping for the boundary rule, not measured.
 <!-- SECTION:NOTES:END -->
