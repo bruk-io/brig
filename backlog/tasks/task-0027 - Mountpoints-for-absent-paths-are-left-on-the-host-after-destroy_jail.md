@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T03:59:00Z'
+updated_date: '2026-11-03T04:00:00Z'
 labels:
   - size-3
 dependencies: []
@@ -110,4 +110,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review 2026-11-03 (reviewer): not closed. Full gate passes; placeholders battery 15 runs in 15; AC#2 met and ticked. AC#1 not met: (high, measured) a crashed sibling holds the placeholders past the last destroy_jail. A process that creates a jail and is SIGKILLed leaves its bwrap a zombie (state Z, seen at 0.1 s and 1 s, reaped by 3 s here); _alive reads /proc/<pid>/stat start time only, so the zombie counts as live, and a second jail created and destroyed meanwhile left .envrc, .git/hooks and secret.env on the host with the dead record still in ~/.brig/placeholders. Under a pid 1 or subreaper that never reaps, they stay forever. Fix: treat state Z/X (field 3) as dead, since an exited process holds no mounts; add the crash ordering to the e2e. (medium, measured) the replaced-directory check is (st_dev, st_ino) only, and ext4 here reuses the inode on rmdir+mkdir 50 times in 50, so an empty directory the embedder makes where brig's placeholder was gets removed; record something that changes with re-creation as well (statx birth time or ctime_ns). (medium, by reading) attach() rewrites the record outside the lock with a non-atomic write_text, so a concurrent hold or release can read it truncated, _read returns None, and that live jail's holds are skipped: hold then calls its placeholder the embedder's, and release may remove a directory it mounts over. Take the lock in attach and write through a temporary file and rename. Passed: three jails destroyed B, A, C keep the holds until C and leave the tree as it was; 3 processes x 25 create/destroy concurrently left the tree clean.
 <!-- SECTION:NOTES:END -->
