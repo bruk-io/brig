@@ -23,8 +23,8 @@ Found while fixing TASK-0022, 2026-11-03. tests/e2e/test_channel_jail_finished.p
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 await_channel_ready answers ChannelJailFinished as soon as the jail's own process has exited, whether or not create_bwrap_jail held its namespace, and never reaps it (decision-0003: peek, not reap)
-- [ ] #2 test_channel_jail_finished.py asserts that property and its timing, not which side of the scan's race it landed on, and passes 10 runs in 10 with TASK-0022's supervisor
+- [x] #1 await_channel_ready answers ChannelJailFinished as soon as the jail's own process has exited, whether or not create_bwrap_jail held its namespace, and never reaps it (decision-0003: peek, not reap)
+- [x] #2 test_channel_jail_finished.py asserts that property and its timing, not which side of the scan's race it landed on, and passes 10 runs in 10 with TASK-0022's supervisor
 <!-- AC:END -->
 
 ## Implementation Notes
