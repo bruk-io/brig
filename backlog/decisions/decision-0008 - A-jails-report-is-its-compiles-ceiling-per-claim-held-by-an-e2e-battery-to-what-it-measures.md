@@ -30,10 +30,21 @@ proves it (rule 11: honest grades).
    lower there and fails the ceiling.
 4. `channel_exclusivity` keeps its definition: any writable path shared with the host that is not
    a declared channel, a writable root included, makes it `VIOLATED`.
+5. **`channel_exclusivity` counts what the jail can dial, not only what it can write** (the
+   dialable-socket draft, decided here under the owner's goal for the migration; the owner may
+   revisit it). A Unix socket accepts a connect through a read-only mount (measured: a jail under
+   the default policy dialled a host listener in `/run`), so a jail that sees a place where the
+   host keeps sockets shares that medium with the host. brig cannot list every socket on a host,
+   so the ceiling uses the known places (`SOCKET_DIRECTORIES`: `/run`, `/var/run`, `/tmp`,
+   `/var/tmp`, `/dev/shm`, plus the embedder's `XDG_RUNTIME_DIR`): a root that covers one, or lies
+   inside one, without a mask over it, makes the claim `VIOLATED`. The default policy shows all of
+   them, so it states the claim violated, which is what a jail under it is. A socket elsewhere
+   than those places (inside a project, say) is not seen by this rule; the claim's description
+   says what it covers.
 
 ## Consequences
 
 - An embedder reads `jail.report[FS_READ_CLAIM]` and so on, and shows the word.
 - A new claim needs its ceiling and its battery in the same change.
-- Which media a jail can dial read-only (the dialable-socket draft) is not graded by any of
-  these; that draft decides whether `channel_exclusivity` counts them.
+- An embedder that wants `channel_exclusivity` enforced reads no socket place: it names its
+  readable roots, or masks those places.

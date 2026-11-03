@@ -259,9 +259,8 @@ CHANNEL_EXCLUSIVITY_CLAIM = Claim(
     name="channel_exclusivity",
     description=(
         "the only paths this jail can write that the host can also reach are the "
-        "channels it declared: every writable bind compiled for it is the per-jail "
-        "channel directory, and nothing else the host shares with it is writable "
-        "(old SPEC law 9: nothing crosses the boundary anonymously)"
+        "channels it declared, and it sees no place where the host keeps sockets it "
+        "could dial: nothing crosses the boundary anonymously (old SPEC law 9)"
     ),
 )
 """What the compile claims about the paths it mounts (old SPEC law 9). A claim, never a grade:
@@ -289,8 +288,30 @@ ENV_CLAIM = Claim(
 )
 
 
+SOCKET_DIRECTORIES: tuple[str, ...] = ("/run", "/var/run", "/tmp", "/var/tmp", "/dev/shm")
+"""Where a host keeps Unix sockets other processes listen on (the session bus, a container
+runtime, an X server, a desktop's agents): a jail that can read one can dial what listens there,
+since `connect` needs search on the path, not write (decision-0008 item 5). An embedder adds its
+own runtime directory (`XDG_RUNTIME_DIR`) to these as host data."""
+
+
+def _dialable(policy: FsPolicy, socket_directories: tuple[str, ...]) -> bool:
+    """Whether a readable or writable root shows the jail any of `socket_directories`, or a path
+    inside one, that no mask hides."""
+    roots = (*policy.readable, *policy.writable)
+    for place in socket_directories:
+        for root in roots:
+            seen = place if within(place, root) else root if within(root, place) else None
+            if seen is not None and not any(within(seen, mask) for mask in policy.masks):
+                return True
+    return False
+
+
 def ceilings(
-    policy: FsPolicy, mounts: tuple[Mount, ...], channels: Reservations | None
+    policy: FsPolicy,
+    mounts: tuple[Mount, ...],
+    channels: Reservations | None,
+    socket_directories: tuple[str, ...] = SOCKET_DIRECTORIES,
 ) -> dict[Claim, Grade]:
     """The strongest grade each claim can have for a jail compiled to `mounts` (decision-0008):
     what this compile states, before any jail runs. An e2e battery holds every one of these to
@@ -300,7 +321,8 @@ def ceilings(
     writable root: the mount is on the host's directory entry there, and the host replacing that
     entry (an editor saving by rename) detaches it in the jail. `channel_exclusivity` is
     `VIOLATED` when a writable path the jail shares with the host is not a declared channel, as
-    `CHANNEL_EXCLUSIVITY_CLAIM` says (a writable root included).
+    `CHANNEL_EXCLUSIVITY_CLAIM` says (a writable root included), or when the jail can see one of
+    `socket_directories`, whose sockets it could dial.
     """
     inside = [
         mount.target
@@ -311,6 +333,7 @@ def ceilings(
     denies = any(path in policy.write_denies for path in inside)
     masks = any(path in policy.masks for path in inside)
     exclusive = set(writable_shared_paths(mounts)) <= set(declared_channel_paths(channels))
+    exclusive = exclusive and not _dialable(policy, socket_directories)
     return {
         FS_WRITE_CLAIM: Grade.BEST_EFFORT if denies else Grade.ENFORCED,
         FS_READ_CLAIM: Grade.BEST_EFFORT if masks else Grade.ENFORCED,

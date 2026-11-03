@@ -143,3 +143,51 @@ def test_a_mask_inside_a_writable_root_is_reported_best_effort() -> None:
     assert jail.report[FS_READ_CLAIM] is Grade.BEST_EFFORT
     _, default = _exit("pass", policy=WHOLE_HOST_READ_ONLY)
     assert default.report[FS_READ_CLAIM] is Grade.ENFORCED
+
+
+_DIAL = (
+    "import socket, sys\n"
+    "client = socket.socket(socket.AF_UNIX)\n"
+    "try:\n"
+    "    client.connect(sys.argv[1])\n"
+    "except OSError:\n"
+    "    sys.exit(7)\n"
+)
+
+
+def test_channel_exclusivity_a_host_socket_in_a_socket_place_is_reached_only_where_it_is_seen() -> (
+    None
+):
+    """decision-0008 item 5: a host listener in `/tmp`. Under the default policy the jail dials
+    it (measured VIOLATED; the report says no more); under a policy that shows no socket place it
+    cannot (measured ENFORCED, and the report says so). The control: the host itself reaches it."""
+    from brig import CHANNEL_EXCLUSIVITY_CLAIM
+
+    with tempfile.TemporaryDirectory(dir="/tmp") as place:
+        path = f"{place}/host.sock"
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(path)
+            listener.listen()
+            with socket.socket(socket.AF_UNIX) as host:
+                host.connect(path)
+            code, wide = _exit(_DIAL, path, policy=WHOLE_HOST_READ_ONLY)
+            _held_to(wide, CHANNEL_EXCLUSIVITY_CLAIM, control=True, blocked=code == 7)
+            assert code != 7, "the default policy should show /tmp, and so the socket"
+            narrow = FsPolicy(
+                readable=tuple(
+                    p
+                    for p in (
+                        "/usr",
+                        "/bin",
+                        "/lib",
+                        "/lib64",
+                        "/etc",
+                        sys.prefix,
+                        str(Path(sys.base_prefix).parent),
+                    )
+                    if Path(p).exists()
+                )
+            )
+            code, jail = _exit(_DIAL, path, policy=narrow)
+            _held_to(jail, CHANNEL_EXCLUSIVITY_CLAIM, control=True, blocked=code == 7)
+            assert jail.report[CHANNEL_EXCLUSIVITY_CLAIM] is Grade.ENFORCED

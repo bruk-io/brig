@@ -2,6 +2,7 @@
 supervisor script, refusing and compiling the policy, starting the jail through the shared driver,
 and holding the jail's PID namespace for channel readiness."""
 
+import os
 import secrets
 import sys
 import tempfile
@@ -406,8 +407,15 @@ def create_bwrap_jail(
         channel_namespace_fd=namespace_fd,
         mounts=mounts,
         placeholders=record,
-        report=bwrap.ceilings(policy, mounts, channels) if mounts else {},
+        report=bwrap.ceilings(policy, mounts, channels, _socket_directories()) if mounts else {},
     )
+
+
+def _socket_directories() -> tuple[str, ...]:
+    """brig's known socket directories, plus this embedder's runtime directory if it has one."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+    extra = (runtime,) if runtime.startswith("/") else ()
+    return (*bwrap.SOCKET_DIRECTORIES, *extra)
 
 
 def _namespace_fd_for(process: Process, proc_root: str = "/proc") -> int | None:

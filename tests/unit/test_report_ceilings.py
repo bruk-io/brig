@@ -21,14 +21,29 @@ def _ceilings(policy: FsPolicy, kinds: dict[str, PathKind]) -> dict[str, Grade]:
     return {claim.name: grade for claim, grade in ceilings(policy, mounts, None).items()}
 
 
-def test_the_default_policy_states_every_claim_enforced() -> None:
+def test_the_default_policy_shows_the_hosts_socket_places_so_exclusivity_is_violated() -> None:
+    """`/` covers `/run`, `/tmp` and the rest, whose sockets the jail could dial."""
     assert _ceilings(WHOLE_HOST_READ_ONLY, {}) == {
         FS_WRITE_CLAIM.name: Grade.ENFORCED,
         FS_READ_CLAIM.name: Grade.ENFORCED,
         NETWORK_CLAIM.name: Grade.ENFORCED,
         ENV_CLAIM.name: Grade.ENFORCED,
-        CHANNEL_EXCLUSIVITY_CLAIM.name: Grade.ENFORCED,
+        CHANNEL_EXCLUSIVITY_CLAIM.name: Grade.VIOLATED,
     }
+
+
+def test_a_policy_showing_no_socket_place_keeps_exclusivity_enforced() -> None:
+    assert _ceilings(FsPolicy(readable=("/usr", "/etc")), {})[CHANNEL_EXCLUSIVITY_CLAIM.name] is (
+        Grade.ENFORCED
+    )
+    masked = FsPolicy(readable=("/",), masks=("/run", "/var/run", "/tmp", "/var/tmp", "/dev/shm"))
+    kinds = {path: PathKind.DIRECTORY for path in masked.masks}
+    assert _ceilings(masked, kinds)[CHANNEL_EXCLUSIVITY_CLAIM.name] is Grade.ENFORCED
+
+
+def test_a_root_inside_a_socket_place_is_dialable_too() -> None:
+    found = _ceilings(FsPolicy(readable=("/usr", "/run/user/1000/app")), {})
+    assert found[CHANNEL_EXCLUSIVITY_CLAIM.name] is Grade.VIOLATED
 
 
 def test_a_deny_or_mask_inside_a_writable_root_is_only_best_effort() -> None:
@@ -50,7 +65,7 @@ def test_a_mask_outside_every_writable_root_keeps_fs_read_enforced() -> None:
 
 
 def test_a_writable_root_shared_with_the_host_violates_channel_exclusivity() -> None:
-    found = _ceilings(FsPolicy(readable=("/",), writable=("/w",)), {})
+    found = _ceilings(FsPolicy(readable=("/usr",), writable=("/w",)), {})
 
     assert found[CHANNEL_EXCLUSIVITY_CLAIM.name] is Grade.VIOLATED
 
