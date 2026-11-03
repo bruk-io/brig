@@ -21,7 +21,7 @@ Found reviewing TASK-0024.01 (c4ef292). infra/files.py kinds() follows links, an
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A deny or mask whose path is a symlink is refused, or compiled so the path itself cannot be written, created or read, with the decision saying which
+- [x] #1 A deny or mask whose path is a symlink is refused, or compiled so the path itself cannot be written, created or read, with the decision saying which
 - [x] #2 An e2e test plants a symlink at a deny path inside a writable root and shows the command can neither write through it nor replace it
 <!-- AC:END -->
 
