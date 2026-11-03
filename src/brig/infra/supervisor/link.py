@@ -18,9 +18,14 @@ from dataclasses import dataclass
 
 from brig.infra import processes
 from brig.infra.supervisor import wire
+from brig.infra.supervisor.pumps import Flow, Pumps
 
 _READ_CHUNK = 4096
 """How many bytes `Supervisor.read_event` reads at once: one event line, usually."""
+
+_DRAIN_S = 2.0
+"""How long closing a supervisor waits for its command's output to finish pumping: what is left
+in the pipes once the jail is gone, which is at most their capacity (TASK-0042)."""
 
 _SUPERVISOR_ENV: dict[str, str] = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
 """The whole environment the supervisor process gets: a fixed, non-secret `PATH`. It does not
@@ -55,17 +60,19 @@ class ReadTimedOut:
 
 
 class Supervisor:
-    """A started supervisor: its pid and pgid, and the read end of its events pipe.
+    """A started supervisor: its pid and pgid, the read end of its events pipe, and the pumps
+    that carry its command's stdio (TASK-0042).
 
     Invariant (rule 7): `_pending` holds the bytes read from `events_fd` that do not yet end in
     a newline, since one `os.read` may return part of a line or more than one. `events_fd`
-    stays open until `close`.
+    stays open, and `pumps` pumping, until `close`.
     """
 
-    def __init__(self, pid: int, pgid: int, events_fd: int) -> None:
+    def __init__(self, pid: int, pgid: int, events_fd: int, pumps: Pumps | None = None) -> None:
         self.pid = pid
         self.pgid = pgid
         self.events_fd = events_fd
+        self.pumps = pumps
         self._pending = b""
 
     def read_event(self, deadline: float) -> wire.Event | None | ReadTimedOut:
@@ -94,17 +101,22 @@ class Supervisor:
         return wire.decode_event(line.decode())
 
     def close(self) -> None:
-        """Close `events_fd`, once, after the last `read_event`; an `OSError` is swallowed,
-        since teardown calls this unconditionally."""
+        """Close `events_fd`, once, after the last `read_event`, and finish the pumps: what the
+        command wrote is pumped on until its pipes reach end of file, for at most `_DRAIN_S`,
+        and its stdin is fed no more. An `OSError` is swallowed, since teardown calls this
+        unconditionally."""
         try:
             os.close(self.events_fd)
         except OSError:
             pass
+        if self.pumps is not None:
+            self.pumps.finish(time.monotonic() + _DRAIN_S)
 
 
 type Stdio = tuple[str | None, str | None, str | None]
-"""The supervisor's fd 0, 1 and 2, which its command inherits: each a host path to open, or
-`None` for this process's own."""
+"""Where the supervisor's fd 0, 1 and 2, which its command inherits, are pumped from and to:
+each a host path to open, or `None` for this process's own. The supervisor gets pipes, never
+these (TASK-0042)."""
 
 _NO_STDIO: Stdio = (None, None, None)
 
@@ -140,25 +152,51 @@ def _open_through_no_link(path: str, flags: int) -> int:
     return opened
 
 
-def _open_stdio(stdio: Stdio) -> dict[int, int]:
-    """Open each named stream (0 for reading; 1 and 2 for appending, created 0600), through no
-    link, keyed by the fd number the supervisor gets it on.
+def _open_end(number: int, path: str | None) -> int:
+    """The host's end of stream `number`: `path` opened through no link (0 for reading; 1 and 2
+    for appending, created 0600), or a duplicate of this process's own fd `number` (or
+    `/dev/null` where that is closed), so closing it leaves the embedder's own open. An
+    `OSError` from opening `path` propagates.
+    """
+    if path is None:
+        try:
+            return os.dup(number)
+        except OSError:
+            path = "/dev/null"
+    flags = os.O_RDONLY if number == 0 else os.O_WRONLY | os.O_APPEND | os.O_CREAT
+    return _open_through_no_link(path, flags)
+
+
+def _plumb(stdio: Stdio) -> tuple[dict[int, int], tuple[Flow, ...]]:
+    """A pipe per stream: the jail's end of each, keyed by the fd number the supervisor gets it
+    on, and the flows that pump the host's end to or from where `stdio` says (TASK-0042). The
+    jail is never handed an fd on a host inode: reopening `/proc/self/fd/N` reaches only the
+    pipe.
 
     Raises:
-        OSError: a path could not be opened; whatever was opened before it is closed.
+        OSError: a path could not be opened, or a pipe made; whatever was opened before is
+            closed.
     """
-    opened: dict[int, int] = {}
+    opened: list[int] = []
+    jail_ends: dict[int, int] = {}
+    flows: list[Flow] = []
     try:
         for number, path in enumerate(stdio):
-            if path is None:
-                continue
-            flags = os.O_RDONLY if number == 0 else os.O_WRONLY | os.O_APPEND | os.O_CREAT
-            opened[number] = _open_through_no_link(path, flags)
+            host = _open_end(number, path)
+            opened.append(host)
+            read_end, write_end = os.pipe()
+            opened += [read_end, write_end]
+            if number == 0:
+                jail_ends[number] = read_end
+                flows.append(Flow(source=host, sink=write_end, inbound=True))
+            else:
+                jail_ends[number] = write_end
+                flows.append(Flow(source=read_end, sink=host, inbound=False))
     except OSError:
-        for fd in opened.values():
+        for fd in opened:
             os.close(fd)
         raise
-    return opened
+    return jail_ends, tuple(flows)
 
 
 def _start(
@@ -167,40 +205,44 @@ def _start(
     command_env: Mapping[str, str],
     stdio: Stdio = _NO_STDIO,
 ) -> Supervisor:
-    """Start `supervisor_argv` as this process's child, give it `stdio` as fd 0, 1 and 2, and
-    write it the one exec request for `command_argv` in `command_env`.
+    """Start `supervisor_argv` as this process's child, give it a pipe as each of fd 0, 1 and 2,
+    pumped to and from where `stdio` says (`_plumb`), and write it the one exec request for
+    `command_argv` in `command_env`.
 
     The request pipe's read end and the events pipe's write end become the child's
-    `wire.REQUEST_FD` and `wire.EVENTS_FD`; this process closes its copies of both once the
-    child has them, so the events pipe reaches end of file when the supervisor exits. Of this
-    process's other fds, only fd 0, 1 and 2 not given in `stdio` reach the supervisor, and so
-    its command. `command_env` goes only into the request; the supervisor runs in
-    `_SUPERVISOR_ENV`.
+    `wire.REQUEST_FD` and `wire.EVENTS_FD`; this process closes its copies of both, and of the
+    stdio pipes' jail ends, once the child has them, so each pipe reaches end of file when the
+    jail is gone. No other fd of this process reaches the supervisor, and so its command.
+    `command_env` goes only into the request; the supervisor runs in `_SUPERVISOR_ENV`.
 
     Raises:
         SupervisorSpawnError: `supervisor_argv` could not be started, or started
             and then died (or otherwise closed its own `wire.REQUEST_FD`) before
             the one exec request could be written to it.
     """
-    streams = _open_stdio(stdio)
+    jail_ends, flows = _plumb(stdio)
     request_read_fd, request_write_fd = os.pipe()
     events_read_fd, events_write_fd = os.pipe()
     try:
         spawned = processes.spawn(
             supervisor_argv,
-            tuple(number for number in (0, 1, 2) if number not in streams),
+            (),
             env=_SUPERVISOR_ENV,
-            fds={**streams, wire.REQUEST_FD: request_read_fd, wire.EVENTS_FD: events_write_fd},
+            fds={**jail_ends, wire.REQUEST_FD: request_read_fd, wire.EVENTS_FD: events_write_fd},
         )
     except (processes.SpawnError, OSError) as exc:
         for fd in (request_read_fd, request_write_fd, events_read_fd, events_write_fd):
             os.close(fd)
+        for flow in flows:
+            os.close(flow.source)
+            os.close(flow.sink)
         raise SupervisorSpawnError(supervisor_argv) from exc
     finally:
-        for fd in streams.values():
+        for fd in jail_ends.values():
             os.close(fd)
     os.close(request_read_fd)
     os.close(events_write_fd)
+    pumps = Pumps(flows)
     try:
         with os.fdopen(request_write_fd, "w") as request_pipe:
             request_pipe.write(wire.encode_exec_request(command_argv, command_env))
@@ -211,8 +253,9 @@ def _start(
             os.waitpid(spawned.pid, 0)
         except OSError:
             pass
+        pumps.finish(time.monotonic())
         raise SupervisorSpawnError(supervisor_argv) from exc
-    return Supervisor(pid=spawned.pid, pgid=spawned.pgid, events_fd=events_read_fd)
+    return Supervisor(pid=spawned.pid, pgid=spawned.pgid, events_fd=events_read_fd, pumps=pumps)
 
 
 def _await_one_done(supervisor: Supervisor, deadline: float) -> int | None | SupervisorDoneUnknown:

@@ -44,8 +44,11 @@ future contribution; a change that violates one is a SPEC change first, code sec
 7. **Control must not require cooperation.** Interrupt and teardown work when the command is
    spinning, wedged or hostile: `interrupt_jail` signals through the supervisor and loses nothing
    while the jail comes up; `destroy_jail` ends the jail's whole PID namespace and verifies it is
-   gone. *Held by* `tests/e2e/test_interrupt_battery.py`, `tests/e2e/test_supervisor_reaps_orphans.py`
-   and the teardown integration tests; a battery that plants survivors from the host is not yet
+   gone. The pumps that carry the jail's stdio end with it: `destroy_jail` drains and closes
+   them, so a command that never reads its stdin, or floods its stdout, cannot hold the host past
+   teardown (TASK-0042). *Held by* `tests/e2e/test_interrupt_battery.py`,
+   `tests/e2e/test_supervisor_reaps_orphans.py`, `tests/e2e/test_stdio_pumps_battery.py` and the
+   teardown integration tests; a battery that plants survivors from the host is not yet
    written.
 8. **Events are evidence, never the boundary.** No security claim rests on an event having been
    emitted: the supervisor's `started`/`done` say what happened, and the grades rest on
@@ -54,15 +57,22 @@ future contribution; a change that violates one is a SPEC change first, code sec
    channels are the only shared media: every writable path the jail shares with the host, and
    every host path where a socket the jail could dial might sit (decision-0008 item 5 and its
    2026-11-03 note): a visible place where hosts keep sockets violates it, and any other root
-   leaves it best-effort, since no list of places finds every socket. **Argv is
+   leaves it best-effort, since no list of places finds every socket. **Stdio is one of the
+   enumerated shared media** (TASK-0042): what crosses it is only the bytes the embedder sends in
+   and the command writes out, because the command's fd 0, 1 and 2 are always pipes the host
+   pumps to and from the embedder's files or its own streams. Handed an fd on a host inode, a
+   jail could reopen it through `/proc/self/fd/N` with whatever mode the file's permissions allow
+   its uid (truncate a stdin file, read an append-only log); reopening a pipe reaches only the
+   pipe. **Argv is
    one of the enumerated shared media**, as the old law said: anything on a command line brig
    starts is visible in `ps` to every user who can see the process, for as long as it runs, and is
    counted, never excused because the exposure is the host's rather than the jail's. brig's own
    argv carries only paths (the supervisor's script, channel endpoints) and the embedder's
-   command; the environment and stdio travel by pipe and fd, never argv. *Held by*
+   command; the environment and stdio travel by pipe, never argv. *Held by*
    `tests/e2e/test_channel_exclusivity_battery.py`, `tests/e2e/test_cross_jail_channel_battery.py`,
    the socket case in `tests/e2e/test_report_battery.py` and the socket outside every listed
-   place in `tests/e2e/test_ceiling_host_change_battery.py`; the argv count has no test yet, and
+   place in `tests/e2e/test_ceiling_host_change_battery.py`, and for stdio
+   `tests/e2e/test_stdio_reopen_battery.py`; the argv count has no test yet, and
    the claim's grade does not yet include it.
 10. **Prove gates by planting violations.** A probe or test that observes a clean run proves
     nothing. Every enforcement claim has a battery that attempts the violation and a positive
@@ -84,7 +94,8 @@ reached through a symbolic link inside a writable root), `cwd_refusal` (a workin
 no root), `stdio_refusal` (a stdio path inside a writable root, through a link, or with another
 name) and `interpreter_refusal` (a policy that does not mount the supervisor's interpreter).
 `env.py`'s `EnvPolicy` is the environment's allow-list and `scrub_env` its filter; `stdio.py`'s
-`Stdio` says where the command's fd 0, 1 and 2 come from. Mappings are `frozendict`, sequences
+`Stdio` says where the command's fd 0, 1 and 2 are pumped from and to; the command itself always
+gets pipes. Mappings are `frozendict`, sequences
 tuples (decision-0001 rule 8).
 
 `jail_types/bwrap.py` is bwrap's slice: `compile_run` makes the plan, `compile_mounts` turns the
@@ -151,7 +162,13 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   for; a refusal, a failed connect and the one raise each close theirs (TASK-0001.34).
 - `supervisor/`: the jail's PID 1 (decision-0002). `wire.py` and `program.py` assemble
   (`assemble.py`) into one stdlib-only file that refuses an interpreter older than 3.15;
-  `link.py` is the host's end, starting it and reading its events. The supervised command is its
+  `link.py` is the host's end, starting it and reading its events. `pumps.py` carries the
+  command's stdio (TASK-0042): the supervisor gets a pipe as each of fd 0, 1 and 2, and one
+  thread per jail pumps each to or from the embedder's file or its own fd, never blocking on the
+  jail's end; closing the supervisor (when `run_jail` sees `done`, and in `destroy_jail`) stops
+  feeding stdin and pumps what the command wrote until end of file, for at most a bounded drain.
+  A pump blocked on the embedder's own stream (a pipe nobody reads) is left behind, not waited
+  for. The supervised command is its
   child, under the same uid, so the supervisor makes itself non-dumpable before the command
   exists, and the bwrap compile drops every capability (`--cap-drop ALL`): the command can
   neither reopen the supervisor's fds through `/proc/1` nor ptrace it, so the exit code the host

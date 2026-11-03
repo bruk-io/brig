@@ -260,7 +260,9 @@ CHANNEL_EXCLUSIVITY_CLAIM = Claim(
         "a socket could sit, and no list of places finds every one, so any root makes this at "
         "best best-effort: it holds until the host puts a listening socket under a root; one of "
         "the places hosts keep sockets in (/run, /tmp and the like) visible, or a writable "
-        "root, violates it"
+        "root, violates it. Stdio is no shared path: the command's fd 0, 1 and 2 are pipes the "
+        "host pumps, carrying only the bytes the embedder sends in and the command writes out, "
+        "never a host file the jail could reopen"
     ),
 )
 """What the compile claims about the paths it mounts (law 9). A claim, never a grade:

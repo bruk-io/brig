@@ -2,9 +2,10 @@
 `exited` and `done` events out, each one newline-delimited JSON line. Shapes only, no I/O.
 
 The protocol travels on fds 3 and 4, never 0, 1 or 2, so the supervised command inherits the
-embedder's stdio unchanged. A fd survives bwrap's exec into the jail under `--unshare-all` and
-`--as-pid-1` (measured). `program.py` cannot import this module once assembled, so it repeats
-these numbers and shapes; the supervisor's e2e gateway tests run it against this module's.
+stdio brig gives it unchanged: pipes the host pumps (TASK-0042). A fd survives bwrap's exec into
+the jail under `--unshare-all` and `--as-pid-1` (measured). `program.py` cannot import this
+module once assembled, so it repeats these numbers and shapes; the supervisor's e2e gateway tests
+run it against this module's.
 """
 
 import json

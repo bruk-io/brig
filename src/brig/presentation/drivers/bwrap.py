@@ -241,7 +241,9 @@ def create_bwrap_jail(
             never put in `env` (old SPEC decision-184/186).
         cwd: The command's working directory, inside a root of `policy`; the embedder's own
             when unset.
-        stdio: Where the command's fd 0, 1 and 2 come from; the embedder's own by default.
+        stdio: Where the command's fd 0, 1 and 2 are pumped from and to; the embedder's own by
+            default. The command gets pipes, never these (TASK-0042); `destroy_jail` ends the
+            pumps.
         processes: The `ProcessPort` (a fake in a test).
         supervisors: A `SupervisorPort` to use as given (a fake in a test); `policy` is then not
             compiled and no supervisor script is written.

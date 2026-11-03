@@ -479,15 +479,20 @@ def test_tiocsti_injection_fails_in_a_real_bwrap_jail() -> None:
     DRAFT-0010's own design question is ever settled by wiring the supervised
     command's own stdio to something real, this stops skipping and asserts the real
     claim again, with no change needed here.
+
+    TASK-0042 settled it the other way: a jail's fd 0, 1 and 2 are pipes brig pumps to and
+    from the embedder's streams, so no terminal reaches a jail through its stdio at all, and
+    this skips for that reason.
     """
     _skip_if_tiocsti_unavailable()
     exit_code = _run_in_pty_session(_jailed_tiocsti_probe)
     if exit_code == _ERRNO_EXIT_OFFSET + errno.ENOTTY:
         pytest.skip(
-            "DRAFT-0010: the supervised path wires the real command's fd 0 to the "
-            "read end of a sealed pipe (program.py's _start_child), not a tty, so "
-            "this probe's own ioctl fails with ENOTTY for a reason unrelated to "
-            "confinement -- not evidence TIOCSTI is denied or allowed here"
+            "TASK-0042: a jail's stdio is a pipe brig pumps, never the embedder's own "
+            "terminal, so this probe's own ioctl fails with ENOTTY before TIOCSTI is "
+            "tried -- not evidence of what --new-session does, which "
+            "test_new_session_is_the_sole_closer_of_tiocsti_when_infra_detaches_no_session "
+            "measures against bwrap's own argv"
         )
     assert exit_code == _ERRNO_EXIT_OFFSET + _DENIED_ERRNO
 

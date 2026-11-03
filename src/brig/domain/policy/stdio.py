@@ -7,8 +7,11 @@ from dataclasses import dataclass
 class Stdio:
     """Each stream a host path, or `None` for the embedder's own. `stdin` is opened for reading;
     `stdout` and `stderr` for appending, created owner-only (0600) when absent. `"/dev/null"`
-    discards a stream. Nothing else of the embedder's reaches the command: these three numbers
-    are the whole fd allow-list past the supervisor's own wire."""
+    discards a stream. Wherever a stream goes, the command gets a pipe, and the host pumps it to
+    or from the file or the embedder's own fd (TASK-0042): handed a host inode, a jail could
+    reopen it through `/proc/self/fd` with any mode the file allows its uid. The pumps end with
+    the jail. Nothing else of the embedder's reaches the command: these three numbers are the
+    whole fd allow-list past the supervisor's own wire."""
 
     stdin: str | None = None
     stdout: str | None = None
@@ -16,4 +19,5 @@ class Stdio:
 
 
 INHERIT = Stdio()
-"""The default: the command's streams are the embedder's own."""
+"""The default: the command's streams are pumped to and from the embedder's own fd 0, 1 and 2.
+Bytes on the embedder's stdin that the pump read but the command never did are not given back."""

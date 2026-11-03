@@ -1,6 +1,7 @@
-// Component: infra/supervisor/link.py, infra/supervisor/assemble.py and
-// infra/supervisor/wire.py (with infra/supervisor/__init__.py) -- the host's
-// end of the supervisor (decision-0002). assemble.py reads wire.py's and
+// Component: infra/supervisor/link.py, infra/supervisor/pumps.py,
+// infra/supervisor/assemble.py and infra/supervisor/wire.py (with
+// infra/supervisor/__init__.py) -- the host's end of the supervisor
+// (decision-0002). pumps.py carries the command's stdio over pipes (TASK-0042). assemble.py reads wire.py's and
 // infra/supervisor/program.py's sources into the one file the supervisor
 // container runs; link.py and the shared driver import wire.py directly,
 // since they never run inside a jail.
@@ -8,7 +9,7 @@ model {
   extend brig.library {
     supervisorLink = component 'Supervisor Link' {
       technology 'Python 3.15, stdlib only'
-      description 'The host\'s end of the supervisor: assembles wire.py and program.py into the one supervisor file that refuses an interpreter older than 3.15, starts it as this process\'s child with a fixed environment, hands it the exec request, and reads its events in wire.py\'s shapes. Plain data in and out.'
+      description 'The host\'s end of the supervisor: assembles wire.py and program.py into the one supervisor file that refuses an interpreter older than 3.15, starts it as this process\'s child with a fixed environment and a pipe for each stdio stream, pumped on a thread to and from the embedder\'s files or own fds until the jail ends, hands it the exec request, and reads its events in wire.py\'s shapes. Plain data in and out.'
     }
   }
 }
