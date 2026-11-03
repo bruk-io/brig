@@ -118,4 +118,12 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Worker's report (Claude, 2026-11-03).
+
+decision-0006 records the fix and the measurements behind it (a stand-in PID 1 and child under root and uid 1000, with and without each half). Done: `program.py` makes the supervisor non-dumpable (`prctl(PR_SET_DUMPABLE, 0)` through `ctypes`) as the first thing `_main` does, before it reads the exec request, and raises `_NotProtectedError` if the call fails, so the command never starts unprotected. The bwrap compile adds `--cap-drop ALL` to its namespace flags: bwrap run by root otherwise left the command nearly every capability (CapEff `000001fffeffffff`), `CAP_SYS_PTRACE` among them, which overrides the dumpable check. `program.py`'s docstring now says the fd closes are necessary, not sufficient, and what makes the exit code `waitpid`-authenticated; the SPEC's infra section states the supervisor's isolation.
+
+Tests: `tests/e2e/test_supervisor_isolation_battery.py` (committed alone first, 88c7f82; its failing run is the repro above: run_jail trusted the forged done, 42, and the command held capabilities) plants the forged `done` through `/proc/1/fd` and asserts run_jail reports the real code (7) after the command's second; a positive control reopens a pipe of the command's own forked child through procfs and succeeds; a third asserts the command's CapEff is 0. The battery does not plant a ptrace attach on PID 1; decision-0006's measurements cover it (refused in both configurations the fix produces), and the non-dumpable flag that refuses `/proc/1/fd` is the same check ptrace makes. Unit argv assertions and the TIOCSTI copy include `--cap-drop ALL`.
+
+`uv run just done` passes at 08aaf4a, recorded above. Found on the way and filed as TASK-0023: a finished-jail readiness race that the supervisor's extra start-up work made lose every run; fixed there, in its own commits.
 <!-- SECTION:NOTES:END -->
