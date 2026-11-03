@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:31:00Z'
-updated_date: '2026-11-03T03:52:00Z'
+updated_date: '2026-11-03T03:46:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -129,6 +129,4 @@ done: all steps passed
 ```
 
 Review 2026-11-03 (reviewer, not closed). Full gate passes. AC#2 met (e2e plants the link, next create refused, target untouched). AC#1 not met: the refusal is lexical, so a stdio path outside the writable roots that reaches one through a link in a parent directory is not refused, and O_NOFOLLOW covers only the last component. Measured: writable root R with R/logs, an outside link O/logs -> R/logs; jail 1 replaces R/logs with a link to victim dir V; jail 2 with stdout=O/logs/out.txt is accepted and V/out.txt becomes 'beforeappended'. Fix: check the stdio path's resolved parent (realpath) against the resolved writable roots, or open with openat2 RESOLVE_NO_SYMLINKS. Also not covered by design: a stdio path in a root another jail of the same embedder may write; brig cannot see that policy, so only no-symlink resolution (RESOLVE_NO_SYMLINKS on the whole path) closes it, or a documented embedder rule.
-
-Worker, 2026-11-03, on the review's finding (a stdio path whose parent links into a writable root): reproduced and fixed at . stdio_refusal now checks every path the stdio path's lookup passes through (infra.files.link_chain), so outside/logs/out.txt that goes through root/logs is refused (PolicyStdioInWritableRoot) though its text and its final target are outside the root. Belt and braces: infra opens each stdio file one component at a time with O_PATH|O_DIRECTORY|O_NOFOLLOW and O_NOFOLLOW on the last, so a link swapped in after the check fails the start (JailSpawnFailed) instead of redirecting it. A stdio path in a root that another jail of the same embedder may write but this policy does not name: brig cannot see that jail's policy; the no-link open is what covers it now (a link anywhere on the path refuses the open). New e2e repro committed first and recorded above, then passing; a unit case for the chain. uv run just done passes.
 <!-- SECTION:NOTES:END -->
