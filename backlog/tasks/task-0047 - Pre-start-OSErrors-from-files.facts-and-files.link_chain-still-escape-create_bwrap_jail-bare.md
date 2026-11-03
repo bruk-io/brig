@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0030
+id: TASK-0047
 title: >-
   Pre-start OSErrors from files.facts and files.link_chain still escape
   create_bwrap_jail bare
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T19:22:00Z'
 labels:
