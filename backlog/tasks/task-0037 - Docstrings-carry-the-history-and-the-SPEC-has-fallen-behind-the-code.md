@@ -1,11 +1,11 @@
 ---
 id: TASK-0037
 title: Docstrings carry the history and the SPEC has fallen behind the code
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T04:37:00Z'
+updated_date: '2026-11-03T04:38:00Z'
 labels:
   - size-3
 dependencies: []
@@ -250,4 +250,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Reviewed (philosophy:reviewer), 2026-11-03: closed. Full gate (uv run just done) exit 0, recorded above; working tree unchanged after it. Code-only diff (docstrings stripped, ast.unparse on 3.15) of 4791aa1 against its parent shows only the stated changes: Spawn/Reap, their driver arms, ProcessPort.spawn/reap/reap_deadline, jail.py adapters, infra reap_deadline and its two tests, fake fields; ChannelRefused -> ChannelNameRefusal in domain with no alias (api.py's private alias import also gone); ports' ProcessUnknown/SupervisorDoneUnknown replaced by domain ExitCodeUnknown, exported from brig, none kept; frozendict for Plan.env, StartSupervisedCommand.env, scrub_env, grade, ceilings, Jail.report, _STRENGTH, _RANK, _SIGNALS; LiveSupervisors -> LiveSupervisor (wrong pid answers as closed); JailExitUnknown message; SpawnedProcess privatized; test_report_battery env as a mapping. Spot-checked measured facts kept: program.py EBADF on CLOSE of a closed fd, forged done via events fd, /proc/1/fd and undumpable; bwrap --as-pid-1 and setsid; placeholders' inode reuse/xattr and liveness rules; sockets ENOPROTOOPT vs EINVAL. SPEC Domain/Infra/Presentation match src layout and list what is not built. Findings, none filed: (low) docs/architecture LikeC4 still marks the supervisor planned, already flagged by the worker as outside this task's SPEC scope; (info) infra link._SUPERVISOR_ENV stays a module-level dict, outside the domain mappings rule 8 was applied to.
 <!-- SECTION:NOTES:END -->
