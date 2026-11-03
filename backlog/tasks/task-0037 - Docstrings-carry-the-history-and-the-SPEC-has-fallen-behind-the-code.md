@@ -1,9 +1,11 @@
 ---
 id: TASK-0037
 title: Docstrings carry the history and the SPEC has fallen behind the code
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-02T17:23:00Z'
+updated_date: '2026-11-03T04:15:00Z'
 labels:
   - size-3
 dependencies: []
@@ -22,3 +24,31 @@ Found by an architecture review, 2026-11-02, at 739dd94. 3,203 of 5,583 source l
 - [ ] #2 The SPEC describes what is built, and frozendict replaces the dict workarounds
 - [ ] #3 The unused effects and their ports are gone, and one name means one thing
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Measured at the start (worktree of claude/embedder-gaps, 37cb619): src/brig is 6,310 lines, 2,976 of them module/class/function docstrings (47%, an ast count), 323 TASK/DRAFT/decision references.
+
+### Order of work
+
+1. **Dead code.** Remove the `Spawn` and `Reap` effects (`domain/effects.py`) and their arms in `presentation/driver.py`; `ProcessPort.spawn`, `.reap`, `.reap_deadline` (`presentation/ports.py`) and their adapters in `presentation/jail.py` (`_reap`, `_reap_deadline`, `_RealProcesses.spawn/reap/reap_deadline`); `infra/processes.reap_deadline`, whose only caller was that adapter, with its two gateway tests in `tests/e2e/test_processes_gateway.py`; and in `tests/integration/fakes.py` `FakeProcesses.spawn/reap/reap_deadline` with the fields only they set (`expires`, `spawned`, `spawned_inheritable_fds`, `reaped`, `reaped_deadline`) and the assertions on them. Kept, because something else uses them (each checked by grep): `infra.processes.spawn`/`SpawnError` (link.py starts the supervisor with it), `infra.processes.reap` (e2e tests reap the processes they spawn), `_ProcessIdentity` (`SupervisorPort.start`), `JailSpawnFailed` (`StartSupervisedCommand`), `ExitCodeUnknown`, `Deadline`.
+2. **One name, one meaning.** `domain/channels.ChannelRefused` (a name refused) becomes `ChannelNameRefusal`; the readiness refusal keeps `ChannelRefused`. Copies: ports' `ProcessUnknown` and `SupervisorDoneUnknown` go; `ProcessPort.peek` returns `int | None | ExitCodeUnknown` and `SupervisorPort.await_done` returns domain's `ExitOutcome`, so `jail.py`'s wiring translates infra's sentinel straight into domain's and the driver translates nothing; `brig` exports `ExitCodeUnknown` in their place. Kept: infra's `ProcessUnknown`, `SupervisorDoneUnknown` and readiness values (infra imports no brig type, rule 1); ports' readiness outcomes (`ChannelReady`, `ChannelNotReady`, `ChannelRefused`, `ChannelReadinessRefusal`), the embedder-facing values, which domain has no copy of.
+3. **frozendict** (rule 8). `Plan.env`, `StartSupervisedCommand.env`, `compile_run`'s and `create_bwrap_jail`'s `env`, `scrub_env`'s result, `grade` and `bwrap.ceilings`' results, `Jail.report`, and domain's module-level mappings become `frozendict`; `SupervisorPort.start` takes the frozendict; infra's `start` takes a `Mapping`. The false "no frozendict" statements go.
+4. **`LiveSupervisors`** becomes `LiveSupervisor`, holding the one `Supervisor` its jail started (one instance per jail since TASK-0001.21); `await_done`/`close` on any other pid answer as for a closed one, so the port contract is unchanged.
+5. **Docstrings.** Every module and function docstring in `src/brig` cut to its contract: what it does, its arguments, what it raises; history moves out (the board has it); measured facts a reader needs to not break something stay, one or two sentences, with their task or decision number. Code unchanged except steps 1-4. Test docstrings touched only where they name removed things.
+6. **SPEC and glossary.** `docs/spec/index.md`'s Domain, Infra and Presentation sections describe what is built (files, sockets, state_dir, placeholders, supervisor, report) and drop removed behaviour; the ten laws section is untouched. `docs/glossary.md`'s effect, step, plan and jail entries stop naming `Spawn`/`Reap`.
+
+### Risks
+
+- A docstring cut that drops a measured fact a later change relies on (posix_spawn `EBADF` on a closed fd, the in-jail PID 1 vs bwrap's namespace, `--as-pid-1`, `setsid` compiled out of uv's CPython, ENOPROTOOPT vs EINVAL). Mitigation: each kept as one sentence with its number.
+- Changing behaviour while editing text: mitigated by rewriting docstrings only, diffing code lines (`git diff` filtered to non-docstring lines) before commit, and the full suite.
+- frozendict at a boundary that `json`, `posix_spawnp` or a test compares: frozendict equals the dict of the same items; infra converts with `dict(...)` where it already did.
+- pypeeker `over-exposed-module-symbol` / `under-exposed-access` after renames and removals (e.g. infra `reap` left with only test callers): `just gates` decides.
+
+### Proof
+
+- `uv run just done` green: ruff, mypy strict, every pypeeker rule, the pypeeker rule tests, unit, integration twice, e2e, docs build, architecture lint.
+- `grep` finds no `Spawn(`, `Reap(`, `reap_deadline`, `ProcessUnknown` outside infra and its tests, `SupervisorDoneUnknown` outside infra, `LiveSupervisors`, or "frozendict ... does not exist" in src.
+- The ast count of docstring lines before and after, reported with the source line count.
+<!-- SECTION:PLAN:END -->
