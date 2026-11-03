@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-11-03T03:21:00Z'
+updated_date: '2026-11-03T03:25:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -22,3 +23,21 @@ Found reviewing TASK-0020 (e87d194). infra/supervisor/program.py _main starts th
 - [ ] #1 A SIGINT or SIGTERM sent to the supervisor at any moment after the jail exists reaches the command, or interrupt_jail does not answer True
 - [ ] #2 A test sends SIGINT before the supervisor reports started and shows it delivered
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Repro at 3ade49ef46fd, test files: tests/e2e/test_interrupt_battery.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_interrupt_battery.py -k as_soon_as` exited 1
+
+(17 earlier lines omitted)
+```text
+>           assert delivered, "the jail's command was running, yet nothing was signalled"
+E           AssertionError: the jail's command was running, yet nothing was signalled
+E           assert False
+
+tests/e2e/test_interrupt_battery.py:86: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_interrupt_battery.py::test_an_interrupt_sent_as_soon_as_the_jail_exists_is_not_lost
+1 failed, 2 deselected in 3.18s
+```
+<!-- SECTION:NOTES:END -->
