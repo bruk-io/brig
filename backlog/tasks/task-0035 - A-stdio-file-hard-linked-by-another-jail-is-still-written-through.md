@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T04:00:00Z'
-updated_date: '2026-11-03T04:18:00Z'
+updated_date: '2026-11-03T04:21:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -19,7 +19,7 @@ Found reviewing TASK-0031 (8b42a6a). The worker's note says the no-link open cov
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A stdio file opened for writing that is not a regular file with one link, owned by the embedder, is refused with an error saying what to do
+- [x] #1 A stdio file opened for writing that is not a regular file with one link, owned by the embedder, is refused with an error saying what to do
 - [x] #2 An e2e test hard-links a stdio path to an outside file from one jail and shows the next create does not write to it
 <!-- AC:END -->
 
