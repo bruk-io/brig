@@ -84,9 +84,10 @@ tuples (decision-0001 rule 8).
 policy into one ordered tuple of mounts, from which `compile_supervisor_launch`'s argv,
 `writable_shared_paths` and `ceilings` are all read. A deny or a mask is a mount on the entry it
 names, and a mount moves with its parent, so among the mounts are the pins (TASK-0001.31, old SPEC
-decision-168): each directory strictly between a writable root and a deny or mask, where the jail
-shows it writable and it is no entry of the policy, is bound writable over itself before the deny
-or mask it leads to. A mount point refuses `rename(2)` inside the jail's mount namespace (`EBUSY`,
+decision-168): each directory strictly between a writable root and a deny, a mask or a readable
+root nested in it (TASK-0001.33: an embedder's own code kept read-only inside a project), where the
+jail shows it writable and it is no entry of the policy, is bound writable over itself before what
+it leads to. A mount point refuses `rename(2)` inside the jail's mount namespace (`EBUSY`,
 measured), so the command cannot move `W/a` away, taking the deny at `W/a/b/f` with it, and make
 its own `W/a/b/f` for the host to read. Which of `pin_candidates` are directories is a host fact
 presentation looks up; the directories brig makes for an absent deny or mask (its placeholders)
