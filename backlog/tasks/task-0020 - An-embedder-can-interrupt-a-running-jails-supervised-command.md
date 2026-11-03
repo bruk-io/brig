@@ -1,11 +1,11 @@
 ---
 id: TASK-0020
 title: An embedder can interrupt a running jail's supervised command
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-31T11:00:00Z'
-updated_date: '2026-11-03T03:21:00Z'
+updated_date: '2026-11-03T03:22:00Z'
 labels:
   - size-2
 dependencies: []
@@ -97,4 +97,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review (reviewer, 2026-11-03): closed. uv run just done passes (full tier, recorded). tests/e2e/test_interrupt_battery.py 15 runs in 15 passed. AC1: interrupt_jail -> bool, supervisor forwards SIGINT. AC2: the battery shows the command keeps running and a finished jail answers False. pidfd: the pidfd is opened before the PPid/NSpid re-check, so a pid recycled before the open fails the re-check and one recycled after cannot be signalled through the pidfd; sound. Finding, low: the supervisor installs its handlers after starting the command and emitting 'started', so a SIGINT in that window is dropped (PID 1 ignores unhandled signals) while interrupt_jail answers True; an embedder interrupting after its program's ready signal is practically past it, not guaranteed. Filed as a draft.
 <!-- SECTION:NOTES:END -->
