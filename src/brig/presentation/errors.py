@@ -161,7 +161,10 @@ class ChannelDirectoryCreateFailed(Exception):
     """
 
     def __init__(self, channel_dir: str) -> None:
-        super().__init__(f"could not create the channel directory {channel_dir!r}")
+        super().__init__(
+            f"could not create the channel directory {channel_dir!r} -- check the free space and "
+            "permissions of brig's state directory (BRIG_HOME), where channel directories are made"
+        )
         self.channel_dir = channel_dir
 
 
