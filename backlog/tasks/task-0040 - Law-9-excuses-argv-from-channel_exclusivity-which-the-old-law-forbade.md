@@ -1,7 +1,7 @@
 ---
-id: DRAFT-0023
+id: TASK-0040
 title: Law 9 excuses argv from channel_exclusivity, which the old law forbade
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T04:14:00Z'
 labels: []
