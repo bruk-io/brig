@@ -3,7 +3,7 @@ id: TASK-0023
 title: >-
   await_channel_ready waits out its deadline when the command finishes after
   create_bwrap_jail found its namespace
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-03T02:42:00Z'
@@ -113,4 +113,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Reviewed (reviewer, 2026-11-03): closed. AC #1: await_channel_ready peeks after each not-ready attempt; infra peek is waitid(WEXITED|WNOWAIT|WNOHANG), so it never reaps (decision-0003). AC #2: the e2e test asserts outcome and a 2s bound; reviewer ran it 10/10 passing with TASK-0022's supervisor; the new integration test asserts through FakeProcesses (peek_attempts, reaped == [], released == []). Full gate (uv run just done) passed, recorded. Minor note, no task: a ProcessUnknown peek (pid already released) also answers ChannelJailFinished, since the check is 'is not None'; that reads as finished, which is reasonable, but the docstring says only 'has exited'.
 <!-- SECTION:NOTES:END -->
