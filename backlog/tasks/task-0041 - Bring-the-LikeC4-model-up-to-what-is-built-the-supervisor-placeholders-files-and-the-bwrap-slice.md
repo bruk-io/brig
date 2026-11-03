@@ -3,7 +3,7 @@ id: TASK-0041
 title: >-
   Bring the LikeC4 model up to what is built: the supervisor, placeholders,
   files and the bwrap slice
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-03T04:39:00Z'
@@ -199,4 +199,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Reviewed by philosophy:reviewer, 2026-11-03: closed. Full tier (uv run just done) passed: likec4 validate, c4lint 0/0 across 30 elements, 50 relationships, 5 views, mkdocs --strict. #planned only on seatbelt-driver/seatbelt-jail-type, #paused only on oci and docker; no 'not built' wording left. Every non-__init__ module under src/brig is named in a .c4 file (grep per path). Relationships compared against every brig import in src/brig, not just five: all 50 edges match an import and no import is missing an edge (e.g. jail -> processes, driver -> supervisorLink, bwrapJailType -> grades, operations -> policy, report -> grades). Granularity is orthodox: modules sharing one interface are grouped (Policy = domain/policy/*, Grades = claims+grades, Supervisor Link = link/assemble/wire+program), the supervisor container is not decomposed, and the rest are one component each because each module is its own interface, not for its own sake. No findings filed.
 <!-- SECTION:NOTES:END -->
