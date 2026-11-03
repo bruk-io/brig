@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T04:39:00Z'
-updated_date: '2026-11-03T04:42:00Z'
+updated_date: '2026-11-03T04:46:00Z'
 labels:
   - size-3
 dependencies: []
@@ -23,8 +23,8 @@ Found by TASK-0037's review, 2026-11-03. docs/architecture still tags the superv
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 No built component or relationship is tagged #planned, and every module under src/brig has a component (or is named in one) in the model
-- [ ] #2 likec4 validate and c4lint are clean (uv run just done passes)
+- [x] #1 No built component or relationship is tagged #planned, and every module under src/brig has a component (or is named in one) in the model
+- [x] #2 likec4 validate and c4lint are clean (uv run just done passes)
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -51,3 +51,20 @@ Files that change: docs/architecture/models/brig/{supervisor.c4,_relationships.c
 - A per-module check: every src/brig module path is named in a .c4 file.
 - uv run just done green (likec4 validate, c4lint, mkdocs --strict among its steps).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Worker's report (@claude, 2026-11-03)
+
+Done in docs/architecture only; no code changed.
+
+- Supervisor container: #planned and the 'designed, not built' wording gone; described as built (wire.py + program.py assembled by assemble.py, PID 1, non-dumpable per decision-0006). Not decomposed: one ~180-line program with no interface inside it, so its parts are code; program.py and wire.py are named in the Supervisor Link component, which assembles them.
+- Library components added: Channels, Grades (claims.py + grades.py), Policy (domain/policy/*), Host Files, Placeholders, State Directory, Supervisor Link (link/assemble/wire), Driver (presentation/driver.py, the shared effect interpreter), Jail (presentation/jail.py), Report. API is now api.py alone; Bwrap Driver is drivers/bwrap.py alone. Stale descriptions (effects, plan, processes, sockets, ports, bwrap jail type) brought to the code (FsPolicy intent compiled to mounts, decision-0007; ceilings as the report, decision-0008).
+- Relationships rebuilt from src/brig's imports (50): the #planned container edge replaced by Supervisor Link -> supervisor (technology stated; library -> supervisor is derived from it); api -> bwrapDriver, api -> bwrapJailType, api -> processes and bwrapDriver -> processes dropped (no such import now).
+- Views: containers title plain; components view groups the new components and shows the supervisor as a container. index.md's Containers and Components sections rewritten to what is built.
+- Seatbelt stays #planned (descriptions aligned to decision-0007 items 5-6); oci stays #paused.
+- Every module under src/brig is named in a .c4 file (checked by grep over each path); package __init__.py files are re-export barrels, noted in library.c4.
+
+Gate: uv run just done, all 11 steps PASS (likec4 validate; c4lint 0 errors, 0 warnings, 30 elements, 50 relationships, 5 views; mkdocs --strict).
+<!-- SECTION:NOTES:END -->
