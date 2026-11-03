@@ -3,7 +3,7 @@ id: TASK-0026
 title: >-
   compile_mounts keeps an absent deny or mask that sits under a read-only root
   nested in a writable one, which bwrap cannot mount
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:06:00Z'
@@ -129,4 +129,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review (reviewer, 2026-11-03): closed. Full gate passed (recorded). AC1: _governing_role keeps an absent entry only when the most specific entry above it is a writable root; unit case covers a nested readable root and a nested deny, e2e shows the jail starts. AC2: refusal returns RootAbsent, raised as PolicyRootAbsent before anything is created, unit and e2e. Finding (low, with TASK-0025): decision-0007 item 2 and the SPEC do not list the new RootAbsent refusal.
 <!-- SECTION:NOTES:END -->
