@@ -90,6 +90,7 @@ rules = [
     "brig-class-forms",
     "brig-vocabulary",
     "brig-one-writer",
+    "brig-frozen-data",
 ]
 
 [tool.pypeeker.brig-layers]
@@ -114,6 +115,9 @@ banned-imports = [
 # therefore unverified beyond this config being accepted.
 [tool.pypeeker.no-impure-functions]
 include = ["brig.domain*"]
+
+[tool.pypeeker.brig-frozen-data]
+root = "src/brig/domain"
 
 [tool.pypeeker.brig-vocabulary]
 root = "src/brig"

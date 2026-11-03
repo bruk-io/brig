@@ -438,3 +438,307 @@ def test_brig_pure_domain_heuristic_fires_on_an_impure_function(tmp_path: Path) 
         rule_config='[tool.pypeeker.no-impure-functions]\ninclude = ["brig.domain*"]\n',
     )
     assert_rule_fires(project, "no-impure-functions", src=("src",))
+
+
+# ---------------------------------------------------------------------------
+# TASK-0033: the shapes an architecture review planted that the gate let through
+# ---------------------------------------------------------------------------
+
+
+def _no_patching_fixture(
+    tmp_path: Path, source: str, *, at: str = "tests/unit/test_bad.py"
+) -> Path:
+    return build_fixture(tmp_path, rule_id="brig-no-patching", src=("tests",), files={at: source})
+
+
+def test_brig_no_patching_fires_on_monkeypatch_context(tmp_path: Path) -> None:
+    """``pytest.MonkeyPatch.context()`` patches without a ``monkeypatch`` parameter."""
+    project = _no_patching_fixture(
+        tmp_path,
+        "import pytest\nimport brig\n\n\ndef test_x() -> None:\n"
+        "    with pytest.MonkeyPatch.context() as patch:\n"
+        "        patch.setattr(brig, 'x', 1)\n",
+    )
+    assert_rule_fires(project, "brig-no-patching", src=("tests",))
+
+
+def test_brig_no_patching_fires_on_monkeypatch_through_an_aliased_pytest(tmp_path: Path) -> None:
+    project = _no_patching_fixture(
+        tmp_path, "import pytest as pt\n\n\ndef test_x() -> None:\n    pt.MonkeyPatch()\n"
+    )
+    assert_rule_fires(project, "brig-no-patching", src=("tests",))
+
+
+def test_brig_no_patching_fires_on_importing_monkeypatch_by_name(tmp_path: Path) -> None:
+    project = _no_patching_fixture(
+        tmp_path, "from pytest import MonkeyPatch\n\n\ndef test_x() -> None:\n    MonkeyPatch()\n"
+    )
+    assert_rule_fires(project, "brig-no-patching", src=("tests",))
+
+
+def test_brig_no_patching_accepts_other_pytest_attributes(tmp_path: Path) -> None:
+    """The clean case: ``pytest.raises`` and ``pytest.mark`` are not patchers."""
+    project = _no_patching_fixture(
+        tmp_path,
+        "import pytest\n\n\n@pytest.mark.parametrize('n', [1])\ndef test_x(n: int) -> None:\n"
+        "    with pytest.raises(ValueError):\n        int('x')\n",
+    )
+    assert_rule_clean(project, "brig-no-patching", src=("tests",))
+
+
+def test_brig_no_patching_fires_on_setattr_of_an_imported_module(tmp_path: Path) -> None:
+    project = _no_patching_fixture(
+        tmp_path,
+        "import brig\n\n\ndef test_x() -> None:\n    setattr(brig, 'create_bwrap_jail', None)\n",
+    )
+    assert_rule_fires(project, "brig-no-patching", src=("tests",))
+
+
+def test_brig_no_patching_fires_on_a_multi_line_delattr_of_an_import(tmp_path: Path) -> None:
+    project = _no_patching_fixture(
+        tmp_path,
+        "from brig import infra\n\n\ndef test_x() -> None:\n"
+        "    delattr(\n        infra.files,\n        'read_beneath',\n    )\n",
+    )
+    assert_rule_fires(project, "brig-no-patching", src=("tests",))
+
+
+def test_brig_no_patching_fires_on_an_attribute_assigned_through_an_import(
+    tmp_path: Path,
+) -> None:
+    """``brig.x = f`` is ``setattr(brig, 'x', f)`` with no call."""
+    project = _no_patching_fixture(
+        tmp_path, "import brig\n\n\ndef test_x() -> None:\n    brig.create_bwrap_jail = None\n"
+    )
+    assert_rule_fires(project, "brig-no-patching", src=("tests",))
+
+
+def test_brig_no_patching_accepts_setattr_on_a_local_object(tmp_path: Path) -> None:
+    """The clean case: setattr and attribute assignment on an object the test made
+    itself -- here proving a frozen dataclass refuses it -- patch nothing, even with
+    an import handed in as a later argument."""
+    project = _no_patching_fixture(
+        tmp_path,
+        "import dataclasses\nimport brig\nimport pytest\n\n\n"
+        "@dataclasses.dataclass(frozen=True)\nclass Point:\n    x: int\n\n\n"
+        "def test_x() -> None:\n"
+        "    point = Point(1)\n"
+        "    with pytest.raises(dataclasses.FrozenInstanceError):\n"
+        "        setattr(point, 'x', brig)\n"
+        "    holder = type('Holder', (), {})()\n"
+        "    holder.value = brig\n",
+    )
+    assert_rule_clean(project, "brig-no-patching", src=("tests",))
+
+
+def test_brig_no_patching_fires_on_a_fake_dataclass_in_e2e(tmp_path: Path) -> None:
+    project = _no_patching_fixture(
+        tmp_path,
+        "from dataclasses import dataclass\n\n\n"
+        "@dataclass(frozen=True)\nclass FakeClock:\n    now: float\n",
+        at="tests/e2e/test_bad.py",
+    )
+    assert_rule_fires(project, "brig-no-patching", src=("tests",))
+
+
+def test_brig_no_patching_fires_on_a_private_stub_in_unit(tmp_path: Path) -> None:
+    project = _no_patching_fixture(
+        tmp_path, "class _stub_processes:\n    pass\n", at="tests/unit/test_bad.py"
+    )
+    assert_rule_fires(project, "brig-no-patching", src=("tests",))
+
+
+def test_brig_no_patching_accepts_a_fake_in_integration_and_a_real_helper_in_e2e(
+    tmp_path: Path,
+) -> None:
+    """The clean case: a fake where rule 5 puts doubles, and an e2e helper whose
+    name says what it is (a word merely containing 'fake'/'mock' is not one)."""
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-no-patching",
+        src=("tests",),
+        files={
+            "tests/integration/fakes.py": (
+                "from dataclasses import dataclass\n\n\n"
+                "@dataclass\nclass FakeProcesses:\n    spawned: list[str]\n"
+            ),
+            "tests/e2e/test_ok.py": (
+                "from dataclasses import dataclass\n\n\n"
+                "@dataclass(frozen=True)\nclass _DirectoryIn:\n    root: str\n\n\n"
+                "class _Mockingbird:\n    pass\n"
+            ),
+        },
+    )
+    assert_rule_clean(project, "brig-no-patching", src=("tests",))
+
+
+_ONE_WRITER_ALLOW = '[tool.pypeeker.brig-one-writer]\nallow = ["brig.infra.supervisor.program"]\n'
+
+
+def _one_writer_fixture(tmp_path: Path, files: dict[str, str]) -> Path:
+    return build_fixture(
+        tmp_path,
+        rule_id="brig-one-writer",
+        src=("src",),
+        files=files,
+        rule_config=_ONE_WRITER_ALLOW,
+    )
+
+
+def test_brig_one_writer_fires_on_os_write_to_stdout_in_infra(tmp_path: Path) -> None:
+    project = _one_writer_fixture(
+        tmp_path,
+        {"src/brig/infra/noisy.py": "import os\n\n\ndef say() -> None:\n    os.write(1, b'hi')\n"},
+    )
+    assert_rule_fires(project, "brig-one-writer", src=("src",))
+
+
+def test_brig_one_writer_fires_on_os_write_to_stderr_through_an_alias(tmp_path: Path) -> None:
+    project = _one_writer_fixture(
+        tmp_path,
+        {
+            "src/brig/presentation/noisy.py": (
+                "import os as o\n\n\ndef say() -> None:\n    o.write(2, b'hi')\n"
+            )
+        },
+    )
+    assert_rule_fires(project, "brig-one-writer", src=("src",))
+
+
+def test_brig_one_writer_fires_on_os_write_imported_by_name(tmp_path: Path) -> None:
+    project = _one_writer_fixture(
+        tmp_path,
+        {
+            "src/brig/presentation/noisy.py": (
+                "from os import write\n\n\ndef say() -> None:\n    write(2, b'hi')\n"
+            )
+        },
+    )
+    assert_rule_fires(project, "brig-one-writer", src=("src",))
+
+
+def test_brig_one_writer_fires_on_a_stdout_buffer_write(tmp_path: Path) -> None:
+    project = _one_writer_fixture(
+        tmp_path,
+        {
+            "src/brig/infra/noisy.py": (
+                "import sys\n\n\ndef say() -> None:\n    sys.stdout.buffer.write(b'hi')\n"
+            )
+        },
+    )
+    assert_rule_fires(project, "brig-one-writer", src=("src",))
+
+
+def test_brig_one_writer_fires_on_logging_in_infra(tmp_path: Path) -> None:
+    project = _one_writer_fixture(
+        tmp_path,
+        {
+            "src/brig/infra/noisy.py": (
+                "import logging\n\n\ndef say() -> None:\n    logging.getLogger('b').info('hi')\n"
+            )
+        },
+    )
+    assert_rule_fires(project, "brig-one-writer", src=("src",))
+
+
+def test_brig_one_writer_fires_on_logging_in_presentation_by_name(tmp_path: Path) -> None:
+    project = _one_writer_fixture(
+        tmp_path, {"src/brig/presentation/noisy.py": "from logging import getLogger\n"}
+    )
+    assert_rule_fires(project, "brig-one-writer", src=("src",))
+
+
+def test_brig_one_writer_fires_on_logging_even_in_the_supervisors_wire(tmp_path: Path) -> None:
+    """The allow list names who may write, not who may log: the wire writes its own JSON."""
+    project = _one_writer_fixture(
+        tmp_path, {"src/brig/infra/supervisor/program.py": "import logging\n"}
+    )
+    assert_rule_fires(project, "brig-one-writer", src=("src",))
+
+
+def test_brig_one_writer_accepts_the_wires_os_write_and_other_os_calls(tmp_path: Path) -> None:
+    """The clean case: the supervisor's wire is the one raw writer, and the rest of
+    brig may use ``os`` for anything but writing a descriptor."""
+    project = _one_writer_fixture(
+        tmp_path,
+        {
+            "src/brig/infra/supervisor/program.py": (
+                "import os\n\n\ndef emit(fd: int) -> None:\n    os.write(fd, b'{}\\n')\n"
+            ),
+            "src/brig/infra/processes.py": (
+                "import os\n\n\ndef close(fd: int) -> None:\n    os.close(fd)\n    os.read(fd, 1)\n"
+            ),
+            "src/brig/infra/link.py": ("def send(pipe) -> None:\n    pipe.write(b'x')\n"),
+        },
+    )
+    assert_rule_clean(project, "brig-one-writer", src=("src",))
+
+
+def _frozen_data_fixture(
+    tmp_path: Path, source: str, *, at: str = "src/brig/domain/spec.py"
+) -> Path:
+    return build_fixture(
+        tmp_path,
+        rule_id="brig-frozen-data",
+        src=("src",),
+        files={at: source},
+        rule_config='[tool.pypeeker.brig-frozen-data]\nroot = "src/brig/domain"\n',
+    )
+
+
+def test_brig_frozen_data_fires_on_a_list_field(tmp_path: Path) -> None:
+    project = _frozen_data_fixture(
+        tmp_path,
+        "from dataclasses import dataclass\n\n\n"
+        "@dataclass(frozen=True)\nclass Spec:\n    argv: list[str]\n",
+    )
+    assert_rule_fires(project, "brig-frozen-data", src=("src",))
+
+
+def test_brig_frozen_data_fires_on_a_dict_field(tmp_path: Path) -> None:
+    project = _frozen_data_fixture(
+        tmp_path,
+        "import dataclasses\n\n\n"
+        "@dataclasses.dataclass(frozen=True)\nclass Spec:\n    env: dict[str, str]\n",
+    )
+    assert_rule_fires(project, "brig-frozen-data", src=("src",))
+
+
+def test_brig_frozen_data_fires_on_a_list_nested_in_a_tuple(tmp_path: Path) -> None:
+    project = _frozen_data_fixture(
+        tmp_path,
+        "from dataclasses import dataclass\n\n\n"
+        "@dataclass(frozen=True)\nclass Spec:\n    steps: tuple[list[str], ...] = ()\n",
+    )
+    assert_rule_fires(project, "brig-frozen-data", src=("src",))
+
+
+def test_brig_frozen_data_accepts_tuples_frozendicts_and_non_fields(tmp_path: Path) -> None:
+    """The clean case: immutable fields, a ClassVar, a list inside a method body,
+    a TypedDict (a JSON shape, not a dataclass), and a list field outside domain/."""
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-frozen-data",
+        src=("src",),
+        files={
+            "src/brig/domain/spec.py": (
+                "from dataclasses import dataclass\n"
+                "from typing import ClassVar, TypedDict\n\n\n"
+                "@dataclass(frozen=True)\nclass Spec:\n"
+                "    argv: tuple[str, ...]\n"
+                "    env: frozendict[str, str]\n"
+                "    names: frozenset[str] = frozenset()\n"
+                "    KINDS: ClassVar[list[str]] = []\n\n"
+                "    def joined(self) -> str:\n"
+                "        parts: list[str] = list(self.argv)\n"
+                "        return ' '.join(parts)\n\n\n"
+                "class Message(TypedDict):\n    argv: list[str]\n"
+            ),
+            "src/brig/infra/buffer.py": (
+                "from dataclasses import dataclass\n\n\n"
+                "@dataclass(frozen=True)\nclass Lines:\n    lines: list[str]\n"
+            ),
+        },
+        rule_config='[tool.pypeeker.brig-frozen-data]\nroot = "src/brig/domain"\n',
+    )
+    assert_rule_clean(project, "brig-frozen-data", src=("src",))

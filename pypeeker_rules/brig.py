@@ -1,4 +1,4 @@
-"""brig's own gate rules for pypeeker: decision-0001's rules 1-7, 12 and 14.
+"""brig's own gate rules for pypeeker: decision-0001's rules 1-8, 12 and 14.
 
 Written against ``pypeeker.dsl.register_dsl_rule`` — the only plugin surface
 still alive on pypeeker's ``main`` after its DSL rewrite deleted the legacy
@@ -98,6 +98,7 @@ check lost no coverage, because the fourth rule part replaces exactly the
 coverage ``disallowed`` gave up.
 """
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -426,7 +427,25 @@ register_dsl_rule(
 # rule 5: brig-no-patching
 # ---------------------------------------------------------------------------
 
-_MOCK_MODULES = ("unittest.mock", "mock", "pytest_mock")
+_MOCK_MODULES = (
+    "unittest.mock",
+    "mock",
+    "pytest_mock",
+    "pytest.MonkeyPatch",
+    "_pytest.monkeypatch",
+)
+"""Imports that bring a patcher in. ``pytest.MonkeyPatch`` and the private
+``_pytest.monkeypatch`` it comes from are the fixture's class, which
+``pytest.MonkeyPatch.context()`` uses without ever naming a ``monkeypatch``
+parameter -- the shape the 2026-11-02 architecture review planted and this
+rule let through until the class itself was listed here."""
+
+_PATCHING_BUILTINS = ("<builtins>.setattr", "<builtins>.delattr")
+
+_NO_PATCHING_FIX = (
+    "brig uses fakes, never patches (decision-0001 rule 5). Pass the world in as "
+    "data, or as a fake from tests/integration/fakes.py, and assert on its state"
+)
 
 
 def _mock_imports(options: Mapping[str, Any]) -> Selection:
@@ -444,22 +463,173 @@ def _monkeypatch_parameters(options: Mapping[str, Any]) -> Selection:
     return symbols().where(all_of(row.kind.eq(SymbolKind.PARAMETER), row.name.eq("monkeypatch")))
 
 
+def _monkeypatch_class_uses(options: Mapping[str, Any]) -> Selection:
+    """``pytest.MonkeyPatch`` read through an import of ``pytest``, anywhere:
+    ``pytest.MonkeyPatch.context()``, ``pytest.MonkeyPatch()``, or an
+    annotation ``mp: pytest.MonkeyPatch``.
+
+    The binder records the attribute as ``<unresolved>.MonkeyPatch`` with the
+    receiver root the same-file ``pytest`` import, so the import's recorded
+    ``imported_from`` is read, not the local name (``import pytest as pt``
+    is caught the same way). ``from pytest import MonkeyPatch`` is
+    ``_mock_imports``' shape, not this one.
+    """
+    del options
+    return references().where(
+        all_of(
+            row.symbol_id.eq("<unresolved>.MonkeyPatch"),
+            row.receiver_root_imported_from.eq("pytest"),
+        )
+    )
+
+
+def _first_argument_ref(file_index: FileIndex, call: Any) -> Any:
+    """The first reference after ``call``'s name in its own scope, in source order.
+
+    The binder records no call arguments, but it records every name an
+    argument reads as a reference positioned after the call's name; for
+    ``setattr(brig, "x", f)`` the first such reference is the read of
+    ``brig``, wherever the arguments' line breaks fall. A first argument
+    holding no reference at all (a literal) gives the reference of a later
+    argument instead -- harmless here, since only a read of a same-file
+    import is acted on, and a first argument that is not one is clean.
+    """
+    after = _pos(call.location.span.end)
+    following = [
+        ref
+        for ref in file_index.references
+        if ref.in_scope_id == call.in_scope_id and _pos(ref.location.span.start) >= after
+    ]
+    return min(following, key=lambda ref: _pos(ref.location.span.start), default=None)
+
+
+def _patched_by_setattr(file_index: FileIndex, symbol_id: str) -> Trait:
+    """Trait provider, keyed on an ``imports()`` row's own ``symbol_id``: is this
+    import the first argument of a ``setattr``/``delattr`` call in this file?
+
+    ``setattr(brig, "name", replacement)`` is a patch whatever it is spelled
+    with; ``setattr`` on an object the test made itself (a fake, a local) is
+    not, so the call alone is not the violation -- its target is. Anchored on
+    the import, not on the call, because a references row's trait anchor is
+    the call's ``symbol_id`` (``<builtins>.setattr``), shared by every call in
+    the file. Reports ``Confidence.DECLARED``: both facts are the binder's.
+    """
+    provenance = (
+        f"pypeeker_rules.brig: setattr/delattr targets for '{symbol_id}' in {file_index.file_path}"
+    )
+    patched = any(
+        ref.kind is ReferenceKind.CALL
+        and ref.symbol_id in _PATCHING_BUILTINS
+        and (first := _first_argument_ref(file_index, ref)) is not None
+        and first.symbol_id == symbol_id
+        for ref in file_index.references
+    )
+    return Trait(value=patched, confidence=Confidence.DECLARED, provenance=provenance)
+
+
+register_trait("brig-no-patching-setattr-target")(_patched_by_setattr)
+
+
+def _setattr_on_imports(options: Mapping[str, Any]) -> Selection:
+    """An imported name handed to ``setattr``/``delattr`` as its target, anywhere."""
+    del options
+    return imports().where(trait_of("brig-no-patching-setattr-target").value.eq(True))
+
+
+def _attribute_writes_on_imports(options: Mapping[str, Any]) -> Selection:
+    """An attribute assigned through an imported name, anywhere: ``brig.x = f``,
+    ``infra.files.y = f`` -- the spelling of ``setattr(brig, ...)`` with no call.
+
+    The binder records the assignment as a ``WRITE`` attribute access whose
+    receiver root is the same-file import. An attribute assigned on an object
+    the code made itself (``self.x``, a fake's field) has a receiver root that
+    is not an import, and is not this rule's business.
+    """
+    del options
+    return references().where(
+        all_of(
+            row.kind.eq(ReferenceKind.WRITE),
+            row.is_attribute_access.is_true(),
+            row.receiver_root_kind.eq(SymbolKind.IMPORT),
+        )
+    )
+
+
+_DOUBLE_WORDS = frozenset({"fake", "stub", "mock", "dummy", "spy"})
+"""Words a class's name uses to say it is a test double."""
+
+_DOUBLES_HOME = "tests/integration/"
+
+
+def _name_words(name: str) -> list[str]:
+    """'_FakeClock' -> ['fake', 'clock']; 'fake_clock' -> ['fake', 'clock']."""
+    return [word.lower() for word in re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", name)]
+
+
+def _doubles_outside_integration(options: Mapping[str, Any]) -> Selection:
+    """A class named as a test double (a word of its name is ``fake``, ``stub``,
+    ``mock``, ``dummy`` or ``spy``) anywhere but ``tests/integration/``.
+
+    decision-0001 rule 5: doubles live only in ``tests/integration/``, as fakes
+    of the world at infra's edge; an e2e test runs the real world and a unit
+    test passes plain data. Whether a class *is* a double is a judgement about
+    what stands behind it, which no index records, so the class is known by
+    the name it gives itself: a double named otherwise (a port implemented
+    with nothing real behind it, a ``SimpleNamespace``) is not seen here.
+    """
+    del options
+
+    @opaque("brig-no-patching-double-name", reads=("name",))
+    def _named_as_double(record: Any) -> bool:
+        return not _DOUBLE_WORDS.isdisjoint(_name_words(record.name))
+
+    return symbols().where(
+        all_of(
+            row.kind.eq(SymbolKind.CLASS),
+            not_(row.file_path.startswith(_DOUBLES_HOME)),
+            _named_as_double,
+        )
+    )
+
+
 register_dsl_rule(
     MultiPartRule(
         rule_id="brig-no-patching",
         parts=(
             RulePart(
                 build=_mock_imports,
-                message=(
-                    "'{module}' imports '{imported_from}': brig uses fakes, never "
-                    "patches (decision-0001 rule 5)"
-                ),
+                message="'{module}' imports '{imported_from}': " + _NO_PATCHING_FIX,
             ),
             RulePart(
                 build=_monkeypatch_parameters,
+                message="'{symbol_id}' takes a 'monkeypatch' parameter: " + _NO_PATCHING_FIX,
+            ),
+            RulePart(
+                build=_monkeypatch_class_uses,
+                message="'{module}' uses pytest.MonkeyPatch: " + _NO_PATCHING_FIX,
+            ),
+            RulePart(
+                build=_setattr_on_imports,
                 message=(
-                    "'{symbol_id}' takes a 'monkeypatch' parameter: brig uses fakes, "
-                    "never patches (decision-0001 rule 5)"
+                    "'{module}' hands '{name}' (imported from '{imported_from}') to "
+                    "setattr/delattr, which patches it: " + _NO_PATCHING_FIX
+                ),
+            ),
+            RulePart(
+                build=_attribute_writes_on_imports,
+                message=(
+                    "'{module}' assigns an attribute through an imported name "
+                    "which patches it: " + _NO_PATCHING_FIX
+                ),
+            ),
+            RulePart(
+                build=_doubles_outside_integration,
+                message=(
+                    "class '{symbol_id}' is named as a test double outside "
+                    "tests/integration/: doubles live only there, as fakes of the "
+                    "world at infra's edge (decision-0001 rule 5). Move it to "
+                    "tests/integration/fakes.py; an e2e test runs the real world, a "
+                    "unit test passes plain data"
                 ),
             ),
         ),
@@ -1060,6 +1230,125 @@ register_dsl_rule(
 
 
 # ---------------------------------------------------------------------------
+# rule 8: brig-frozen-data
+# ---------------------------------------------------------------------------
+
+_MUTABLE_CONTAINERS = frozenset(
+    {
+        "list",
+        "dict",
+        "set",
+        "bytearray",
+        "List",
+        "Dict",
+        "Set",
+        "DefaultDict",
+        "defaultdict",
+        "OrderedDict",
+        "Counter",
+        "ChainMap",
+        "deque",
+        "Deque",
+        "MutableMapping",
+        "MutableSequence",
+        "MutableSet",
+    }
+)
+"""The names a field's annotation uses to say the data will change: the
+builtin containers, their ``typing`` aliases, ``collections``' mutable ones
+and ``collections.abc``'s ``Mutable*`` protocols. Matched as the last segment
+of each dotted name in the annotation, so ``typing.List`` and a nested
+``tuple[list[str], ...]`` are both seen."""
+
+_DATACLASS_DECORATORS = ("dataclass", "dataclasses.dataclass")
+
+
+def _annotation_names(annotation: str) -> list[str]:
+    """'tuple[typing.List[int], ...]' -> ['tuple', 'List', 'int']."""
+    return [
+        dotted.rpartition(".")[-1]
+        for dotted in re.findall(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", annotation)
+    ]
+
+
+def _is_dataclass_field(file_index: FileIndex, symbol_id: str) -> Trait:
+    """Trait provider: is ``symbol_id`` a field of a ``@dataclass`` class in this
+    file -- a ``VARIABLE`` member of the class's own scope, declared in the
+    class body rather than assigned from inside one of its methods?
+
+    The same span test ``_declares_instance_state`` makes, inverted: a field is
+    the member whose location falls inside no ``FUNCTION`` scope. Reports
+    ``Confidence.DECLARED``: the decorator text and the scopes are the binder's.
+    """
+    provenance = f"pypeeker_rules.brig: dataclass field '{symbol_id}' in {file_index.file_path}"
+    by_id = {s.symbol_id: s for s in file_index.symbols}
+    symbol = by_id.get(symbol_id)
+    owner = by_id.get(symbol.parent_scope_id) if symbol is not None else None
+    if (
+        symbol is None
+        or symbol.kind is not SymbolKind.VARIABLE
+        or owner is None
+        or owner.kind is not SymbolKind.CLASS
+        or not any(
+            decorator.split("(", 1)[0].strip() in _DATACLASS_DECORATORS
+            for decorator in owner.decorators
+        )
+    ):
+        return Trait(value=False, confidence=Confidence.DECLARED, provenance=provenance)
+    point = _pos(symbol.location.span.start)
+    in_a_method = any(
+        _pos(scope.span.start) <= point <= _pos(scope.span.end)
+        for scope in file_index.scopes
+        if scope.kind is ScopeKind.FUNCTION
+    )
+    return Trait(value=not in_a_method, confidence=Confidence.DECLARED, provenance=provenance)
+
+
+register_trait("brig-frozen-data-dataclass-field")(_is_dataclass_field)
+
+
+def _mutable_fields(options: Mapping[str, Any]) -> Selection:
+    """A dataclass field under ``root`` whose annotation names a mutable container.
+
+    decision-0001 rule 8: tuples in domain types, ``frozendict`` for mappings.
+    ``frozen=True`` stops a field being rebound, not a ``list`` in it being
+    appended to, so a frozen dataclass holding one still says its data will
+    change. A ``ClassVar`` is not a field and is not read. The match is over
+    the annotation's text as the binder recorded it: a mutable type reached
+    through an alias of another name (``from typing import List as Seq``) is
+    not seen.
+    """
+    root = _dotted(options.get("root", f"{_DEFAULT_ROOT}/domain"))
+
+    @opaque("brig-frozen-data-mutable-annotation", reads=("annotation",))
+    def _names_a_mutable_container(record: Any) -> bool:
+        names = _annotation_names(record.annotation or "")
+        return "ClassVar" not in names and not _MUTABLE_CONTAINERS.isdisjoint(names)
+
+    return symbols().where(
+        all_of(
+            row.kind.eq(SymbolKind.VARIABLE),
+            row.module.is_within(root),
+            trait_of("brig-frozen-data-dataclass-field").value.eq(True),
+            _names_a_mutable_container,
+        )
+    )
+
+
+register_dsl_rule(
+    DslRule(
+        rule_id="brig-frozen-data",
+        build=_mutable_fields,
+        message=(
+            "field '{symbol_id}' is annotated '{annotation}', a mutable container: "
+            "domain data says what it is (decision-0001 rule 8). Use tuple[...] for a "
+            "sequence, frozendict[...] for a mapping and frozenset[...] for a set"
+        ),
+    )
+)
+
+
+# ---------------------------------------------------------------------------
 # rule 12: brig-vocabulary
 # ---------------------------------------------------------------------------
 
@@ -1143,6 +1432,45 @@ def _stream_writes(options: Mapping[str, Any]) -> Selection:
     receiver chain whose root's own ``imported_from`` is ``"sys"``, not
     ``"sys.stdout"`` -- neither shape above catches it, and it remains a
     known, narrower gap.
+
+    The direct form matches a chain that *starts* with ``sys.stdout``/
+    ``sys.stderr``, not only one that is exactly that: ``sys.stdout.buffer.write``
+    has the chain ``('sys', 'stdout', 'buffer')`` and writes the same stream.
+    """
+    root = options.get("root", _DEFAULT_ROOT)
+    allow = _one_writer_allow(options)
+
+    @opaque("brig-one-writer-stream-chain", reads=("receiver_chain",))
+    def _through_a_stream(record: Any) -> bool:
+        return any(record.receiver_chain[: len(stream)] == stream for stream in _WRITE_STREAMS)
+
+    return references().where(
+        all_of(
+            row.file_path.startswith(f"{root}/"),
+            row.kind.eq(ReferenceKind.CALL),
+            any_of(
+                _through_a_stream,
+                row.receiver_root_imported_from.is_in(*_DOTTED_WRITE_STREAMS),
+            ),
+            *((not_(row.module.is_in(*allow)),) if allow else ()),
+        )
+    )
+
+
+_FD_WRITES = ("write", "writev")
+"""``os`` functions that write raw bytes to a file descriptor."""
+
+
+def _fd_write_calls(options: Mapping[str, Any]) -> Selection:
+    """``os.write``/``os.writev`` called through an import of ``os``, outside the
+    allow list (``import os as o; o.write(...)`` included: the receiver root's
+    recorded ``imported_from`` is read, not its local name).
+
+    The binder records no call arguments, so ``os.write(1, ...)`` and
+    ``os.write(pipe_fd, ...)`` are the same fact here: every raw descriptor
+    write outside the modules rule 14 names is refused. brig's other writes go
+    through a file object (``link.py``'s request pipe), which says what the
+    descriptor is; the supervisor's wire (``program.py``) is the one raw writer.
     """
     root = options.get("root", _DEFAULT_ROOT)
     allow = _one_writer_allow(options)
@@ -1150,12 +1478,39 @@ def _stream_writes(options: Mapping[str, Any]) -> Selection:
         all_of(
             row.file_path.startswith(f"{root}/"),
             row.kind.eq(ReferenceKind.CALL),
-            any_of(
-                row.receiver_chain.is_in(*_WRITE_STREAMS),
-                row.receiver_root_imported_from.is_in(*_DOTTED_WRITE_STREAMS),
-            ),
+            row.receiver_root_imported_from.eq("os"),
+            row.symbol_id.is_in(*(f"<unresolved>.{name}" for name in _FD_WRITES)),
             *((not_(row.module.is_in(*allow)),) if allow else ()),
         )
+    )
+
+
+def _fd_write_imports(options: Mapping[str, Any]) -> Selection:
+    """``from os import write`` (under any local name), outside the allow list:
+    the import is the violation, since the call through it reads as a call of
+    a same-file name."""
+    root = options.get("root", _DEFAULT_ROOT)
+    allow = _one_writer_allow(options)
+    return imports().where(
+        all_of(
+            row.file_path.startswith(f"{root}/"),
+            row.imported_from.is_in(*(f"os.{name}" for name in _FD_WRITES)),
+            *((not_(row.module.is_in(*allow)),) if allow else ()),
+        )
+    )
+
+
+def _logging_imports(options: Mapping[str, Any]) -> Selection:
+    """Any import of ``logging`` under ``root``, the allow list included.
+
+    The library logs nothing (rule 14), and a brig process's line is one JSON
+    object in ``infra/log.py``'s envelope, not a ``logging`` record -- so
+    neither the library nor the supervisor's wire has a use for it, and the
+    allow list, which names the modules that *write*, does not apply here.
+    """
+    root = options.get("root", _DEFAULT_ROOT)
+    return imports().where(
+        all_of(row.file_path.startswith(f"{root}/"), row.imported_from.is_within("logging"))
     )
 
 
@@ -1180,6 +1535,33 @@ register_dsl_rule(
                     "supervisor's wire, nothing else writes (decision-0001 rule 14). "
                     "Add it to [tool.pypeeker.brig-one-writer].allow if it is one of "
                     "those"
+                ),
+            ),
+            RulePart(
+                build=_fd_write_calls,
+                message=(
+                    "'{module}' writes a raw file descriptor with os.write: brig's "
+                    "processes log JSON lines through infra/log.py and "
+                    "the supervisor's wire, nothing else writes stdout or stderr "
+                    "(decision-0001 rule 14). Return what it knows to the embedder as "
+                    "data; a pipe brig owns is written through a file object opened on it"
+                ),
+            ),
+            RulePart(
+                build=_fd_write_imports,
+                message=(
+                    "'{module}' imports '{imported_from}': raw descriptor writes are the "
+                    "supervisor's wire's alone (decision-0001 rule 14). Return what it "
+                    "knows to the embedder as data; a pipe brig owns is written through "
+                    "a file object opened on it"
+                ),
+            ),
+            RulePart(
+                build=_logging_imports,
+                message=(
+                    "'{module}' imports '{imported_from}': the library logs nothing, and "
+                    "a brig process's line is one JSON object in infra/log.py's envelope "
+                    "(decision-0001 rule 14). Return what it knows to the embedder as data"
                 ),
             ),
         ),
