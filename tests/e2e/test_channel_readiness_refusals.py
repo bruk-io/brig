@@ -166,6 +166,8 @@ class _DifferentNamespace:
         os.close(self.fd)
         self.process.kill()
         self.process.wait()
+        if self.process.stderr is not None:
+            self.process.stderr.close()
 
 
 def _own_namespace_fd() -> int:
@@ -186,7 +188,64 @@ def test_a_peer_in_the_same_namespace_reads_ready(peer: _Peer) -> None:
     finally:
         os.close(namespace_fd)
 
-    assert outcome == sockets.ChannelReady()
+    assert isinstance(outcome, sockets.ChannelReady)
+    with outcome.connection as connection:
+        assert connection.fileno() >= 0
+        assert connection.getpeername() == peer.path
+
+
+def _open_fds() -> frozenset[str]:
+    """This process's open fds, as `/proc/self/fd` lists them."""
+    return frozenset(os.listdir("/proc/self/fd"))
+
+
+def test_a_refused_connection_is_closed_before_the_refusal_returns(peer: _Peer) -> None:
+    """TASK-0001.34: only a ready outcome hands a socket out, so a refusal closes the
+    connection it made. The same real peer, checked against another namespace, leaves no
+    fd behind.
+    """
+    other = _DifferentNamespace()
+    try:
+        before = _open_fds()
+        outcome = sockets.channel_ready(peer.path, other.fd)
+        after = _open_fds()
+    finally:
+        other.close()
+
+    assert outcome == sockets.ChannelRefused(sockets.PEER_OUTSIDE_JAIL)
+    assert after == before
+
+
+def test_a_connect_that_fails_leaves_no_socket_open(tmp_path: Path) -> None:
+    """TASK-0001.34: `ChannelNotReady` closes the socket whose connect failed, so a poll
+    loop that asks a thousand times holds nothing open between attempts.
+    """
+    namespace_fd = _own_namespace_fd()
+    try:
+        before = _open_fds()
+        outcome = sockets.channel_ready(str(tmp_path / "never-created"), namespace_fd)
+        after = _open_fds()
+    finally:
+        os.close(namespace_fd)
+
+    assert outcome == sockets.ChannelNotReady()
+    assert after == before
+
+
+def test_the_one_raise_closes_the_connection_too(peer: _Peer) -> None:
+    """TASK-0001.34: a `jail_namespace_fd` that is not open raises `OSError` after the
+    connect has succeeded, and the connection is closed on the way out. The fd number is
+    far above any this process holds, so the socket `channel_ready` makes cannot take it.
+    """
+    not_open = 1_000_000
+    with pytest.raises(OSError):
+        os.fstat(not_open)
+    before = _open_fds()
+
+    with pytest.raises(OSError):
+        sockets.channel_ready(peer.path, not_open)
+
+    assert _open_fds() == before
 
 
 def test_a_peer_in_a_different_namespace_is_refused(peer: _Peer) -> None:
@@ -229,7 +288,7 @@ def test_a_reaped_listen_caller_refuses_rather_than_raising(tmp_path: Path) -> N
     process, is the one whose exit and reap this test actually waits on -- an
     earlier version of this test forked a throwaway child right here instead, which
     left this test process itself as the live, never-exited listen() caller, so
-    every lookup legitimately read `ChannelReady()`: a refusal that never had
+    every lookup legitimately read `ChannelReady`: a refusal that never had
     anything to refuse.
     """
     listener_path = str(tmp_path / "svc.sock")

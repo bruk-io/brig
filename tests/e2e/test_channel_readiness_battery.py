@@ -257,7 +257,8 @@ def test_a_jail_listening_on_its_own_reserved_path_reads_ready(run: _Run) -> Non
     finally:
         destroy_jail(jail)
 
-    assert outcome == ChannelReady()
+    assert isinstance(outcome, ChannelReady), outcome
+    outcome.connection.close()
 
 
 def test_a_reserved_path_symlinked_to_an_outside_listener_is_refused(run: _Run) -> None:
@@ -287,6 +288,8 @@ def test_a_reserved_path_symlinked_to_an_outside_listener_is_refused(run: _Run) 
         destroy_jail(jail)
         outside.kill()
         outside.wait()
+        assert outside.stdout is not None
+        outside.stdout.close()
 
     assert outcome == ChannelRefused(ChannelReadinessRefusal.PEER_OUTSIDE_JAIL)
 
@@ -371,23 +374,13 @@ def _dial(path: str) -> socket.socket:
     return dialer
 
 
-def _embedders_connection(outcome: object, reservation: Reservation) -> socket.socket:
-    """The connection an embedder holds once readiness reads ready: the one the outcome
-    carries, or, where it carries none, a dial of the reservation's host path, which is all an
-    embedder could do."""
-    carried = getattr(outcome, "connection", None)
-    if isinstance(carried, socket.socket):
-        return carried
-    return _dial(reservation.bound_path)
-
-
 def test_a_link_the_jail_plants_after_readiness_does_not_redirect_the_embedder(
     run: _Run,
 ) -> None:
     """TASK-0001.34: readiness verifies one connection, the jail's own listener answers it,
-    and then the jail swaps its socket for a link to a host socket. The connection the
-    embedder speaks over must still reach the jail's listener, never the host socket the
-    link names.
+    and then the jail swaps its socket for a link to a host socket. The connection
+    `ChannelReady` carries still reaches the jail's listener; a fresh plain dial of the path,
+    which an embedder must never make, reaches the host socket the link names.
     """
     host = run.start_answering_listener("host")
     reserved, reservation = run.reserve()
@@ -406,9 +399,11 @@ def test_a_link_the_jail_plants_after_readiness_does_not_redirect_the_embedder(
         outcome = await_channel_ready(jail, reservation, timeout_s=10.0)
         assert isinstance(outcome, ChannelReady), outcome
         _wait_for_link(reservation.bound_path)
-        with _embedders_connection(outcome, reservation) as connection:
+        with outcome.connection as connection:
             connection.settimeout(10)
             answer = connection.recv(16)
+        with _dial(reservation.bound_path) as dialer:
+            dialled = dialer.recv(16)
     finally:
         destroy_jail(jail)
         host.kill()
@@ -417,6 +412,10 @@ def test_a_link_the_jail_plants_after_readiness_does_not_redirect_the_embedder(
         host.stdout.close()
 
     assert answer == b"jail", (
-        f"the embedder's connection after readiness answered {answer!r}: the jail's link "
-        "sent it to a host socket"
+        f"the connection readiness verified answered {answer!r}: the jail's link sent the "
+        "embedder to a host socket"
+    )
+    assert dialled == b"host", (
+        f"a plain dial after the swap answered {dialled!r}: the swap did not happen, so the "
+        "first assertion proves nothing"
     )

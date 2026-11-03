@@ -162,4 +162,6 @@ def test_the_real_so_peerpidfd_default_does_not_report_kernel_unsupported() -> N
             listener.wait()
             listener.stdout.close()
 
+    if isinstance(outcome, sockets.ChannelReady):
+        outcome.connection.close()
     assert outcome != sockets.ChannelRefused(sockets.KERNEL_UNSUPPORTED)

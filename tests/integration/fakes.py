@@ -5,6 +5,7 @@ public API (rule 4), so each satisfies its port structurally.
 
 import os
 import signal
+import socket
 from dataclasses import dataclass, field
 
 from brig import (
@@ -164,24 +165,44 @@ class FakeChannelDirectories:
 
 @dataclass
 class FakeChannelReadiness:
-    """A fake `ChannelReadinessPort`: `ready` records what it was asked and hands back the next
-    of `outcomes`, repeating the last once they run out. No socket, `/proc` or clock.
+    """A fake `ChannelReadinessPort`: `ready` records what it was asked and answers with the
+    next of `outcomes`, repeating the last once they run out. No `/proc`, clock or path.
+
+    `ChannelReady` in the script (the class, not an instance) is an attempt that connects: the
+    fake makes a socket pair, hands one end out in a `ChannelReady` for the caller to own, and
+    keeps the other in `peers`, so a test can show the connection the caller got is the one the
+    fake made and is still open. `close` closes the peers.
     """
 
-    outcomes: list[ChannelReady | ChannelNotReady | ChannelRefused] = field(
-        default_factory=lambda: [ChannelReady()]
+    outcomes: list[type[ChannelReady] | ChannelNotReady | ChannelRefused] = field(
+        default_factory=lambda: [ChannelReady]
     )
     asked: list[tuple[str, int]] = field(default_factory=list)
+    handed_out: list[socket.socket] = field(default_factory=list)
+    peers: list[socket.socket] = field(default_factory=list)
 
     def ready(
         self, path: str, jail_namespace_fd: int
     ) -> ChannelReady | ChannelNotReady | ChannelRefused:
-        """Record `(path, jail_namespace_fd)`; hand back the next scripted outcome,
-        repeating the last one once the script is exhausted.
+        """Record `(path, jail_namespace_fd)`; answer with the next scripted outcome,
+        repeating the last one once the script is exhausted, and a fresh connection for each
+        ready one.
         """
         self.asked.append((path, jail_namespace_fd))
         index = min(len(self.asked), len(self.outcomes)) - 1
-        return self.outcomes[index]
+        outcome = self.outcomes[index]
+        if outcome is ChannelReady:
+            ours, theirs = socket.socketpair()
+            self.handed_out.append(ours)
+            self.peers.append(theirs)
+            return ChannelReady(ours)
+        assert not isinstance(outcome, type)
+        return outcome
+
+    def close(self) -> None:
+        """Close every peer end the fake kept."""
+        for peer in self.peers:
+            peer.close()
 
 
 def plant_fake_proc(

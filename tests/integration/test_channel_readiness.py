@@ -97,13 +97,13 @@ def test_a_jail_whose_process_exits_after_its_namespace_was_held_reads_as_finish
 @pytest.mark.parametrize(
     "outcomes",
     [
-        [ChannelNotReady(), ChannelNotReady(), ChannelReady()],
-        [ChannelReady()],
+        [ChannelNotReady(), ChannelNotReady(), ChannelReady],
+        [ChannelReady],
     ],
     ids=["not-ready-twice-then-ready", "ready-first"],
 )
 def test_the_loop_keeps_asking_until_the_channel_reads_ready(
-    outcomes: list[ChannelReady | ChannelNotReady | ChannelRefused],
+    outcomes: list[type[ChannelReady] | ChannelNotReady | ChannelRefused],
 ) -> None:
     """`ChannelNotReady` is the only transient outcome: the loop keeps asking and
     reports ready once it arrives. `ChannelReady` is terminal, so a script of one
@@ -116,10 +116,35 @@ def test_the_loop_keeps_asking_until_the_channel_reads_ready(
         _jail(), reservation, readiness=readiness, processes=FakeProcesses()
     )
 
-    assert outcome == ChannelReady()
-    assert len(readiness.asked) == len(outcomes)
-    assert {path for path, _fd in readiness.asked} == {reservation.bound_path}
-    assert {fd for _path, fd in readiness.asked} == {_NAMESPACE_FD}
+    try:
+        assert isinstance(outcome, ChannelReady)
+        assert len(readiness.asked) == len(outcomes)
+        assert {path for path, _fd in readiness.asked} == {reservation.bound_path}
+        assert {fd for _path, fd in readiness.asked} == {_NAMESPACE_FD}
+    finally:
+        readiness.close()
+        for connection in readiness.handed_out:
+            connection.close()
+
+
+def test_the_ready_outcome_hands_the_embedder_the_verified_connection_open() -> None:
+    """TASK-0001.34: the connection the readiness port verified is the one the embedder
+    gets, still open and still connected to the peer that answered it, so it never has to
+    dial the path again. The port made exactly one connection, on the one ready attempt.
+    """
+    readiness = FakeChannelReadiness(outcomes=[ChannelNotReady(), ChannelReady])
+
+    outcome = await_channel_ready(
+        _jail(), _reservation(), readiness=readiness, processes=FakeProcesses()
+    )
+
+    assert isinstance(outcome, ChannelReady)
+    with outcome.connection as connection:
+        (peer,) = readiness.peers
+        assert readiness.handed_out == [connection]
+        peer.sendall(b"verified")
+        assert connection.recv(16) == b"verified"
+    readiness.close()
 
 
 def test_a_refusal_stops_the_loop_at_once_and_is_never_retried() -> None:
@@ -130,7 +155,7 @@ def test_a_refusal_stops_the_loop_at_once_and_is_never_retried() -> None:
     readiness = FakeChannelReadiness(
         outcomes=[
             ChannelRefused(ChannelReadinessRefusal.PEER_OUTSIDE_JAIL),
-            ChannelReady(),
+            ChannelReady,
         ]
     )
 
@@ -140,6 +165,7 @@ def test_a_refusal_stops_the_loop_at_once_and_is_never_retried() -> None:
 
     assert outcome == ChannelRefused(ChannelReadinessRefusal.PEER_OUTSIDE_JAIL)
     assert len(readiness.asked) == 1
+    assert readiness.handed_out == []
 
 
 def test_the_loop_gives_up_at_its_deadline_and_reports_the_last_not_ready() -> None:

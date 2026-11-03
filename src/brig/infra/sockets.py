@@ -40,7 +40,16 @@ class JailPid1Exited:
 
 @dataclass(frozen=True)
 class ChannelReady:
-    """The connect reached a socket a process inside the jail's PID namespace listens on."""
+    """The connect reached a socket a process inside the jail's PID namespace listens on, and
+    `connection` is that connect, still open: the one connection the check vouches for. Whoever
+    receives it owns it and closes it (TASK-0001.34)."""
+
+    connection: socket.socket
+
+
+@dataclass(frozen=True)
+class _Verified:
+    """`_verify`'s answer when the peer passed: the caller hands the connection out."""
 
 
 @dataclass(frozen=True)
@@ -212,6 +221,13 @@ def channel_ready(
     """Connect to `path` once and verify that the process that called `listen()` on the socket
     that answered is in the PID namespace `jail_namespace_fd` names (decision-0005).
 
+    `ChannelReady` carries the verified connection, open, and its receiver owns it: readiness is
+    a property of that one connection, and a later dial of `path` follows whatever the jail has
+    put there since, a symbolic link to a host socket included (TASK-0001.34). Every other
+    outcome, and the one raise, closes the connection first, so only a ready attempt leaves a
+    socket open. The socket is blocking and, like every socket Python makes, not inherited by a
+    process spawned later.
+
     A failed connect is `ChannelNotReady`. The peer's pid comes from `SO_PEERCRED`, its pidfd
     from `SO_PEERPIDFD`, its namespace from `/proc/<pid>/ns/pid`, and the pidfd's `fdinfo` must
     name the same pid, so a pid reused in between cannot pass. `ENOPROTOOPT` from
@@ -225,44 +241,57 @@ def channel_ready(
     """
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        try:
-            connection.connect(path)
-        except OSError:
-            return ChannelNotReady()
-        try:
-            peer_pid, _uid, _gid = struct.unpack(
-                "3i",
-                connection.getsockopt(
-                    socket.SOL_SOCKET,
-                    getattr(socket, "SO_PEERCRED", 17),
-                    12,
-                ),
-            )
-        except OSError:
-            return ChannelRefused(PEER_LOOKUP_FAILED)
-        try:
-            pidfd = connection.getsockopt(socket.SOL_SOCKET, so_peerpidfd)
-        except OSError as exc:
-            if exc.errno == errno.ENOPROTOOPT:
-                return ChannelRefused(KERNEL_UNSUPPORTED)
-            return ChannelRefused(PEER_LOOKUP_FAILED)
-        try:
-            peer_namespace = os.readlink(f"/proc/{peer_pid}/ns/pid")
-            # The pidfd names the very process the kernel recorded; a reused pid differs.
-            with open(f"/proc/self/fdinfo/{pidfd}") as handle:
-                pidfd_pid = next(int(line.split()[1]) for line in handle if line.startswith("Pid:"))
-        except OSError:
-            return ChannelRefused(PEER_LOOKUP_FAILED)
-        finally:
-            os.close(pidfd)
-        if pidfd_pid != peer_pid:
-            return ChannelRefused(PEER_LOOKUP_FAILED)
-        jail_namespace = os.readlink(f"/proc/self/fd/{jail_namespace_fd}")
-        if peer_namespace != jail_namespace:
-            return ChannelRefused(PEER_OUTSIDE_JAIL)
-        return ChannelReady()
-    finally:
+        verdict = _verify(connection, path, jail_namespace_fd, so_peerpidfd)
+    except BaseException:
         connection.close()
+        raise
+    if isinstance(verdict, _Verified):
+        return ChannelReady(connection)
+    connection.close()
+    return verdict
+
+
+def _verify(
+    connection: socket.socket, path: str, jail_namespace_fd: int, so_peerpidfd: int
+) -> _Verified | ChannelNotReady | ChannelRefused:
+    """`channel_ready`'s connect and check on `connection`, which it neither keeps nor closes.
+    The one raise is `OSError` reading `jail_namespace_fd`."""
+    try:
+        connection.connect(path)
+    except OSError:
+        return ChannelNotReady()
+    try:
+        peer_pid, _uid, _gid = struct.unpack(
+            "3i",
+            connection.getsockopt(
+                socket.SOL_SOCKET,
+                getattr(socket, "SO_PEERCRED", 17),
+                12,
+            ),
+        )
+    except OSError:
+        return ChannelRefused(PEER_LOOKUP_FAILED)
+    try:
+        pidfd = connection.getsockopt(socket.SOL_SOCKET, so_peerpidfd)
+    except OSError as exc:
+        if exc.errno == errno.ENOPROTOOPT:
+            return ChannelRefused(KERNEL_UNSUPPORTED)
+        return ChannelRefused(PEER_LOOKUP_FAILED)
+    try:
+        peer_namespace = os.readlink(f"/proc/{peer_pid}/ns/pid")
+        # The pidfd names the very process the kernel recorded; a reused pid differs.
+        with open(f"/proc/self/fdinfo/{pidfd}") as handle:
+            pidfd_pid = next(int(line.split()[1]) for line in handle if line.startswith("Pid:"))
+    except OSError:
+        return ChannelRefused(PEER_LOOKUP_FAILED)
+    finally:
+        os.close(pidfd)
+    if pidfd_pid != peer_pid:
+        return ChannelRefused(PEER_LOOKUP_FAILED)
+    jail_namespace = os.readlink(f"/proc/self/fd/{jail_namespace_fd}")
+    if peer_namespace != jail_namespace:
+        return ChannelRefused(PEER_OUTSIDE_JAIL)
+    return _Verified()
 
 
 def create(path: str) -> None:

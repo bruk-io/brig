@@ -5,6 +5,7 @@ sentinels into domain's or this module's values.
 """
 
 import signal
+import socket
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
@@ -91,7 +92,17 @@ class ChannelReadinessRefusal(Enum):
 class ChannelReady:
     """The connect reached a socket on which a process inside the jail's PID namespace called
     `listen()`, and nothing more: not that it accepts, is alive, or is the one meant
-    (decision-0005 item 4)."""
+    (decision-0005 item 4).
+
+    `connection` is that connect, still open, and the only connection readiness vouches for.
+    The embedder speaks the channel's protocol over it, owns it and closes it (`with
+    ready.connection:`), and never dials the reservation's `bound_path` itself: the jail can
+    write its channel directory, so once readiness has passed it can put a symbolic link to any
+    host socket there, and a plain connect follows it (TASK-0001.34). A second connection needs
+    a second `await_channel_ready`. The socket is blocking, with no timeout, and is not
+    inherited by a process spawned later."""
+
+    connection: socket.socket
 
 
 @dataclass(frozen=True)
@@ -121,8 +132,9 @@ class ChannelReadinessPort(Protocol):
         self, path: str, jail_namespace_fd: int
     ) -> ChannelReady | ChannelNotReady | ChannelRefused:
         """Connect to `path` once and verify the listener is in the PID namespace
-        `jail_namespace_fd` names. Every outcome is returned; only a `jail_namespace_fd` that is
-        not open raises `OSError`."""
+        `jail_namespace_fd` names. `ChannelReady` carries that connection, open, for the caller
+        to own; every other outcome has closed it. Every outcome is returned; only a
+        `jail_namespace_fd` that is not open raises `OSError`, its connection closed too."""
         ...
 
 

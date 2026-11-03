@@ -115,13 +115,14 @@ CHANNEL_DIRECTORIES: ChannelDirectoryPort = _RealChannelDirectories()
 def _channel_ready(
     path: str, jail_namespace_fd: int
 ) -> ChannelReady | ChannelNotReady | ChannelRefused:
-    """infra's `channel_ready`, its values translated into this port's.
+    """infra's `channel_ready`, its values translated into this port's; a ready outcome's
+    connection passes through, still open.
 
     `isinstance`, not `match`: pypeeker cannot resolve a class pattern reached through a module
     alias (`case _sockets.X()`), and reports `X` as unused (measured)."""
     outcome = _sockets.channel_ready(path, jail_namespace_fd)
     if isinstance(outcome, _sockets.ChannelReady):
-        return ChannelReady()
+        return ChannelReady(outcome.connection)
     if isinstance(outcome, _sockets.ChannelNotReady):
         return ChannelNotReady()
     if isinstance(outcome, _sockets.ChannelRefused):

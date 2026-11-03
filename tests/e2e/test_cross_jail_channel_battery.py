@@ -120,6 +120,7 @@ def _jail_a() -> tuple[Jail, Reservations]:
     (reservation,) = reservations.reservations
     ready = await_channel_ready(jail, reservation, timeout_s=10)
     assert isinstance(ready, ChannelReady), ready
+    ready.connection.close()
     return jail, reservations
 
 

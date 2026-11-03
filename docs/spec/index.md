@@ -130,7 +130,8 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   empty) stays in a record for a later sweep (TASK-0001.32).
 - `sockets.py`: the channel directory's creation and removal, finding and holding the jail's PID
   namespace, the verified connect that says a channel is ready (decision-0005), and signalling
-  the jail's PID 1.
+  the jail's PID 1. A ready connect is handed back open, the one connection the check vouches
+  for; a refusal, a failed connect and the one raise each close theirs (TASK-0001.34).
 - `supervisor/`: the jail's PID 1 (decision-0002). `wire.py` and `program.py` assemble
   (`assemble.py`) into one stdlib-only file that refuses an interpreter older than 3.15;
   `link.py` is the host's end, starting it and reading its events. The supervised command is its
@@ -155,7 +156,17 @@ refuses and compiles the policy, writes the supervisor script, starts the jail t
 driver, holds its PID namespace for readiness, and exports `create_bwrap_jail`. What every jail
 type shares is beside it: `jail.py` (the `Jail`, brig's state directory, and the real ports'
 wiring), `api.py` (reserving channels, readiness, waiting, interrupting the command with
-`SIGINT` through its supervisor, teardown) and `report.py` (a report as text). `errors.py` names
+`SIGINT` through its supervisor, teardown) and `report.py` (a report as text).
+
+An embedder talks to a channel only over the connection readiness verified. `await_channel_ready`
+returns `ChannelReady(connection)`, the verified socket still open, and the embedder owns it and
+closes it; it never dials the reservation's `bound_path` itself. The jail can write its channel
+directory, so once readiness has passed it can replace its socket with a symbolic link to any
+socket the embedder's user can reach on the host, and a plain connect follows the link
+(TASK-0001.34). Readiness is a property of one connection (decision-0005 item 1): a second
+connection is a second `await_channel_ready`. Only the attempt that reads ready leaves a socket
+open. *Held by* `tests/e2e/test_channel_readiness_battery.py` (the swap after readiness) and
+`tests/e2e/test_channel_readiness_refusals.py` (every other outcome closes its socket). `errors.py` names
 every exception an embedder can see, one per failure, so an embedder handles brig's own types
 and never infra's. `src/brig/__init__.py` re-exports exactly this layer's surface and the
 domain's plain data, nothing from infra.

@@ -32,7 +32,9 @@ class ChannelDirectory:
 @dataclass(frozen=True)
 class Reservation:
     """One channel's reservation: `bound_path`, its file's host path, and `endpoint`, the same
-    file's path inside the jail, which the embedder puts in the command's argv."""
+    file's path inside the jail, which the embedder puts in the command's argv. The embedder
+    never dials `bound_path`: the jail can write what is there, a link to a host socket
+    included, so it talks over the connection readiness verified (TASK-0001.34)."""
 
     name: str
     bound_path: str

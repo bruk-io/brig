@@ -95,6 +95,12 @@ def await_channel_ready(
     """Poll a verified connect to `reservation`'s channel (decision-0005) until it reads ready or
     refused, or `timeout_s` passes, and return the last outcome.
 
+    `ChannelReady` carries the verified connection, open: the embedder uses it, owns it and
+    closes it, and never dials `reservation.bound_path` itself, since the jail can swap its
+    socket for a symbolic link to a host socket once readiness has passed (TASK-0001.34). Only
+    the attempt that returns `ChannelReady` leaves a socket open; every other attempt closed its
+    own. A second connection needs a second call.
+
     `ChannelReady` and `ChannelRefused` return at once; a refusal is about this connection, so
     one that reconnects verifies again. `ChannelNotReady` is retried until the deadline, checked
     between attempts. `ChannelJailFinished` comes back at once for a jail whose command finished
