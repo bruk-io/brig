@@ -285,3 +285,17 @@ def test_the_directories_brig_makes_for_an_absent_deny_are_pinned_too() -> None:
         Mount(MountKind.WRITABLE, "/w/cfg/deep", "/w/cfg/deep"),
         Mount(MountKind.READ_ONLY, "/w/cfg/deep/rc", _EMPTY),
     )
+
+
+def test_each_directory_on_the_way_to_a_readable_root_in_a_writable_root_is_pinned() -> None:
+    """TASK-0001.33: a readable root nested in a writable root is a mount point, but the
+    directories above it are not, so each is pinned the same way, before the readable root."""
+    policy = FsPolicy(readable=("/w/z/y/r",), writable=("/w",))
+    kinds = {"/w/z": PathKind.DIRECTORY, "/w/z/y": PathKind.DIRECTORY}
+
+    assert _policy_mounts(policy, kinds) == (
+        Mount(MountKind.WRITABLE, "/w", "/w"),
+        Mount(MountKind.WRITABLE, "/w/z", "/w/z"),
+        Mount(MountKind.WRITABLE, "/w/z/y", "/w/z/y"),
+        Mount(MountKind.READ_ONLY, "/w/z/y/r", "/w/z/y/r"),
+    )
