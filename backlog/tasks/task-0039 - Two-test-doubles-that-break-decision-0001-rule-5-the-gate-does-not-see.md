@@ -27,4 +27,6 @@ tests/e2e/test_supervisor_assemble.py:120,141 builds fake_sys, a types.SimpleNam
 
 <!-- SECTION:NOTES:BEGIN -->
 Accepted 2026-11-03. Half fixed at fe3f40d: tests/integration/test_policy_refusal.py's control now uses FakeChannelDirectories(fail_create=True) instead of replacing the fake's create. Not done: tests/e2e/test_supervisor_assemble.py's fake_sys (a SimpleNamespace stand-in for sys, to drive the assembled preamble's version refusal) needs a home: e2e may import brig and brig.infra only and may not hold doubles, and integration tests import brig's public surface; the preamble's refusal could take the version as data so a unit test drives it, which changes infra's assembly. Left for that decision.
+
+Review 2026-11-03 (reviewer): not closed. AC#2 met and ticked: test_policy_refusal uses FakeChannelDirectories(fail_create=True), and no method is replaced. AC#1 not met: tests/e2e/test_supervisor_assemble.py:120 still builds fake_sys, a SimpleNamespace double, in e2e. To close it, the preamble's version refusal must take the version as data so that a unit test drives it, or the test must move to integration. Either way the infra assembly changes, which needs the decision the worker's note asks for.
 <!-- SECTION:NOTES:END -->
