@@ -1,7 +1,7 @@
 ---
 id: TASK-0021
 title: Grade a bwrap jail's fs_write, network, fs_read and env
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-31T11:00:00Z'
@@ -174,4 +174,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review 2026-11-03 (reviewer): closed. Full gate (uv run just done) exited 0 at fe3f40d plus board commits, recorded on TASK-0021; tree unchanged by it. AC#2 met: every mounted deny or mask now has a BEST_EFFORT ceiling for fs_write/fs_read. The new rename case shows the command alone cannot read the mask, and it asserts BEST_EFFORT whatever the kernel does with the host's rename. That is honest, because the ceiling assumes the weaker of the two measured outcomes. Answered here, no draft (low): the rename case computes but never records whether the rename detached the mask, so the battery cannot show which kernel it ran on. test_fs_write_a_write_at_a_deny_is_refused_and_a_host_rename_undoes_it does no host rename, so its name overstates what it does.
 <!-- SECTION:NOTES:END -->
