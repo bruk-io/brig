@@ -27,10 +27,13 @@ class FakeProcesses:
     `False` is a jail whose command already exited. `peek` reports `exit_code` while
     `leader_exited` (a held, exited leader the driver leaves out of each check), `None`
     otherwise, and `ExitCodeUnknown` while `process_unknown` (no longer a child, `ECHILD`).
-    `group_alive_deadline` answers as one more `group_alive` call, without polling.
+    `group_alive_deadline` answers as one more `group_alive` call, without polling. While
+    `fail_signal`, `signal_group` records the signal and then raises `OSError`: a host that
+    refused the teardown's signal.
     """
 
     exit_code: int = 0
+    fail_signal: bool = False
     alive: bool = False
     process_unknown: bool = False
     leader_exited: bool = False
@@ -43,8 +46,14 @@ class FakeProcesses:
     checked_deadline: list[tuple[int, int, float]] = field(default_factory=list)
 
     def signal_group(self, pgid: int, sig: signal.Signals) -> None:
-        """Record the signal sent to `pgid`."""
+        """Record the signal sent to `pgid`; then raise `OSError` while `fail_signal`.
+
+        Raises:
+            OSError: `fail_signal` is set.
+        """
         self.signalled.append((pgid, sig))
+        if self.fail_signal:
+            raise OSError(1, "fake host: the teardown's signal was refused")
 
     def peek(self, pid: int) -> int | None | ExitCodeUnknown:
         """Record `pid`; report `ExitCodeUnknown` while `process_unknown`, `exit_code`
@@ -92,31 +101,41 @@ class FakeSupervisors:
     """A fake `SupervisorPort` that records every call and starts nothing.
 
     `start` hands back an identity from `next_pid`, or raises `OSError` while `fail_start`
-    (which the driver turns into `JailSpawnFailed`). `await_done` reports `exit_code`, `None`
-    while `expires` (a wait that timed out), or `ExitCodeUnknown` while `done_unknown`.
+    (which the driver turns into `JailSpawnFailed`). While `fail_after_start`, `start` takes
+    an identity from `next_pid`, records it in `spawned` (a supervisor that is now running),
+    and then fails. `await_done` reports `exit_code`, `None` while `expires` (a wait that timed
+    out), or `ExitCodeUnknown` while `done_unknown`. `close` records the pid, then raises
+    `OSError` while `fail_close`.
     """
 
     exit_code: int = 0
     expires: bool = False
     done_unknown: bool = False
     fail_start: bool = False
+    fail_after_start: bool = False
+    fail_close: bool = False
     next_pid: int = 2000
     started: list[tuple[tuple[str, ...], frozendict[str, str]]] = field(default_factory=list)
     awaited: list[tuple[int, float]] = field(default_factory=list)
     closed: list[int] = field(default_factory=list)
+    spawned: list[int] = field(default_factory=list)
 
     def start(self, argv: tuple[str, ...], env: frozendict[str, str]) -> _SupervisorIdentity:
-        """Record `(argv, env)`; raise `OSError` while `fail_start`, else hand back a
-        fabricated supervisor identity.
+        """Record `(argv, env)`; raise `OSError` while `fail_start`; while `fail_after_start`,
+        record a spawned supervisor and then fail; else hand back a fabricated supervisor
+        identity.
 
         Raises:
-            OSError: `fail_start` is set.
+            OSError: `fail_start` or `fail_after_start` is set.
         """
         self.started.append((argv, env))
         if self.fail_start:
             raise OSError("fake supervisor refused to start")
         pid = self.next_pid
         self.next_pid += 1
+        if self.fail_after_start:
+            self.spawned.append(pid)
+            raise OSError(32, "fake supervisor: started, then its request could not be written")
         return _SupervisorIdentity(pid=pid, pgid=pid)
 
     def await_done(self, pid: int, deadline: float) -> int | None | ExitCodeUnknown:
@@ -129,8 +148,14 @@ class FakeSupervisors:
         return None if self.expires else self.exit_code
 
     def close(self, pid: int) -> None:
-        """Record `pid`."""
+        """Record `pid`; then raise `OSError` while `fail_close`.
+
+        Raises:
+            OSError: `fail_close` is set.
+        """
         self.closed.append(pid)
+        if self.fail_close:
+            raise OSError(5, "fake host: the supervisor's pipe could not be closed")
 
 
 def _throwaway_channel_directory() -> str:
