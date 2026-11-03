@@ -50,8 +50,9 @@ mapping bwrap does not give an unprivileged caller), authenticating the events c
    jail protects the command from itself.
 4. The host keeps its reach: it owns the jail's user namespace, so it holds every capability
    there and still reads the supervisor's `/proc/<pid>/ns/pid` (decision-0005).
-5. An e2e battery plants the forgery and the ptrace attach, with a positive control that the
-   same probes succeed against a dumpable process of the command's own.
+5. An e2e battery plants the forgery, and opens PID 1's `environ` and `mem` from the command
+   (the kernel's ptrace access check, which an attach makes too), with positive controls that
+   the same probes succeed against a process of the command's own.
 
 ## Consequences
 
