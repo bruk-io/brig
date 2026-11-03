@@ -4,7 +4,7 @@ title: Readiness ignores its deadline and dials a planted link before refusing i
 status: In Progress
 assignee: []
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T18:56:00Z'
+updated_date: '2026-11-03T18:57:00Z'
 labels:
   - brig
   - channels
@@ -22,7 +22,7 @@ Architecture review 2026-11-03 (both demonstrated): (a) a jail that calls listen
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 await_channel_ready honours timeout_s against a jail that fills its own listen backlog and never accepts: it returns ChannelNotReady (or a terminal outcome) within the deadline plus a small bound; e2e recorded failing before the fix
+- [x] #1 await_channel_ready honours timeout_s against a jail that fills its own listen backlog and never accepts: it returns ChannelNotReady (or a terminal outcome) within the deadline plus a small bound; e2e recorded failing before the fix
 - [ ] #2 A link planted at the reserved name is refused without the embedder connecting to what it names: brig opens the name beneath a directory fd it holds from creation with O_PATH|O_NOFOLLOW, requires a socket, and connects through that fd non-blocking with a poll deadline; e2e shows a host listener behind the link sees no connection; recorded failing before the fix
 - [ ] #3 The returned connection is still the verified one (TASK-0001.34) and the readiness battery still passes
 <!-- AC:END -->
