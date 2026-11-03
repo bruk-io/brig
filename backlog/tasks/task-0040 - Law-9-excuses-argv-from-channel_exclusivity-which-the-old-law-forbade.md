@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T04:14:00Z'
-updated_date: '2026-11-03T04:18:00Z'
+updated_date: '2026-11-03T04:21:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -19,8 +19,8 @@ docs/spec/index.md law 9 (168a633): channel_exclusivity now grades only writable
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Law 9 either counts argv in channel_exclusivity's enumeration as the old law did, or a decision records why it no longer does
-- [ ] #2 Law 9's argv clause names a test that holds it, or says none does yet
+- [x] #1 Law 9 either counts argv in channel_exclusivity's enumeration as the old law did, or a decision records why it no longer does
+- [x] #2 Law 9's argv clause names a test that holds it, or says none does yet
 <!-- AC:END -->
 
 ## Implementation Notes
