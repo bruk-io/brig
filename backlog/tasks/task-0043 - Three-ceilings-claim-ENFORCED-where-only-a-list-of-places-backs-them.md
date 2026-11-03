@@ -36,7 +36,7 @@ Architecture review 2026-11-03. (a) fs_write is ENFORCED with a readable root ne
 - [x] #1 fs_write's ceiling is computed from the compiled mounts: any read-only mount beneath a writable one (a deny, a mask, a nested readable root) caps it at BEST_EFFORT; e2e: the host replaces a nested readable root and the jail writes into it, and the ceiling it reported allowed for that
 - [x] #2 channel_exclusivity is at most BEST_EFFORT whenever the jail sees any host path a socket could sit in beyond its own channel directory (a list of places is not a mechanism); VIOLATED stays for a visible SOCKET_DIRECTORIES entry or a writable shared root; e2e plants a socket outside the listed places and dials it
 - [x] #3 decision-0008 is amended (a dated note) with the rule that ENFORCED needs a kernel mechanism, and a draft names the mechanism that could earn channel_exclusivity and network back (Landlock here is ABI 7: abstract sockets only; a supervisor-held listening fd plus a seccomp filter on socket(AF_UNIX) is the candidate)
-- [ ] #4 network is capped by the socket half of channel_exclusivity only: VIOLATED when a host socket place (SOCKET_DIRECTORIES) is visible, at most BEST_EFFORT whenever the jail sees any host root a socket could sit in; a writable shared root alone, which carries files and not a route out, does not lower it; a unit test pins each case
+- [x] #4 network is capped by the socket half of channel_exclusivity only: VIOLATED when a host socket place (SOCKET_DIRECTORIES) is visible, at most BEST_EFFORT whenever the jail sees any host root a socket could sit in; a writable shared root alone, which carries files and not a route out, does not lower it; a unit test pins each case
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -279,4 +279,14 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+## Worker report, network revision (2026-11-03)
+
+Commit ffcd071. `ceilings` now computes `_socket_reach` (VIOLATED for a visible SOCKET_DIRECTORIES place, BEST_EFFORT while any readable or writable root is seen, ENFORCED with none). `network` is exactly that; `channel_exclusivity` is that unless a writable path is shared beyond the declared channels, which makes it VIOLATED. A writable shared root alone no longer lowers `network`. AC #4's unit cases are in tests/unit/test_report_ceilings.py: `test_network_is_violated_where_a_socket_place_is_visible`, `test_network_is_at_most_best_effort_while_any_host_root_is_seen`, `test_a_writable_shared_root_alone_does_not_lower_network`; the no-root ENFORCED case is in `test_only_a_jail_that_sees_no_host_path_keeps_exclusivity_enforced`. The earlier ordering test is gone. The NETWORK_CLAIM text, the spec's domain section and decision-0008's 2026-11-03 note say the same; the recorded repro file was not touched and still passes.
+
+Grades a typical embedder now gets (computed with `ceilings`):
+- writable project, readable /, ~/.ssh and ~/.aws masked: fs_write ENFORCED, fs_read BEST_EFFORT, network VIOLATED (/ shows /run and /tmp), env ENFORCED, channel_exclusivity VIOLATED.
+- the same with a write deny on .git/hooks: fs_write BEST_EFFORT, otherwise the same.
+- writable project, readable /usr, /etc and the home directory, ~/.ssh masked: fs_write ENFORCED, fs_read BEST_EFFORT, network BEST_EFFORT, env ENFORCED, channel_exclusivity VIOLATED.
+- read-only project with /usr and /etc, nothing writable: fs_write ENFORCED, fs_read ENFORCED, network BEST_EFFORT, env ENFORCED, channel_exclusivity BEST_EFFORT.
 <!-- SECTION:NOTES:END -->
