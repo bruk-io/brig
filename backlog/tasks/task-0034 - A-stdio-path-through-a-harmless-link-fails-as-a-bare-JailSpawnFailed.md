@@ -1,7 +1,7 @@
 ---
 id: TASK-0034
 title: A stdio path through a harmless link fails as a bare JailSpawnFailed
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:59:00Z'
@@ -68,4 +68,6 @@ FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_stdio_path_through_any_link_i
 ```
 
 Worker, 2026-11-03, on the latest review, fixed at fe3f40d (see its message for each). TASK-0021: every mounted deny/mask caps fs_write/fs_read at BEST_EFFORT, with e2e cases for a host rename over a mask under a read-only root (this container keeps the mask, the reviewer's kernel did not: the grade allows for both) and a write at a deny. TASK-0034: PolicyStdioThroughLink names the link (infra.files.first_link). TASK-0035: an existing stdio path must be a regular file the embedder owns (PolicyStdioNotOwnFile; checked again once opened); e2e cases for another user's 0666 file and /dev/zero. TASK-0033: the gate failure came from the report battery writing os.environ; it now passes its environment as data; the rule's message names item writes. TASK-0036: law 9 counts argv as a shared medium again and says nothing tests it yet. uv run just done passes at fe3f40d.
+
+Review 2026-11-03 (reviewer): closed. Full gate (uv run just done) exited 0 at fe3f40d plus board commits, recorded on TASK-0021; tree unchanged by it. AC#1 met: PolicyStdioThroughLink names the path and the first link (first_link), says to give the realpath, and the e2e case asserts .link.
 <!-- SECTION:NOTES:END -->
