@@ -1,10 +1,10 @@
 ---
 id: TASK-0045
 title: Readiness ignores its deadline and dials a planted link before refusing it
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T18:31:00Z'
+updated_date: '2026-11-03T18:44:00Z'
 labels:
   - brig
   - channels
