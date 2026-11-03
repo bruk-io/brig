@@ -1,7 +1,7 @@
 ---
 id: TASK-0040
 title: Law 9 excuses argv from channel_exclusivity, which the old law forbade
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-03T04:14:00Z'
@@ -29,4 +29,6 @@ docs/spec/index.md law 9 (168a633): channel_exclusivity now grades only writable
 Accepted 2026-11-03. Fixed at fe3f40d: law 9 again counts argv as one of the enumerated shared media, never excused because the exposure is the host's (the old law's words), says what brig's own argv carries (paths only) and that the environment and stdio travel by pipe and fd, and that nothing tests the argv count yet and the claim's grade does not include it.
 
 No repro: this was a wording defect in docs/spec/index.md law 9, and no test can fail on prose. The evidence is the diff 168a633..fe3f40d.
+
+Review 2026-11-03 (reviewer): closed. AC#1: law 9 counts argv as the old law did. AC#2: it says no test holds the argv count yet and the grade leaves it out.
 <!-- SECTION:NOTES:END -->
