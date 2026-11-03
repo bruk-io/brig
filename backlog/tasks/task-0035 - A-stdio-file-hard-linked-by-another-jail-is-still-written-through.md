@@ -1,7 +1,7 @@
 ---
-id: DRAFT-0022
+id: TASK-0035
 title: A stdio file hard-linked by another jail is still written through
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T04:00:00Z'
 labels: []
