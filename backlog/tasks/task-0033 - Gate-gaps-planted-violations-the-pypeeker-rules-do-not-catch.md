@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T04:02:00Z'
+updated_date: '2026-11-03T04:07:00Z'
 labels:
   - size-3
 dependencies: []
@@ -20,7 +20,7 @@ Found by an architecture review, 2026-11-02, at 739dd94. 30 violations planted i
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Each planted violation above fails the gate, with a pypeeker rule test that plants it
+- [x] #1 Each planted violation above fails the gate, with a pypeeker rule test that plants it
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -41,3 +41,29 @@ Found by an architecture review, 2026-11-02, at 739dd94. 30 violations planted i
 - uv run just gates green on the real tree; uv run just done green.
 - record-check --tier full on the task.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Worker's report (@claude, commit e13cec1)
+
+What changed: pypeeker_rules/brig.py (two rules extended, one added), pypeeker_rules/tests/test_brig_rules.py (23 new tests), pyproject.toml (brig-frozen-data enabled, root src/brig/domain). Every new message says what to do instead. No existing rule or allow list was weakened; the real tree already passed every new part, so no code changed.
+
+Each planted violation, its rule part and its tests:
+- pytest.MonkeyPatch.context(): brig-no-patching _monkeypatch_class_uses (MonkeyPatch read through an import of pytest, aliased too) and _MOCK_MODULES gaining pytest.MonkeyPatch and _pytest.monkeypatch (from-import). Tests: ..._fires_on_monkeypatch_context, ..._through_an_aliased_pytest, ..._importing_monkeypatch_by_name; clean: ..._accepts_other_pytest_attributes.
+- setattr(brig, ...): _setattr_on_imports, a trait anchored on the import: is it the first argument of a setattr/delattr call (the first reference after the call's name in its scope). Also _attribute_writes_on_imports for brig.x = f. Tests: ..._setattr_of_an_imported_module, ..._multi_line_delattr_of_an_import, ..._attribute_assigned_through_an_import; clean: ..._accepts_setattr_on_a_local_object.
+- A fake dataclass in tests/e2e: _doubles_outside_integration, a class with fake/stub/mock/dummy/spy as a word of its name outside tests/integration/. Tests: ..._fake_dataclass_in_e2e, ..._private_stub_in_unit; clean: ..._accepts_a_fake_in_integration_and_a_real_helper_in_e2e.
+- os.write(1|2, ...): brig-one-writer _fd_write_calls and _fd_write_imports. Tests: ..._os_write_to_stdout_in_infra, ..._to_stderr_through_an_alias, ..._imported_by_name; clean: ..._accepts_the_wires_os_write_and_other_os_calls. Also sys.stdout.buffer.write (..._stdout_buffer_write).
+- logging in infra or presentation: _logging_imports, with no allow list. Tests: ..._logging_in_infra, ..._logging_in_presentation_by_name, ..._logging_even_in_the_supervisors_wire.
+- list/dict fields on a frozen domain dataclass: new rule brig-frozen-data. Tests: ..._list_field, ..._dict_field, ..._list_nested_in_a_tuple; clean: ..._accepts_tuples_frozendicts_and_non_fields.
+
+What the DSL cannot express, and so is narrower than the review's wording:
+- The index records no call arguments. os.write's descriptor cannot be read, so every os.write/os.writev under src/brig outside the allow list is refused, not only fd 1 and 2. Today only the supervisor's wire uses it.
+- A double is known only by its name. A double named otherwise is not seen, such as a port implemented with nothing real behind it or a SimpleNamespace.
+- A patch of a local object's method is not seen.
+- Rule 8's match is over the annotation text. A mutable type imported under another name is not seen.
+
+Shapes in the real tree for the owner to judge (not flagged, not changed): tests/e2e/test_supervisor_assemble.py builds fake_sys, a SimpleNamespace double in e2e. tests/integration/test_policy_refusal.py assigns directories.create = stop, patching a fake's method. decision-0001 rule 8 still names only mypy; its enforcement line could add brig-frozen-data.
+
+Gate: uv run just done, every step passed (lint, typecheck, gates, 48 pypeeker rule tests, unit, integration x2, e2e, docs, architecture validate and lint).
+<!-- SECTION:NOTES:END -->
