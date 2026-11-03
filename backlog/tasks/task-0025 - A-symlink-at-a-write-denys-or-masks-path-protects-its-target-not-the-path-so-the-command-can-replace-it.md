@@ -3,11 +3,11 @@ id: TASK-0025
 title: >-
   A symlink at a write deny's or mask's path protects its target, not the path,
   so the command can replace it
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:06:00Z'
-updated_date: '2026-11-03T03:21:00Z'
+updated_date: '2026-11-03T03:22:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -129,4 +129,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review (reviewer, 2026-11-03): closed. uv run just done passes (full tier, recorded). AC1 now met: 2b20c18 records in decision-0007 item 2 and the SPEC that an entry reached through a link inside a writable root is refused (not followed) and why, plus the absent-root refusal. AC2 ticked earlier. Residual check-to-mount window remains as noted in the decision; low, no task.
 <!-- SECTION:NOTES:END -->
