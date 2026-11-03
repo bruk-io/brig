@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:06:00Z'
-updated_date: '2026-11-03T03:09:00Z'
+updated_date: '2026-11-03T03:10:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -42,5 +42,19 @@ E   ImportError: cannot import name 'PolicyPathThroughLink' from 'brig' (/home/u
 ERROR tests/e2e/test_fs_policy_battery.py
 !!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
 1 error in 0.24s
+```
+
+Repro at cf160a7af541, test files: tests/e2e/test_fs_policy_battery.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_fs_policy_battery.py -k through_a_link` exited 1
+
+(17 earlier lines omitted)
+```text
+>           with pytest.raises(brig.PolicyPathThroughLink) as refused:
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AttributeError: module 'brig' has no attribute 'PolicyPathThroughLink'
+
+tests/e2e/test_fs_policy_battery.py:551: AttributeError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_fs_policy_battery.py::test_a_deny_reached_through_a_link_inside_a_writable_root_is_refused
+1 failed, 13 deselected in 0.12s
 ```
 <!-- SECTION:NOTES:END -->
