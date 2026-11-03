@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0020
+id: TASK-0025
 title: >-
   A symlink at a write deny's or mask's path protects its target, not the path,
   so the command can replace it
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T03:06:00Z'
 labels: []
