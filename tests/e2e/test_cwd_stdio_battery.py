@@ -112,3 +112,27 @@ def test_a_policy_that_does_not_reach_the_supervisors_interpreter_is_refused() -
     with pytest.raises(brig.PolicyInterpreterUnreachable) as refused:
         create_bwrap_jail((sys.executable, "-c", "pass"), policy=FsPolicy(readable=system))
     assert refused.value.path == sys.executable
+
+
+def test_a_stdio_path_reaching_a_writable_root_through_a_parent_link_is_refused() -> None:
+    """TASK-0031: `outside/logs` links into the writable root, where a jail has replaced `logs`
+    with a link to a victim directory. The stdio path's text is outside the root, but where it
+    leads is not: refused, and nothing reaches the victim."""
+    with (
+        tempfile.TemporaryDirectory(dir="/tmp") as root,
+        tempfile.TemporaryDirectory(dir="/tmp") as outside,
+        tempfile.TemporaryDirectory(dir="/tmp") as victim,
+    ):
+        (Path(root) / "logs").symlink_to(victim)  # what a jail writing the root could do
+        (Path(outside) / "logs").symlink_to(Path(root) / "logs")
+        refused: Exception | None = None
+        try:
+            _run(
+                (sys.executable, "-I", "-c", "print('appended')"),
+                policy=FsPolicy(readable=("/",), writable=(root,)),
+                stdio=Stdio(stdout=f"{outside}/logs/out.txt"),
+            )
+        except Exception as error:  # noqa: BLE001 -- the type is asserted below
+            refused = error
+        assert not (Path(victim) / "out.txt").exists(), "the jail's output reached the victim"
+        assert type(refused).__name__ == "PolicyStdioInWritableRoot", refused
