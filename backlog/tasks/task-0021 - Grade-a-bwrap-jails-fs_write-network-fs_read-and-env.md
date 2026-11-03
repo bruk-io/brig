@@ -1,11 +1,11 @@
 ---
 id: TASK-0021
 title: Grade a bwrap jail's fs_write, network, fs_read and env
-status: To Do
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-31T11:00:00Z'
-updated_date: '2026-11-02T17:23:00Z'
+updated_date: '2026-11-03T03:57:00Z'
 labels:
   - size-5
 dependencies: []
@@ -36,4 +36,6 @@ Each claim's grade must come from evidence, never be stated ahead of it (law: gr
 
 <!-- SECTION:NOTES:BEGIN -->
 Architecture review, 2026-11-02: there is no runtime report today. Grade and Evidence exist only inside e2e tests, and only one Claim is in src (fd_inheritance and tiocsti_closure are defined in tests/e2e/test_claims_wiring.py). An embedder needs a call that returns a jail's claims and grades at runtime (something like claims_for(jail) or report(policy)), built from claims the compile states for that policy and evidence that ships with the commit. Include a claim for a read-only bind nested in a writable one, which the host can undo by replacing the entry, computed from the binds. The claims must also measure what TASK-0022 and DRAFT-0012 found, or they will overstate.
+
+Accepted 2026-11-03 under the owner's goal. Worker's report (Claude): built at bcf6047, decision-0008. bwrap states FS_WRITE_CLAIM, FS_READ_CLAIM, NETWORK_CLAIM and ENV_CLAIM beside CHANNEL_EXCLUSIVITY_CLAIM, all re-exported from brig; ceilings(policy, mounts, channels) gives each the strongest grade the compiled jail can have (fs_write/fs_read BEST_EFFORT while a deny/mask is mounted inside a writable root; channel_exclusivity VIOLATED when a writable shared path is not a declared channel), and Jail.report carries it. Grade gains BEST_EFFORT; at_most(stated, measured) orders the grades. tests/e2e/test_report_battery.py: per claim, the violation planted against a real jail with a positive control (a loopback listener the host reaches; a write outside the root beside one inside it; a masked file beside a plain one; an allowed variable beside a secret one), graded with grade(), and the report asserted no stronger; plus the BEST_EFFORT case. Seen failing: with the env scrub removed from operations.create, the env case fails. A jail with no evidence (no compile, a fake supervisor port) reports nothing, so nothing is stated enforced unproven. Unit tests: tests/unit/test_report_ceilings.py. uv run just done passes.
 <!-- SECTION:NOTES:END -->
