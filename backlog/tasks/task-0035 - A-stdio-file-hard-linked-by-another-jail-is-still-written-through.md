@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T04:00:00Z'
-updated_date: '2026-11-03T04:09:00Z'
+updated_date: '2026-11-03T04:10:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -41,4 +41,6 @@ FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_hard_linked_stdio_file_is_ref
 Accepted 2026-11-03 under the owner's goal. The test commit e3bce5a's message names TASK-0033 and TASK-0034; it means TASK-0034 (the harmless link) and TASK-0035 (the hard link). The first repro recorded on TASK-0034 above was the hard-link case by mistake; the later one, the harmless-link case, is this task's.
 
 Worker's report (Claude): fixed at bc4508f. An existing stdio file with st_nlink > 1 is refused before anything starts (infra.files.link_count; StdioHardLinked, raised as PolicyStdioHardLinked), and the open checks fstat's st_nlink again and refuses (a hard link made after the check fails the start). The repro above passes now, the other name's file untouched. uv run just done passes.
+
+Review 2026-11-03 (reviewer): not closed. Full gate passes (recorded on TASK-0021). AC#2 met in substance and ticked: the e2e case hard-links from the host rather than from a jail, but the filesystem cannot tell the two apart, and the victim file stays untouched. AC#1 not met (measured): only st_nlink is checked. (a) A file owned by uid 65534, mode 0666, given as stdout: the jail ran and 'WROTE' was appended to it. The criterion requires the file to be owned by the embedder. (b) /dev/zero given as stdout was accepted and the jail exited 0. The criterion requires a regular file (/dev/null is the stated exception). To change: in link_count's lstat and in the post-open fstat in _open_through_no_link, also require S_ISREG and st_uid == os.geteuid(), with refusals and messages saying what to do, and add e2e cases for both. (low) The post-open fstat recheck (a hard link made after the up-front check) has no test.
 <!-- SECTION:NOTES:END -->
