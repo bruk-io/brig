@@ -7,8 +7,9 @@ and asserts `run_jail` reports the command's real exit code, after the command r
 
 The positive control is the same reopen aimed at a pipe a child of the command's own holds:
 it succeeds there, so a refusal at PID 1 is the supervisor's protection, not procfs being
-unavailable in the jail. A second test asserts the command holds no capability, whoever runs
-brig (decision-0006 item 2).
+unavailable in the jail. A second test opens PID 1's `environ` and `mem` from the command, the
+kernel's ptrace access check, which the same opens of the command's own child pass. A third
+asserts the command holds no capability, whoever runs brig (decision-0006 item 2).
 
 Each probe reports through the command's exit code, since a command's stdout is the embedder's
 own (DRAFT-0016) and an exit code is what `run_jail` hands back anyway.
@@ -78,6 +79,30 @@ raise SystemExit(10 + reached)
 """Reopen, through procfs, a pipe the command's own forked child holds: exits 11 when that
 works, 10 when it does not."""
 
+_READS = """
+import os, time
+child = os.fork()
+if child == 0:
+    time.sleep(5)
+    os._exit(0)
+time.sleep(0.2)
+code = 0
+for bit, pid in ((0, 1), (2, child)):
+    for offset, name in ((0, "environ"), (1, "mem")):
+        try:
+            os.close(os.open(f"/proc/{pid}/{name}", os.O_RDONLY))
+            code |= 1 << (bit + offset)
+        except OSError:
+            pass
+os.kill(child, 9)
+os.waitpid(child, 0)
+raise SystemExit(code)
+"""
+"""Open `/proc/<pid>/environ` and `/proc/<pid>/mem` for reading, for PID 1 (bits 0 and 1) and
+for the command's own forked child (bits 2 and 3, the positive control), and exit with the bits
+that opened. Both go through the kernel's ptrace access check, the one a ptrace attach makes,
+so this is that check observed without attaching to anything."""
+
 _CAPABILITIES = """
 status = dict(line.split(":", 1) for line in open("/proc/self/status"))
 raise SystemExit(0 if int(status["CapEff"].strip(), 16) == 0 else 1)
@@ -110,6 +135,16 @@ def test_the_same_reopen_reaches_a_pipe_of_the_commands_own_child() -> None:
     owns, so the refusal at PID 1 above is the supervisor's doing."""
     exit_code, _ = _exit_code_of(_CONTROL)
     assert exit_code == 11, exit_code
+
+
+def test_the_command_cannot_read_the_supervisors_environment_or_memory() -> None:
+    """decision-0006: the ptrace access check refuses PID 1's `environ` and `mem` to the
+    command, and grants the same two files of the command's own child (positive control)."""
+    exit_code, _ = _exit_code_of(_READS)
+    assert exit_code & 0b0011 == 0, f"the command read the supervisor's /proc ({exit_code:04b})"
+    assert exit_code & 0b1100 == 0b1100, (
+        f"the control could not read its own child ({exit_code:04b})"
+    )
 
 
 def test_the_command_holds_no_capability() -> None:
