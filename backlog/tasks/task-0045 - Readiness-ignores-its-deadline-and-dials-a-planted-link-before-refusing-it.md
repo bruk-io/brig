@@ -1,7 +1,7 @@
 ---
-id: DRAFT-0024
+id: TASK-0045
 title: Readiness ignores its deadline and dials a planted link before refusing it
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T17:47:00Z'
 labels:
