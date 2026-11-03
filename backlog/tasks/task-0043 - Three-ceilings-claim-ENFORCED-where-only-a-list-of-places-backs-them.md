@@ -1,7 +1,7 @@
 ---
-id: DRAFT-0022
+id: TASK-0043
 title: Three ceilings claim ENFORCED where only a list of places backs them
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T17:47:00Z'
 labels:
