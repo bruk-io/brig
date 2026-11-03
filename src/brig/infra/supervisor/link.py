@@ -266,10 +266,39 @@ class Supervisor:
             pass
 
 
+type Stdio = tuple[str | None, str | None, str | None]
+"""The supervisor's fd 0, 1 and 2, which its command inherits: each a host path to open, or
+`None` for this process's own."""
+
+_NO_STDIO: Stdio = (None, None, None)
+
+
+def _open_stdio(stdio: Stdio) -> dict[int, int]:
+    """Open each named stream (0 for reading; 1 and 2 for appending, created 0600), keyed by the
+    fd number the supervisor gets it on.
+
+    Raises:
+        OSError: a path could not be opened; whatever was opened before it is closed.
+    """
+    opened: dict[int, int] = {}
+    try:
+        for number, path in enumerate(stdio):
+            if path is None:
+                continue
+            flags = os.O_RDONLY if number == 0 else os.O_WRONLY | os.O_APPEND | os.O_CREAT
+            opened[number] = os.open(path, flags | os.O_CLOEXEC, 0o600)
+    except OSError:
+        for fd in opened.values():
+            os.close(fd)
+        raise
+    return opened
+
+
 def _start(
     supervisor_argv: tuple[str, ...],
     command_argv: tuple[str, ...],
     command_env: Mapping[str, str],
+    stdio: Stdio = _NO_STDIO,
 ) -> Supervisor:
     """Start `supervisor_argv` as this process's own child, and hand it
     `command_argv`/`command_env` to run as *its* one child, over the wire protocol.
@@ -315,19 +344,23 @@ def _start(
             and then died (or otherwise closed its own `wire.REQUEST_FD`) before
             the one exec request could be written to it.
     """
+    streams = _open_stdio(stdio)
     request_read_fd, request_write_fd = os.pipe()
     events_read_fd, events_write_fd = os.pipe()
     try:
         spawned = processes.spawn(
             supervisor_argv,
-            (0, 1, 2),
+            tuple(number for number in (0, 1, 2) if number not in streams),
             env=_SUPERVISOR_ENV,
-            fds={wire.REQUEST_FD: request_read_fd, wire.EVENTS_FD: events_write_fd},
+            fds={**streams, wire.REQUEST_FD: request_read_fd, wire.EVENTS_FD: events_write_fd},
         )
     except (processes.SpawnError, OSError) as exc:
         for fd in (request_read_fd, request_write_fd, events_read_fd, events_write_fd):
             os.close(fd)
         raise SupervisorSpawnError(supervisor_argv) from exc
+    finally:
+        for fd in streams.values():
+            os.close(fd)
     os.close(request_read_fd)
     os.close(events_write_fd)
     try:
@@ -406,13 +439,15 @@ class LiveSupervisors:
     (decision-0002), never the open pipe itself.
     """
 
-    def __init__(self, supervisor_argv: tuple[str, ...]) -> None:
+    def __init__(self, supervisor_argv: tuple[str, ...], stdio: Stdio = _NO_STDIO) -> None:
         """`supervisor_argv` is the jail type's own bwrap-wrapped (or equivalent)
         launch line for the supervisor's file -- fixed for the lifetime of this
         instance, computed once by whoever wires this in (`presentation/jail.py`),
         never varying per `start` call the way the supervised command itself does.
+        `stdio` is where the supervisor's (and so its command's) fd 0, 1 and 2 come from.
         """
         self._supervisor_argv = supervisor_argv
+        self._stdio = stdio
         self._open: dict[int, Supervisor] = {}
 
     def start(self, argv: tuple[str, ...], env: tuple[tuple[str, str], ...]) -> Supervisor:
@@ -420,7 +455,7 @@ class LiveSupervisors:
         command it runs as its own child, and remember it by its pid for a later
         `await_done`/`close` to find.
         """
-        supervisor = _start(self._supervisor_argv, argv, dict(env))
+        supervisor = _start(self._supervisor_argv, argv, dict(env), self._stdio)
         self._open[supervisor.pid] = supervisor
         return supervisor
 

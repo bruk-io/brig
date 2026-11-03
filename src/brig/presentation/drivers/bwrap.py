@@ -17,6 +17,7 @@ from brig.domain.jail_types import bwrap
 from brig.domain.policy.env import DENY_ALL, EnvPolicy
 from brig.domain.policy.paths import (
     WHOLE_HOST_READ_ONLY,
+    CwdOutsideRoots,
     FsPolicy,
     HostPath,
     MaskHides,
@@ -24,8 +25,10 @@ from brig.domain.policy.paths import (
     PathNotAbsolute,
     RootAbsent,
     ThroughLink,
+    cwd_refusal,
     refusal,
 )
+from brig.domain.policy.stdio import INHERIT, Stdio
 from brig.infra import files as _files
 from brig.infra import sockets as _sockets
 from brig.infra import state_dir as _state_dir_mod
@@ -34,6 +37,7 @@ from brig.presentation.driver import run
 from brig.presentation.errors import (
     ChannelDirectoryCreateFailed,
     ChannelNamespaceNotFound,
+    PolicyCwdOutsideRoots,
     PolicyMaskHides,
     PolicyPathNotAbsolute,
     PolicyPathThroughLink,
@@ -108,7 +112,10 @@ def _supervisor_path() -> tuple[str, ...]:
 
 
 def _supervisors_for(
-    policy: FsPolicy, channels: Reservations | None
+    policy: FsPolicy,
+    channels: Reservations | None,
+    cwd: str | None = None,
+    stdio: Stdio = INHERIT,
 ) -> tuple[SupervisorPort, Path, tuple[bwrap.Mount, ...]]:
     """The `SupervisorPort` `create_bwrap_jail` uses for `policy` when its caller names none,
     the path of the fresh supervisor script written for it (TASK-0001.21: the jail deletes
@@ -128,6 +135,7 @@ def _supervisors_for(
         PolicyRootAbsent: a readable or writable root does not exist on the host.
         PolicyPathThroughLink: an entry is reached through a symbolic link inside a writable
             root.
+        PolicyCwdOutsideRoots: `cwd` is in no root of the policy.
     """
     state_dir = resolved_state_dir()
     needed = (
@@ -156,6 +164,18 @@ def _supervisors_for(
             pass
         case _ as unreachable:
             assert_never(unreachable)
+    if cwd is not None:
+        match cwd_refusal(policy, cwd):
+            case PathNotAbsolute(path=path):
+                raise PolicyPathNotAbsolute(path)
+            case CwdOutsideRoots(cwd=outside):
+                raise PolicyCwdOutsideRoots(outside)
+            case MaskHides(mask=mask, path=path):
+                raise PolicyMaskHides(mask, path)
+            case None:
+                pass
+            case _ as unreachable:
+                assert_never(unreachable)
     kinds = {path: found.kind for path, found in host.items()}
     empty_dir = str(_state_dir_mod.ensure_empty(Path(state_dir)))
     supervisor_path = _supervisor_path()
@@ -167,8 +187,9 @@ def _supervisors_for(
         empty_dir=empty_dir,
         channels=channels,
     )
-    supervisor_argv = bwrap.compile_supervisor_launch(supervisor_path, mounts)
-    port = real_supervisor_port(link.LiveSupervisors(supervisor_argv))
+    supervisor_argv = bwrap.compile_supervisor_launch(supervisor_path, mounts, cwd)
+    streams = (stdio.stdin, stdio.stdout, stdio.stderr)
+    port = real_supervisor_port(link.LiveSupervisors(supervisor_argv, streams))
     return port, Path(supervisor_path[-1]), mounts
 
 
@@ -179,6 +200,8 @@ def create_bwrap_jail(
     policy: FsPolicy = WHOLE_HOST_READ_ONLY,
     env_policy: EnvPolicy = DENY_ALL,
     channels: Reservations | None = None,
+    cwd: str | None = None,
+    stdio: Stdio = INHERIT,
     processes: ProcessPort = PROCESSES,
     supervisors: SupervisorPort | None = None,
     directories: ChannelDirectoryPort = CHANNEL_DIRECTORIES,
@@ -201,6 +224,11 @@ def create_bwrap_jail(
     the effect's `env` is already scrubbed, and nothing downstream (this driver,
     `infra/supervisor/link.py`) ever reads `env` or `os.environ` again to get
     there.
+
+    `cwd` is the command's working directory (bwrap's `--chdir`; inside a root of `policy`,
+    else `PolicyCwdOutsideRoots`), the embedder's own when left unset. `stdio` says where the
+    command's fd 0, 1 and 2 come from (`domain/policy/stdio.py`), the embedder's own by default;
+    a path that cannot be opened is `JailSpawnFailed` (TASK-0028).
 
     `channels` is what `reserve_channels` handed back for this jail (TASK-0001.25):
     its channel directory is bound into the jail, writable, when it declares any
@@ -280,7 +308,9 @@ def create_bwrap_jail(
         supervisor_script: Path | None = None
         mounts: tuple[bwrap.Mount, ...] = ()
     else:
-        resolved_supervisors, supervisor_script, mounts = _supervisors_for(policy, channels)
+        resolved_supervisors, supervisor_script, mounts = _supervisors_for(
+            policy, channels, cwd, stdio
+        )
     channel_directory = (
         Path(channels.directory.host_path)
         if channels is not None and channels.reservations

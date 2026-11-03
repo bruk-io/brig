@@ -12,6 +12,7 @@ from brig.domain.jail_types.bwrap import (
 )
 from brig.domain.policy.env import DENY_ALL, EnvPolicy
 from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, FsPolicy
+from brig.domain.policy.stdio import Stdio
 from brig.presentation.api import (
     await_channel_ready,
     destroy_jail,
@@ -28,6 +29,7 @@ from brig.presentation.errors import (
     JailSpawnFailed,
     JailTeardownFailed,
     JailWaitTimedOut,
+    PolicyCwdOutsideRoots,
     PolicyMaskHides,
     PolicyPathNotAbsolute,
     PolicyPathThroughLink,
@@ -73,6 +75,7 @@ __all__ = [
     "JailSpawnFailed",
     "JailTeardownFailed",
     "JailWaitTimedOut",
+    "PolicyCwdOutsideRoots",
     "PolicyMaskHides",
     "PolicyPathNotAbsolute",
     "PolicyPathThroughLink",
@@ -81,6 +84,7 @@ __all__ = [
     "Reservation",
     "Reservations",
     "StateDirectoryInvalid",
+    "Stdio",
     "SupervisorDoneUnknown",
     "WHOLE_HOST_READ_ONLY",
     "await_channel_ready",

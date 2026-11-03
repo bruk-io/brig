@@ -115,22 +115,6 @@ denied) rather than which layer denies it; grading the attribution itself is sti
 tracked separately (TASK-0001.11).
 """
 
-_INHERITABLE_FDS: tuple[int, ...] = (0, 1, 2)
-"""The complete set of file descriptors bwrap's own jailed process may inherit across
-the spawn (`Plan.inheritable_fds`'s own docstring: a complete allow-list, not an
-addition to an implicit default).
-
-Just stdin, stdout and stderr: bwrap's own argv above opens no fd of its own that needs
-naming (no ``--info-fd``, no ``--sync-fd``; this jail type uses neither). Named here
-unchanged since the walking skeleton, when this was the real command's own policy --
-TASK-0001.15 step 4 made the jail's directly-spawned process the supervisor instead
-(`Plan`'s own docstring), and `StartSupervisedCommand` carries no `inheritable_fds`
-field to hand this to, so the value `compile_run` returns here currently reaches no
-effect at all. Left stated rather than deleted, as the open question `domain/effects.py`
-already records: whichever of the supervisor's own exec or a later effect field ends up
-enforcing this is still open.
-"""
-
 
 def compile_run(command: tuple[str, ...], env: tuple[tuple[str, str], ...] = ()) -> Plan:
     """Compile a request to run `command`, in `env`, as the one command bwrap's
@@ -139,7 +123,7 @@ def compile_run(command: tuple[str, ...], env: tuple[tuple[str, str], ...] = ())
     This jail type never refuses a request (see `domain/plan.py`), so the walking
     skeleton's compile always produces a `Plan`.
     """
-    return Plan(argv=command, inheritable_fds=_INHERITABLE_FDS, env=env)
+    return Plan(argv=command, env=env)
 
 
 class MountKind(StrEnum):
@@ -313,8 +297,17 @@ def declared_channel_paths(channels: Reservations | None) -> tuple[str, ...]:
 
 
 def compile_supervisor_launch(
-    supervisor_path: tuple[str, ...], mounts: tuple[Mount, ...]
+    supervisor_path: tuple[str, ...], mounts: tuple[Mount, ...], cwd: str | None = None
 ) -> tuple[str, ...]:
     """The argv that starts `supervisor_path` as the jail's one process, behind `mounts`
-    (`compile_mounts`), the virtual filesystems and the namespace flags."""
-    return ("bwrap", *render(mounts), *_VIRTUAL_FS_FLAGS, *_NAMESPACE_FLAGS, *supervisor_path)
+    (`compile_mounts`), the virtual filesystems and the namespace flags, in `cwd` when one is
+    given (bwrap's `--chdir`; the command inherits it from the supervisor, TASK-0028)."""
+    chdir = ("--chdir", cwd) if cwd is not None else ()
+    return (
+        "bwrap",
+        *render(mounts),
+        *_VIRTUAL_FS_FLAGS,
+        *chdir,
+        *_NAMESPACE_FLAGS,
+        *supervisor_path,
+    )

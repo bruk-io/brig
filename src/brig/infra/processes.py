@@ -329,7 +329,7 @@ def spawn(
     policy rather than left to this function's side effect.
 
     `inheritable_fds` is the jail type's own complete allow-list (`domain/plan.py`'s
-    `Plan.inheritable_fds`, TASK-0001.05 AC#1), carried here as plain data -- this
+    the embedder's `Stdio`, TASK-0028), carried here as plain data -- this
     module imports nothing from `brig` (decision-0001 rule 1). Every fd this process
     currently has open and inheritable, standard streams included, that is not named
     in `inheritable_fds` is closed in the new process before `argv[0]` runs, through

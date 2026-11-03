@@ -37,6 +37,18 @@ class PolicyMaskHides(Exception):
         self.path = path
 
 
+class PolicyCwdOutsideRoots(Exception):
+    """Raised when the working directory a caller gives `create_bwrap_jail` is in no readable or
+    writable root of its policy: it would not exist in the jail (TASK-0028)."""
+
+    def __init__(self, cwd: str) -> None:
+        super().__init__(
+            f"cwd {cwd!r} is in no root of the policy, so it does not exist in the jail -- add a "
+            "readable or writable root that contains it, or start the command elsewhere"
+        )
+        self.cwd = cwd
+
+
 class PolicyRootAbsent(Exception):
     """Raised when a readable or writable root in a caller's `FsPolicy` does not exist on the
     host: a root is mounted from where it is, so it has to be there (decision-0007)."""

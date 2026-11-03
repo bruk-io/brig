@@ -59,7 +59,7 @@ TASK-0001.16's `inheritable_fds`) -- exactly where they would have come from
 had no supervisor sat in between at all.
 
 `3`/`4` are the first two numbers past the three standard streams, the same
-reasoning this project already uses for `_INHERITABLE_FDS = (0, 1, 2)`
+reasoning this project already uses for the supervisor's fd 0, 1 and 2 (`Stdio`)
 (`domain/jail_types/bwrap.py`): a small, fixed, documented convention both
 ends of one spawn agree on ahead of time, not a number either side discovers
 at runtime -- there is exactly one supervisor per jail and exactly one wire

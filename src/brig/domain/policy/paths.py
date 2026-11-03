@@ -83,6 +83,14 @@ class ThroughLink:
     root: str
 
 
+@dataclass(frozen=True)
+class CwdOutsideRoots:
+    """A refusal: the command's working directory `cwd` is in no root of the policy, so it does
+    not exist in the jail."""
+
+    cwd: str
+
+
 def _is_normal_absolute(path: str) -> bool:
     if not path.startswith("/") or "//" in path:
         return False
@@ -137,4 +145,17 @@ def refusal(
         for path in entries:
             if path != root and within(path, root) and _reached_through_link(path, root, known):
                 return ThroughLink(path, root)
+    return None
+
+
+def cwd_refusal(policy: FsPolicy, cwd: str) -> PathNotAbsolute | CwdOutsideRoots | MaskHides | None:
+    """Why `cwd` cannot be the command's working directory under `policy`, or `None`: it must be
+    absolute and normalised, inside a readable or writable root, and under no mask."""
+    if not _is_normal_absolute(cwd):
+        return PathNotAbsolute(cwd)
+    if not any(within(cwd, root) for root in (*policy.readable, *policy.writable)):
+        return CwdOutsideRoots(cwd)
+    for mask in policy.masks:
+        if within(cwd, mask):
+            return MaskHides(mask, cwd)
     return None

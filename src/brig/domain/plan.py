@@ -39,18 +39,7 @@ class Plan:
     embedder's own command should name an absolute path until some caller
     populates this field, since ``PATH`` itself is one of the things an empty
     environment loses).
-
-    ``inheritable_fds`` is the jail type's own fd-allow-list policy (decision-0001
-    rule 11; TASK-0001.05 AC#1), carried here unchanged in shape -- but with no
-    current reader: `operations.create()` yields `StartSupervisedCommand`, which
-    carries no `inheritable_fds` field (`domain/effects.py`'s own "Unresolved
-    here" note), so this plan's fd policy no longer reaches any effect on the
-    normal path. Left in place, not removed, as that same open question's
-    record -- whichever of the supervisor's own exec or a later effect field
-    ends up enforcing it is still TASK-0001.15's later step to decide, not this
-    one.
     """
 
     argv: tuple[str, ...]
-    inheritable_fds: tuple[int, ...]
     env: tuple[tuple[str, str], ...] = ()

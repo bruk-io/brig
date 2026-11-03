@@ -3,6 +3,7 @@ bwrap's `compile_mounts`, which turns one into ordered mounts, the more specific
 
 from brig.domain.jail_types.bwrap import Mount, MountKind, compile_mounts, render
 from brig.domain.policy.paths import (
+    CwdOutsideRoots,
     FsPolicy,
     HostPath,
     MaskHides,
@@ -10,6 +11,7 @@ from brig.domain.policy.paths import (
     PathNotAbsolute,
     RootAbsent,
     ThroughLink,
+    cwd_refusal,
     refusal,
 )
 
@@ -193,3 +195,13 @@ def test_a_link_above_the_writable_root_is_not_a_refusal() -> None:
     policy = FsPolicy(writable=("/w",), write_denies=("/w/hooks",), masks=("/w/secret",))
 
     assert refusal(policy, host=host) is None
+
+
+def test_a_cwd_must_be_absolute_inside_a_root_and_under_no_mask() -> None:
+    policy = FsPolicy(readable=("/usr",), writable=("/w",), masks=("/w/secret",))
+
+    assert cwd_refusal(policy, "/w/sub") is None
+    assert cwd_refusal(policy, "/usr") is None
+    assert cwd_refusal(policy, "w") == PathNotAbsolute("w")
+    assert cwd_refusal(policy, "/etc") == CwdOutsideRoots("/etc")
+    assert cwd_refusal(policy, "/w/secret/x") == MaskHides("/w/secret", "/w/secret/x")

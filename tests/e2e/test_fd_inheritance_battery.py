@@ -17,7 +17,7 @@ not a happy path alone):
 - A real-jail battery against the same hole through `create_bwrap_jail`/`run_jail` --
   the public API, with no allow-list this test supplies -- so what is graded is the
   actual claim: that the bwrap jail type's own stated allow-list
-  (`domain/jail_types/bwrap.py`'s `_INHERITABLE_FDS`) reaches a real jail. Guarded to
+  (fd 0, 1 and 2, as `Stdio` states them) reaches a real jail. Guarded to
   skip cleanly where bwrap is not installed (macOS); runs for real in CI on Linux.
 
 Rule 5 forbids `unittest.mock`/`monkeypatch` anywhere in this suite, so every positive
@@ -159,7 +159,7 @@ except OSError:
 """A second probe, for the real-bwrap battery below: `os.fstat` on the named fd
 answers "is it open" with nothing but an exit code, so nothing needs reading back
 out of the jail -- a report pipe would itself have to be named on bwrap's own
-hardcoded allow-list (`domain/jail_types/bwrap.py`'s `_INHERITABLE_FDS`), which rule
+hardcoded allow-list (fd 0, 1 and 2, as `Stdio` states them), which rule
 5 forbids patching to add just for this test.
 """
 
@@ -170,7 +170,7 @@ hardcoded allow-list (`domain/jail_types/bwrap.py`'s `_INHERITABLE_FDS`), which 
 )
 def test_fd_marked_inheritable_is_closed_in_a_real_bwrap_jail() -> None:
     """The claim AC#3 actually asks for, graded for real: that the bwrap jail
-    type's own stated allow-list (`domain/jail_types/bwrap.py`'s `_INHERITABLE_FDS`,
+    type's own stated allow-list (fd 0, 1 and 2, as `Stdio` states them,
     just 0/1/2) reaches a real jail through `create_bwrap_jail`/`run_jail` -- the
     public API, with no allow-list this test supplies itself the way the gateway
     battery above does.

@@ -108,7 +108,7 @@ except OSError as exc:
 TIOCSTI on fd 0 and exits with 0 (injection succeeded -- confinement failed) or
 `_ERRNO_EXIT_OFFSET` plus the ioctl's own errno (injection denied). Reports through
 its exit code alone, never a pipe: a real bwrap jail's allow-list
-(`domain/jail_types/bwrap.py`'s `_INHERITABLE_FDS`) carries only 0/1/2, the same
+(fd 0, 1 and 2, as `Stdio` states them) carries only 0/1/2, the same
 discipline the sibling fd battery's `_FSTAT_PROBE` uses for the same reason.
 """
 

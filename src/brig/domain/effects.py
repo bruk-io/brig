@@ -61,7 +61,7 @@ class Process:
 class Spawn:
     """Start a jail's one process running `argv` in a new process group.
 
-    `inheritable_fds` carries the jail type's own policy (`Plan.inheritable_fds`'s own
+    `inheritable_fds` carries a complete fd allow-list (the same reading `Stdio`'s own
     docstring: TASK-0001.05 AC#1) for which fds that process may keep open across the
     spawn -- the complete allow-list, not an addition to any default. A driver performs
     this by creating the process, closing every open, inheritable fd not named here,

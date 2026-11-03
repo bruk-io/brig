@@ -16,7 +16,7 @@ class EnvPolicy:
     """Which environment variables a jail's supervised command may see: an
     allow-list by name, naming the complete set `scrub_env` ever lets through --
     the same "complete set, not an addition to an implicit default" reading
-    `Plan.inheritable_fds`'s own docstring already gives `Spawn`'s fd policy
+    `Stdio`'s own docstring (`domain/policy/stdio.py`) gives the jailed command's fds
     (decision-0001 rule 11), mirrored here for environment variables instead of
     file descriptors.
     """

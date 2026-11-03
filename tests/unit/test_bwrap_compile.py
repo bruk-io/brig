@@ -54,10 +54,6 @@ def test_bwrap_compile_run_names_the_real_command() -> None:
 
     assert plan.argv == ("true",)
     assert plan.env == ()
-    # TASK-0001.05 AC#1: bwrap's compile still states its own inheritable-fd policy,
-    # even though the supervised path's StartSupervisedCommand has nowhere yet to
-    # carry it (domain/jail_types/bwrap.py's own docstring on this field).
-    assert plan.inheritable_fds == (0, 1, 2)
 
 
 def test_bwrap_compile_supervisor_launch_wraps_the_given_path() -> None:
@@ -94,6 +90,14 @@ def test_bwrap_compile_supervisor_launch_wraps_the_given_path() -> None:
         "python3",
         _SCRIPT,
     )
+
+
+def test_a_cwd_becomes_bwraps_chdir_just_before_the_namespace_flags() -> None:
+    """TASK-0028: the supervisor starts in `cwd`, and its command inherits it."""
+    argv = bwrap.compile_supervisor_launch(("python3", _SCRIPT), _default_mounts(), "/work")
+
+    at = argv.index("--chdir")
+    assert argv[at : at + 3] == ("--chdir", "/work", "--unshare-all")
 
 
 def test_e2e_tiocsti_battery_bwrap_argv_prefix_matches_compile_supervisor_launch() -> None:
