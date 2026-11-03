@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T04:11:00Z'
+updated_date: '2026-11-03T04:14:00Z'
 labels:
   - size-3
 dependencies: []
@@ -198,4 +198,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 done: 1 step(s) failed: gates
 error: recipe `done` failed on line 71 with exit code 1
 ```
+
+Review (reviewer, 2026-11-03): NOT CLOSED. Full gate record-check --tier full: just done fails at gates. brig-no-patching's attribute-write part fires on tests/e2e/test_report_battery.py:117-118 (os.environ[...] = ...). That file was there at 282295b, so the worker's green run was measured on another tree (/home/user/brig-gates). The plan's step 5 says real-code findings are fixed in the code; filed as a draft (brig-no-patching fails the gate on test_report_battery's os.environ writes). Everything else holds: each listed violation has a rule test that plants it and passes, every message says what to do instead, and the diff against 282295b^ weakens nothing (old messages reworded with a fix added; the stream match goes from exact to prefix, which is broader; _MOCK_MODULES only grows; pyproject only adds brig-frozen-data). I could not plant the violations in a scratch copy: the review hook refuses copying the repository, so the rule tests are the evidence. The worker's two flagged shapes both break rule 5 as written (a SimpleNamespace double in e2e; a fake's method replaced, where fail_create already does the job). Filed as a draft (Two test doubles that break decision-0001 rule 5). AC #1 was already ticked on the board before this review; I left it alone.
 <!-- SECTION:NOTES:END -->
