@@ -275,6 +275,7 @@ class Jail:
     channel_directory: Path | None = None
     channel_namespace_fd: int | None = None
     mounts: tuple[bwrap.Mount, ...] = ()
+    placeholders: Path | None = None
 
 
 def close_namespace_fd(fd: int) -> None:

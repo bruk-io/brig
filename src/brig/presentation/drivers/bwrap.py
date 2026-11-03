@@ -2,6 +2,7 @@
 supervisor script, refusing and compiling the policy, starting the jail through the shared driver,
 and holding the jail's PID namespace for channel readiness."""
 
+import secrets
 import sys
 import tempfile
 import time
@@ -34,6 +35,7 @@ from brig.domain.policy.paths import (
 )
 from brig.domain.policy.stdio import INHERIT, Stdio
 from brig.infra import files as _files
+from brig.infra import placeholders as _placeholders
 from brig.infra import sockets as _sockets
 from brig.infra import state_dir as _state_dir_mod
 from brig.infra.supervisor import assemble, link
@@ -41,6 +43,7 @@ from brig.presentation.driver import run
 from brig.presentation.errors import (
     ChannelDirectoryCreateFailed,
     ChannelNamespaceNotFound,
+    PlaceholdersFailed,
     PolicyCwdOutsideRoots,
     PolicyInterpreterUnreachable,
     PolicyMaskHides,
@@ -122,7 +125,7 @@ def _supervisors_for(
     channels: Reservations | None,
     cwd: str | None = None,
     stdio: Stdio = INHERIT,
-) -> tuple[SupervisorPort, Path, tuple[bwrap.Mount, ...]]:
+) -> tuple[SupervisorPort, Path, tuple[bwrap.Mount, ...], tuple[str, ...]]:
     """The `SupervisorPort` `create_bwrap_jail` uses for `policy` when its caller names none,
     the path of the fresh supervisor script written for it (TASK-0001.21: the jail deletes
     that one file and no other), and the mounts the jail was compiled with.
@@ -215,7 +218,15 @@ def _supervisors_for(
     supervisor_argv = bwrap.compile_supervisor_launch(supervisor_path, mounts, cwd)
     streams = (stdio.stdin, stdio.stdout, stdio.stderr)
     port = real_supervisor_port(link.LiveSupervisors(supervisor_argv, streams))
-    return port, Path(supervisor_path[-1]), mounts
+    held = (*policy.write_denies, *policy.masks)
+    placeholders = tuple(
+        dict.fromkeys(
+            mount.target
+            for mount in mounts
+            if mount.kind is bwrap.MountKind.READ_ONLY and mount.target in held
+        )
+    )
+    return port, Path(supervisor_path[-1]), mounts, placeholders
 
 
 def create_bwrap_jail(
@@ -327,13 +338,16 @@ def create_bwrap_jail(
     Raises:
         ChannelDirectoryCreateFailed: the host refused to create the channel
             directory.
+        PlaceholdersFailed: the host refused a directory for an absent write deny or mask, or
+            brig's record of it (TASK-0027).
     """
     if supervisors is not None:
         resolved_supervisors: SupervisorPort = supervisors
         supervisor_script: Path | None = None
         mounts: tuple[bwrap.Mount, ...] = ()
+        absent: tuple[str, ...] = ()
     else:
-        resolved_supervisors, supervisor_script, mounts = _supervisors_for(
+        resolved_supervisors, supervisor_script, mounts, absent = _supervisors_for(
             policy, channels, cwd, stdio
         )
     channel_directory = (
@@ -343,7 +357,14 @@ def create_bwrap_jail(
     )
     created: Path | None = None
     namespace_fd: int | None = None
+    record: Path | None = None
+    state_dir = Path(resolved_state_dir())
     try:
+        if absent:
+            try:
+                record = _placeholders.hold(state_dir, secrets.token_hex(8), absent)
+            except OSError as error:
+                raise PlaceholdersFailed(absent) from error
         if channel_directory is not None:
             try:
                 directories.create(str(channel_directory))
@@ -352,6 +373,11 @@ def create_bwrap_jail(
             created = channel_directory
         plan = bwrap.compile_run(command, env=env)
         process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
+        if record is not None:
+            try:
+                _placeholders.attach(record, process.pid)
+            except OSError as error:
+                raise PlaceholdersFailed(absent) from error
         if channel_directory is not None:
             namespace_fd = _namespace_fd_for(process, proc_root)
     except BaseException:
@@ -364,6 +390,11 @@ def create_bwrap_jail(
                 pass
         if namespace_fd is not None:
             close_namespace_fd(namespace_fd)
+        if record is not None:
+            try:
+                _placeholders.release(state_dir, record)
+            except OSError:
+                pass  # left for the next jail's release to sweep
         raise
     return Jail(
         process=process,
@@ -372,6 +403,7 @@ def create_bwrap_jail(
         channel_directory=created,
         channel_namespace_fd=namespace_fd,
         mounts=mounts,
+        placeholders=record,
     )
 
 

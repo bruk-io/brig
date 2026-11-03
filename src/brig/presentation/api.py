@@ -4,6 +4,7 @@ the command's exit, tear the jail down (decision-0001). Creating a jail is each 
 
 import signal
 import time
+from pathlib import Path
 from typing import assert_never
 
 from brig.domain import channels as _channels
@@ -16,6 +17,7 @@ from brig.domain.channels import (
 )
 from brig.domain.channels import ChannelRefused as _ChannelNameRefused
 from brig.domain.effects import ExitCodeUnknown, GroupState
+from brig.infra import placeholders as _placeholders
 from brig.infra import sockets as _sockets
 from brig.presentation.driver import run
 from brig.presentation.errors import (
@@ -30,6 +32,7 @@ from brig.presentation.jail import (
     PROCESSES,
     Jail,
     close_namespace_fd,
+    resolved_state_dir,
 )
 from brig.presentation.ports import (
     ChannelDirectoryPort,
@@ -311,6 +314,13 @@ def destroy_jail(
         close_namespace_fd(jail.channel_namespace_fd)
     if state is not GroupState.GONE:
         raise JailTeardownFailed(jail.process)
+    if jail.placeholders is not None:
+        # Only once the jail is verified gone: a placeholder removed while it still mounts over
+        # one would detach that mount inside it (TASK-0027).
+        try:
+            _placeholders.release(Path(resolved_state_dir()), jail.placeholders)
+        except OSError:
+            pass  # left for the next jail's release to sweep
 
 
 def interrupt_jail(jail: Jail) -> bool:

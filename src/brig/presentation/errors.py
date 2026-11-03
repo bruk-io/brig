@@ -104,6 +104,20 @@ class PolicyPathThroughLink(Exception):
         self.root = root
 
 
+class PlaceholdersFailed(Exception):
+    """Raised when brig cannot make, on the host, the directories it mounts over an absent write
+    deny or mask under a writable root, or its record of them (TASK-0027): nothing was started,
+    and whatever was made was removed again."""
+
+    def __init__(self, paths: tuple[str, ...]) -> None:
+        super().__init__(
+            f"could not make the directories for {', '.join(map(repr, paths))} that the jail "
+            "mounts over to hold them -- check the writable root's permissions and free space, "
+            "and brig's state directory (BRIG_HOME)"
+        )
+        self.paths = paths
+
+
 class ChannelDirectoryCreateFailed(Exception):
     """Raised when the host refused to create a jail's per-jail channel directory
     (TASK-0001.29): a full disk, a permissions change under brig's own state
