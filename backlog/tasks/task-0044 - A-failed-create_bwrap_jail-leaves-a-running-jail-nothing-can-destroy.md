@@ -4,7 +4,7 @@ title: A failed create_bwrap_jail leaves a running jail nothing can destroy
 status: In Progress
 assignee: []
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T18:43:00Z'
+updated_date: '2026-11-03T18:51:00Z'
 labels:
   - brig
   - lifecycle
@@ -157,4 +157,6 @@ Tests: the recorded repro tests/integration/test_create_failure_tears_down.py (s
 Commits: 228b298 (repro), 687b660 (fix). `just done` passed (recorded above); one e2e skip, test_spawn_close_action_race, which skips on this host as before.
 
 Not verified: a real-bwrap failure after the start (there is no seam to fail attach or the scan on a real jail; the fake-driven tests cover the path). Not changed: other infra calls in the driver that can still raise an untranslated OSError before the start (the supervisor script write in `_supervisor_path`, `state_dir.ensure_empty`), observed while grepping for the boundary rule, not measured.
+
+Worker, correction to the note above: the full run has four e2e skips, not one, the same four before and after this change (test_spawn_close_action_race, test_supervisor_script_cleanup's bwrap-missing case, and two in test_tiocsti_battery), each skipping for its own documented host reason. Later, TASK-0045 (cfba449) added the channel directory fd to `dismantle`, so the same cleanup closes it.
 <!-- SECTION:NOTES:END -->
