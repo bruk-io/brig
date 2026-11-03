@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T04:02:00Z'
+updated_date: '2026-11-03T04:06:00Z'
 labels:
   - size-3
 dependencies: []
@@ -126,4 +126,6 @@ BrokenPipeError: [Errno 32] Broken pipe
 FAILED tests/e2e/test_placeholders_battery.py::test_a_crashed_embedders_placeholders_go_with_the_next_jail_over_the_tree
 1 failed, 1 passed in 0.36s
 ```
+
+Worker, 2026-11-03, on the review's three findings, fixed at bc4508f: (1) _start_time returns None for a zombie (Z) or dead (X) process, so a crashed embedder's lingering bwrap counts as gone; new e2e case (committed first, repro above failing 3 in 3 before): an embedder SIGKILLed after making a jail, then the next jail over the tree is made and destroyed and the tree is as it was. (2) Each placeholder brig makes gets user.brig.placeholder = its record id; removal requires it where it was set (the record notes whether the filesystem took it; without user xattrs it falls back to the inode alone). Not ctime: removing a child changes its parent's. (3) attach() takes the lock, and every record write goes to a .partial file then os.replace. Battery 3 runs in 3; uv run just done passes.
 <!-- SECTION:NOTES:END -->
