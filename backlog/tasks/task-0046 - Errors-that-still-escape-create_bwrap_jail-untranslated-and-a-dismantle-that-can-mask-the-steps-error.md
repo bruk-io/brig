@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0030
+id: TASK-0046
 title: >-
   Errors that still escape create_bwrap_jail untranslated, and a dismantle that
   can mask the step's error
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T18:58:00Z'
 labels:
