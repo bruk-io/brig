@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-11-03T03:06:00Z'
+updated_date: '2026-11-03T03:09:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -22,3 +23,23 @@ Found reviewing TASK-0024.01 (c4ef292). _kept() keeps an absent deny/mask when a
 - [ ] #1 An absent entry is kept only when the most specific root or deny covering it is writable, with a unit case for a readable root and a write deny nested in a writable root
 - [ ] #2 A root absent on the host is refused before anything is created, or the decision says why it is compiled
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Repro at 2c5fe1a3587d, test files: tests/e2e/test_fs_policy_battery.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_fs_policy_battery.py -k 'nested_read_only or read_only_root_inside or root_absent'` exited 2
+
+(7 earlier lines omitted)
+```text
+/root/.local/share/uv/python/cpython-3.15.0b4-linux-x86_64-gnu/lib/python3.15/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/e2e/test_fs_policy_battery.py:50: in <module>
+    from brig import (
+E   ImportError: cannot import name 'PolicyPathThroughLink' from 'brig' (/home/user/brig/src/brig/__init__.py)
+=========================== short test summary info ============================
+ERROR tests/e2e/test_fs_policy_battery.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.16s
+```
+<!-- SECTION:NOTES:END -->
