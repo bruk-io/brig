@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0013
+id: TASK-0024
 title: >-
   A second jail type needs an intent-level policy and the per-type work in its
   own slice
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-02T17:23:00Z'
 labels:
