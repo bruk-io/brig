@@ -1,7 +1,7 @@
 ---
-id: DRAFT-0021
+id: TASK-0038
 title: brig-no-patching fails the gate on test_report_battery's os.environ writes
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T04:14:00Z'
 labels: []
