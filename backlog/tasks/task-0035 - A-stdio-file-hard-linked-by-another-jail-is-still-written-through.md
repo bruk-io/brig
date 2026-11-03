@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T04:00:00Z'
-updated_date: '2026-11-03T04:04:00Z'
+updated_date: '2026-11-03T04:06:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -39,4 +39,6 @@ FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_hard_linked_stdio_file_is_ref
 ```
 
 Accepted 2026-11-03 under the owner's goal. The test commit e3bce5a's message names TASK-0033 and TASK-0034; it means TASK-0034 (the harmless link) and TASK-0035 (the hard link). The first repro recorded on TASK-0034 above was the hard-link case by mistake; the later one, the harmless-link case, is this task's.
+
+Worker's report (Claude): fixed at bc4508f. An existing stdio file with st_nlink > 1 is refused before anything starts (infra.files.link_count; StdioHardLinked, raised as PolicyStdioHardLinked), and the open checks fstat's st_nlink again and refuses (a hard link made after the check fails the start). The repro above passes now, the other name's file untouched. uv run just done passes.
 <!-- SECTION:NOTES:END -->
