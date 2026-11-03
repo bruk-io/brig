@@ -22,7 +22,7 @@ TASK-0001's notes (architecture review, 2026-11-02): the ten laws are carried ve
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 Each of the ten laws names only things that exist in brig (or says plainly it binds future work), and keeps its old SPEC intent
-- [ ] #2 Each law says which test holds it now, or that none does yet, so TASK-0001 #17's remaining work is visible
+- [x] #2 Each law says which test holds it now, or that none does yet, so TASK-0001 #17's remaining work is visible
 <!-- AC:END -->
 
 ## Implementation Notes
