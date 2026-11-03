@@ -9,6 +9,46 @@ updated_date: '2026-11-03T04:15:00Z'
 labels:
   - size-3
 dependencies: []
+modified_files:
+  - src/brig/__init__.py
+  - src/brig/domain/__init__.py
+  - src/brig/domain/channels.py
+  - src/brig/domain/claims.py
+  - src/brig/domain/effects.py
+  - src/brig/domain/grades.py
+  - src/brig/domain/jail_types/__init__.py
+  - src/brig/domain/jail_types/bwrap.py
+  - src/brig/domain/operations.py
+  - src/brig/domain/plan.py
+  - src/brig/domain/policy/__init__.py
+  - src/brig/domain/policy/env.py
+  - src/brig/domain/policy/paths.py
+  - src/brig/domain/policy/stdio.py
+  - src/brig/domain/teardown.py
+  - src/brig/infra/__init__.py
+  - src/brig/infra/files.py
+  - src/brig/infra/placeholders.py
+  - src/brig/infra/processes.py
+  - src/brig/infra/sockets.py
+  - src/brig/infra/state_dir.py
+  - src/brig/infra/supervisor/__init__.py
+  - src/brig/infra/supervisor/assemble.py
+  - src/brig/infra/supervisor/link.py
+  - src/brig/infra/supervisor/program.py
+  - src/brig/infra/supervisor/wire.py
+  - src/brig/presentation/__init__.py
+  - src/brig/presentation/api.py
+  - src/brig/presentation/driver.py
+  - src/brig/presentation/drivers/__init__.py
+  - src/brig/presentation/drivers/bwrap.py
+  - src/brig/presentation/errors.py
+  - src/brig/presentation/jail.py
+  - src/brig/presentation/ports.py
+  - src/brig/presentation/report.py
+  - tests/integration/fakes.py
+  - tests/e2e/test_processes_gateway.py
+  - docs/spec/index.md
+  - docs/glossary.md
 type: task
 ---
 
