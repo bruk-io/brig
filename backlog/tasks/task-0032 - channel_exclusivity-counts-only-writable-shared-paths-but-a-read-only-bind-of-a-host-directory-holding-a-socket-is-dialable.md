@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0012
+id: TASK-0032
 title: >-
   channel_exclusivity counts only writable shared paths, but a read-only bind of
   a host directory holding a socket is dialable
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-10-31T14:41:00Z'
 updated_date: '2026-11-02T17:23:00Z'
