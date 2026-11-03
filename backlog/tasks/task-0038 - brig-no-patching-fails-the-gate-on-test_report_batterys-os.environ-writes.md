@@ -1,9 +1,11 @@
 ---
 id: TASK-0038
 title: brig-no-patching fails the gate on test_report_battery's os.environ writes
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-03T04:14:00Z'
+updated_date: '2026-11-03T04:18:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -20,3 +22,9 @@ At HEAD of claude/embedder-gaps, uv run just gates (and so just done) exits 1. T
 - [ ] #1 test_report_battery's env case hands the jail its environment as data, with no write to os.environ, and uv run just done passes at HEAD
 - [ ] #2 The message for a subscript write through an import names it as one
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Accepted 2026-11-03. Fixed at fe3f40d: tests/e2e/test_report_battery.py's env case passes its candidate environment to create_bwrap_jail as data instead of writing os.environ, so brig-no-patching's new part passes; the part's message now says it covers item writes (os.environ[...]) as well as attributes. uv run just done passes.
+<!-- SECTION:NOTES:END -->
