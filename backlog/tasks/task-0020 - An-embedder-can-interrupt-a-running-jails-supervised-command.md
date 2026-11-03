@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-31T11:00:00Z'
-updated_date: '2026-11-03T03:20:00Z'
+updated_date: '2026-11-03T03:21:00Z'
 labels:
   - size-2
 dependencies: []
@@ -23,8 +23,8 @@ At a7e7f45 nothing public signals the supervised command. The supervisor (`infra
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The public API delivers SIGINT to a running jail's supervised command (the supervisor forwards it) and returns whether it was delivered, as data
-- [ ] #2 A test shows the command receives SIGINT and keeps running, and that interrupting a jail whose command has finished is answered, not raised past the driver exception boundary
+- [x] #1 The public API delivers SIGINT to a running jail's supervised command (the supervisor forwards it) and returns whether it was delivered, as data
+- [x] #2 A test shows the command receives SIGINT and keeps running, and that interrupting a jail whose command has finished is answered, not raised past the driver exception boundary
 <!-- AC:END -->
 
 ## Implementation Notes
