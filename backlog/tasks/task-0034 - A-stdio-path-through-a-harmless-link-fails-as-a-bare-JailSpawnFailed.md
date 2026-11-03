@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:59:00Z'
-updated_date: '2026-11-03T04:06:00Z'
+updated_date: '2026-11-03T04:10:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -52,4 +52,6 @@ FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_stdio_path_through_any_link_i
 Accepted 2026-11-03 under the owner's goal. The test commit e3bce5a's message names TASK-0033 and TASK-0034; it means TASK-0034 (the harmless link) and TASK-0035 (the hard link). The first repro recorded on TASK-0034 above was the hard-link case by mistake; the later one, the harmless-link case, is this task's.
 
 Worker's report (Claude): fixed at bc4508f. stdio_refusal refuses a stdio path whose lookup passes through any link (its link_chain has more than one entry) with StdioThroughLink, raised as PolicyStdioThroughLink naming the path and saying to name what it leads to. The repro above passes now. uv run just done passes.
+
+Review 2026-11-03 (reviewer): not closed. Full gate passes (recorded on TASK-0021). Measured: stdout=D/ln/out.txt with D/ln -> D/real is now refused before anything starts, with PolicyStdioThroughLink: "stdio path '.../ln/out.txt' goes through a symbolic link -- name the path it leads to (os.path.realpath) instead". AC#1 is not met as written: the error names the path and says what to do, but it does not name the link (D/ln). StdioThroughLink carries only the path, though link_chain already has the steps. To change: carry the first link in the chain on StdioThroughLink and PolicyStdioThroughLink, put it in the message, and assert it in test_a_stdio_path_through_any_link_is_refused_naming_it. Small, and no draft filed; it belongs to this task.
 <!-- SECTION:NOTES:END -->
