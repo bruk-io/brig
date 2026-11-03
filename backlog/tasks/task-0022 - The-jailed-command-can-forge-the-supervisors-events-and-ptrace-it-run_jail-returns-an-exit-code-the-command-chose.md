@@ -192,4 +192,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Reviewed (reviewer, 2026-11-03): NOT closed. AC #2 unmet as written: it names a ptrace attach on the supervisor, and the battery plants none (only the /proc/1/fd forgery, its control, and CapEff == 0). decision-0006 item 5 also says the battery plants the attach, so the battery departs from its own decision. To close: add a probe in tests/e2e/test_supervisor_isolation_battery.py that calls ptrace(PTRACE_ATTACH, 1) through ctypes from the command and reports refusal by exit code, with a positive control attaching to the command's own child; a regression would make the attach succeed and fail the test. AC #1 and #3 met and ticked. Reviewer's evidence: with brig's real supervisor, as root and as uid 1000 (unshare -m + setpriv), the command got EACCES on /proc/1/fd, /proc/1/environ and /proc/1/mem (the same ptrace_may_access gate the attach checks), CapEff 0, and run_jail returned 7 after 1.07s, never 42. The battery's recorded failing run at 88c7f82 shows it fails if the fix regresses (forgery test for the dumpable half, CapEff test for the cap-drop half). Channel batteries and test_channel_readiness pass (28 passed); full gate passed, recorded.
 <!-- SECTION:NOTES:END -->
