@@ -29,4 +29,18 @@ Found reviewing TASK-0024.01 (c4ef292). infra/files.py kinds() follows links, an
 
 <!-- SECTION:NOTES:BEGIN -->
 Accepted 2026-11-03 under the owner's goal. Measured before any change (bubblewrap 0.9.0, as root): writable root W holding hooks -> real (a symlink), write deny W/hooks; the command unlinked W/hooks, made a directory there and wrote W/hooks/pre-commit, exit 0, and the host's W/hooks is now a real directory. Confirmed: the deny protects the link's target, not the path.
+
+Repro at b3ca718d3b4c, test files: tests/e2e/test_fs_policy_battery.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_fs_policy_battery.py -k through_a_link` exited 2
+
+(9 earlier lines omitted)
+```text
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/e2e/test_fs_policy_battery.py:50: in <module>
+    from brig import (
+E   ImportError: cannot import name 'PolicyPathThroughLink' from 'brig' (/home/user/brig/src/brig/__init__.py)
+=========================== short test summary info ============================
+ERROR tests/e2e/test_fs_policy_battery.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.24s
+```
 <!-- SECTION:NOTES:END -->
