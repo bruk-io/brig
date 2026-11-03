@@ -7,12 +7,24 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T18:17:00Z'
+updated_date: '2026-11-03T18:18:00Z'
 labels:
   - brig
   - stdio
   - size-3
 dependencies: []
+modified_files:
+  - docs/architecture/models/brig/library/supervisor-link.c4
+  - docs/spec/index.md
+  - src/brig/domain/jail_types/bwrap.py
+  - src/brig/domain/policy/stdio.py
+  - src/brig/infra/supervisor/link.py
+  - src/brig/infra/supervisor/pumps.py
+  - src/brig/infra/supervisor/wire.py
+  - src/brig/presentation/drivers/bwrap.py
+  - tests/e2e/test_stdio_pumps_battery.py
+  - tests/e2e/test_stdio_reopen_battery.py
+  - tests/e2e/test_tiocsti_battery.py
 type: bug
 ---
 
