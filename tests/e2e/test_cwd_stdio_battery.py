@@ -157,6 +157,7 @@ def test_a_stdio_path_through_any_link_is_refused_naming_it() -> None:
             refused = error
         assert type(refused).__name__ == "PolicyStdioThroughLink", refused
         assert getattr(refused, "path", None) == f"{outside}/logs/out.txt"
+        assert getattr(refused, "link", None) == f"{outside}/logs"
 
 
 def test_a_hard_linked_stdio_file_is_refused() -> None:
@@ -176,3 +177,29 @@ def test_a_hard_linked_stdio_file_is_refused() -> None:
             refused = error
         assert victim.read_text() == "before", "the output was appended through the hard link"
         assert type(refused).__name__ == "PolicyStdioHardLinked", refused
+
+
+@pytest.mark.parametrize("kind", ["someone_elses", "device"])
+def test_a_stdio_path_that_is_not_the_embedders_own_regular_file_is_refused(kind: str) -> None:
+    """TASK-0035: a stdio file must be a regular file the embedder owns: one another user owns
+    (world-writable or not) or a device is refused before anything starts, and nothing is
+    written to it."""
+    with tempfile.TemporaryDirectory(dir="/tmp") as streams:
+        if kind == "device":
+            target = "/dev/zero"
+        else:
+            target = f"{streams}/out.txt"
+            Path(target).write_text("before")
+            os.chmod(target, 0o666)
+            if os.getuid() == 0:
+                os.chown(target, 65534, 65534)
+            else:
+                pytest.skip("making a file another user owns needs root")
+        refused: Exception | None = None
+        try:
+            _run((sys.executable, "-I", "-c", "print('WROTE')"), stdio=Stdio(stdout=target))
+        except Exception as error:  # noqa: BLE001 -- the type is asserted below
+            refused = error
+        if kind != "device":
+            assert Path(target).read_text() == "before"
+        assert type(refused).__name__ == "PolicyStdioNotOwnFile", refused
