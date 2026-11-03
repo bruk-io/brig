@@ -1,6 +1,7 @@
 """TASK-0028: an embedder sets the jailed command's working directory and its stdio, through
 the public API, against real bwrap. The command reports through the streams under test."""
 
+import os
 import shutil
 import sys
 import tempfile
@@ -136,3 +137,42 @@ def test_a_stdio_path_reaching_a_writable_root_through_a_parent_link_is_refused(
             refused = error
         assert not (Path(victim) / "out.txt").exists(), "the jail's output reached the victim"
         assert type(refused).__name__ == "PolicyStdioInWritableRoot", refused
+
+
+def test_a_stdio_path_through_any_link_is_refused_naming_it() -> None:
+    """A link outside every writable root still makes the no-link open fail; the embedder hears
+    why, before anything starts, instead of a bare spawn failure."""
+    with (
+        tempfile.TemporaryDirectory(dir="/tmp") as real,
+        tempfile.TemporaryDirectory(dir="/tmp") as outside,
+    ):
+        (Path(outside) / "logs").symlink_to(real)
+        refused: Exception | None = None
+        try:
+            _run(
+                (sys.executable, "-I", "-c", "print('x')"),
+                stdio=Stdio(stdout=f"{outside}/logs/out.txt"),
+            )
+        except Exception as error:  # noqa: BLE001 -- the type is asserted below
+            refused = error
+        assert type(refused).__name__ == "PolicyStdioThroughLink", refused
+        assert getattr(refused, "path", None) == f"{outside}/logs/out.txt"
+
+
+def test_a_hard_linked_stdio_file_is_refused() -> None:
+    """Another jail may have hard-linked the stdio file to a file the embedder owns; appending
+    to it would write there. Refused, and the other name's file is untouched."""
+    with tempfile.TemporaryDirectory(dir="/tmp") as streams:
+        victim = Path(streams) / "victim"
+        victim.write_text("before")
+        os.link(victim, Path(streams) / "out.txt")
+        refused: Exception | None = None
+        try:
+            _run(
+                (sys.executable, "-I", "-c", "print('appended')"),
+                stdio=Stdio(stdout=f"{streams}/out.txt"),
+            )
+        except Exception as error:  # noqa: BLE001 -- the type is asserted below
+            refused = error
+        assert victim.read_text() == "before", "the output was appended through the hard link"
+        assert type(refused).__name__ == "PolicyStdioHardLinked", refused
