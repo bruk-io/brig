@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:22:00Z'
-updated_date: '2026-11-03T02:51:00Z'
+updated_date: '2026-11-03T02:52:00Z'
 labels:
   - size-5
 dependencies: []
@@ -194,4 +194,24 @@ done: all steps passed
 ```
 
 Reviewed (reviewer, 2026-11-03): NOT closed. AC #2 unmet as written: it names a ptrace attach on the supervisor, and the battery plants none (only the /proc/1/fd forgery, its control, and CapEff == 0). decision-0006 item 5 also says the battery plants the attach, so the battery departs from its own decision. To close: add a probe in tests/e2e/test_supervisor_isolation_battery.py that calls ptrace(PTRACE_ATTACH, 1) through ctypes from the command and reports refusal by exit code, with a positive control attaching to the command's own child; a regression would make the attach succeed and fail the test. AC #1 and #3 met and ticked. Reviewer's evidence: with brig's real supervisor, as root and as uid 1000 (unshare -m + setpriv), the command got EACCES on /proc/1/fd, /proc/1/environ and /proc/1/mem (the same ptrace_may_access gate the attach checks), CapEff 0, and run_jail returned 7 after 1.07s, never 42. The battery's recorded failing run at 88c7f82 shows it fails if the fix regresses (forgery test for the dumpable half, CapEff test for the cap-drop half). Channel batteries and test_channel_readiness pass (28 passed); full gate passed, recorded.
+
+Repro at 64aa36954254, test files: tests/e2e/test_supervisor_isolation_battery.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_supervisor_isolation_battery.py` exited 1
+
+(28 earlier lines omitted)
+```text
+    def test_the_command_holds_no_capability() -> None:
+        """decision-0006 item 2: `--cap-drop ALL`, so even a jail brig's root caller starts holds
+        no capability inside its namespaces."""
+        exit_code, _ = _exit_code_of(_CAPABILITIES)
+>       assert exit_code == 0, "the jailed command holds capabilities"
+E       AssertionError: the jailed command holds capabilities
+E       assert 1 == 0
+
+tests/e2e/test_supervisor_isolation_battery.py:154: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_supervisor_isolation_battery.py::test_a_command_cannot_forge_the_supervisors_done
+FAILED tests/e2e/test_supervisor_isolation_battery.py::test_the_command_cannot_read_the_supervisors_environment_or_memory
+FAILED tests/e2e/test_supervisor_isolation_battery.py::test_the_command_holds_no_capability
+3 failed, 1 passed in 0.81s
+```
 <!-- SECTION:NOTES:END -->
