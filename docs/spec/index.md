@@ -113,7 +113,9 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
 - `state_dir.py`: brig's state directory (`BRIG_HOME`, else `~/.brig`) and its empty read-only
   directory.
 - `placeholders.py`: the directories made on the host for bwrap to mount over at absent paths,
-  recorded per jail and removed once no live jail mounts over them (TASK-0027).
+  recorded per jail and removed once no live jail mounts over them (TASK-0027). A teardown sweeps
+  every finished jail's directories together, deepest first, and one it cannot remove yet (not
+  empty) stays in a record for a later sweep (TASK-0001.32).
 - `sockets.py`: the channel directory's creation and removal, finding and holding the jail's PID
   namespace, the verified connect that says a channel is ready (decision-0005), and signalling
   the jail's PID 1.
