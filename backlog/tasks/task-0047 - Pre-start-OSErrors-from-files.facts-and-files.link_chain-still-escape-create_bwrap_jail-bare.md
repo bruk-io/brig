@@ -3,7 +3,7 @@ id: TASK-0047
 title: >-
   Pre-start OSErrors from files.facts and files.link_chain still escape
   create_bwrap_jail bare
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-11-03T19:22:00Z'
 updated_date: '2026-11-03T19:40:00Z'
@@ -232,4 +232,12 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Worker, 2026-11-03: repro a7c18b0, fix 5c12ea4.
+
+- Repro (tests/integration/test_create_inspection_errors.py): four child Pythons, each with its own BRIG_HOME. EACCES: a policy path beneath a 0700 root-owned directory, the child dropped to nobody (65534) after its imports (the interpreter lives under /root, so it cannot exec as nobody). ELOOP: a policy path in a two-link loop. link_chain's readlink: a stdio path through the root parent's /proc/<pid>/cwd, the child as nobody: lstat says it is a link and readlink is refused (EACCES), deterministic, no race needed. Broken install: brig imported from a copy of src/brig whose supervisor/program.py is deleted once imported. Each failed on an assertion about what crossed (a bare PermissionError/OSError; StateDirectoryWriteFailed).
+- Types: no existing type fits, so two are added. PolicyPathUninspectable(path) for a path the policy or stdio names, or the interpreter, that the host will not let brig inspect (facts' stat or link_chain's readlink); path is the caller's path, not the link component. SupervisorSourceUnreadable() for brig's own supervisor source; the OSError cause names the file. JailSpawnFailed was considered for the second and rejected: nothing was spawned, and its message does not tell the embedder to reinstall.
+- Fix: the bwrap driver calls files.facts per path and files.link_chain through _facts/_link_chain, each translating OSError with the OSError as __cause__. _supervisor_path reads assembled_source() before making the file, outside the write's try. Every other driver call into infra.files was checked (link_count, first_link, own_regular_file swallow their OSErrors). infra.files docstrings now say what propagates; docs/spec/index.md names both types and the test that holds them.
+- Public API change: brig exports PolicyPathUninspectable and SupervisorSourceUnreadable (additive). An embedder that caught bare OSError from create_bwrap_jail for these cases now gets these types instead.
+- First full-tier run (eb2d372's record) failed one e2e test, which record-check's tail did not keep; e2e passed in five reruns and in the second full-tier record (688d0fd), so it reads as an intermittent e2e flake unrelated to this change (the change only alters failures before anything starts). Not identified.
 <!-- SECTION:NOTES:END -->
