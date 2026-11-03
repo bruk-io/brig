@@ -47,11 +47,10 @@ from pathlib import Path
 
 import pytest
 
+import brig
 from brig import (
     WHOLE_HOST_READ_ONLY,
     FsPolicy,
-    PolicyPathThroughLink,
-    PolicyRootAbsent,
     create_bwrap_jail,
     destroy_jail,
     run_jail,
@@ -549,7 +548,7 @@ def test_a_deny_reached_through_a_link_inside_a_writable_root_is_refused() -> No
         (Path(root) / "real").mkdir()
         (Path(root) / "hooks").symlink_to("real")
         policy = FsPolicy(readable=("/",), writable=(root,), write_denies=(f"{root}/hooks",))
-        with pytest.raises(PolicyPathThroughLink) as refused:
+        with pytest.raises(brig.PolicyPathThroughLink) as refused:
             create_bwrap_jail((sys.executable, "-c", "pass"), policy=policy)
         assert refused.value.path == f"{root}/hooks"
         assert (Path(root) / "hooks").is_symlink()
@@ -581,7 +580,7 @@ def test_a_root_absent_on_the_host_is_refused() -> None:
     """TASK-0026: a root must exist to be mounted; refused before anything starts, naming it."""
     with _fresh_tmp_dir() as root:
         missing = f"{root}/not-there"
-        with pytest.raises(PolicyRootAbsent) as refused:
+        with pytest.raises(brig.PolicyRootAbsent) as refused:
             create_bwrap_jail(
                 (sys.executable, "-c", "pass"), policy=FsPolicy(readable=("/", missing))
             )
