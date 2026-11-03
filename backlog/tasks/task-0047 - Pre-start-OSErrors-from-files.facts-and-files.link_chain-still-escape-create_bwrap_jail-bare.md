@@ -3,7 +3,7 @@ id: TASK-0047
 title: >-
   Pre-start OSErrors from files.facts and files.link_chain still escape
   create_bwrap_jail bare
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-03T19:22:00Z'
 updated_date: '2026-11-03T19:52:00Z'
@@ -306,4 +306,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Reviewer, 2026-11-03: closed. Every criterion met. Repros are real: two children drop to uid 65534 (asserted), ELOOP comes from a real two-link loop, the readlink of root's /proc/<pid>/cwd is refused EACCES (asserted errno), and the broken install is a copied brig with program.py deleted after import (asserts ENOENT and no script left behind); all four failed at a7c18b0 on what crossed. Fix wraps facts/link_chain per path with the OSError as __cause__, and reads assembled_source() before the write's try. PolicyPathUninspectable and SupervisorSourceUnreadable each say what to do (make the path searchable / leave it out; reinstall brig), are exported, and are in docstrings per decision-0001 rule 13. Full tier rerun by the reviewer passed (e2e 145 passed, 4 skipped), no files changed by the check. The worker's first full-tier e2e failure stays unnamed: record-check kept only the tail and neither later full run reproduced it, so it is not known whether it is test_interrupt_battery.py::test_an_interrupt_sent_as_soon_as_the_jail_exists_is_not_lost; no draft filed without a name or output. Minor, not filed: rule 13 says context goes on with add_note at infra's edge, and this change chains the cause in presentation instead, which the criteria asked for.
 <!-- SECTION:NOTES:END -->
