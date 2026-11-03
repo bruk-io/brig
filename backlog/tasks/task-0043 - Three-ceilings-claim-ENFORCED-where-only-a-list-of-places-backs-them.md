@@ -5,11 +5,12 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T18:18:00Z'
+updated_date: '2026-11-03T18:19:00Z'
 labels:
   - brig
   - grades
   - size-3
+  - finish-moved
 dependencies: []
 modified_files:
   - >-
@@ -34,8 +35,8 @@ Architecture review 2026-11-03. (a) fs_write is ENFORCED with a readable root ne
 <!-- AC:BEGIN -->
 - [x] #1 fs_write's ceiling is computed from the compiled mounts: any read-only mount beneath a writable one (a deny, a mask, a nested readable root) caps it at BEST_EFFORT; e2e: the host replaces a nested readable root and the jail writes into it, and the ceiling it reported allowed for that
 - [x] #2 channel_exclusivity is at most BEST_EFFORT whenever the jail sees any host path a socket could sit in beyond its own channel directory (a list of places is not a mechanism); VIOLATED stays for a visible SOCKET_DIRECTORIES entry or a writable shared root; e2e plants a socket outside the listed places and dials it
-- [x] #3 network is never stronger than channel_exclusivity, since a dialable host socket can carry the network; a unit test pins the ordering
-- [x] #4 decision-0008 is amended (a dated note) with the rule that ENFORCED needs a kernel mechanism, and a draft names the mechanism that could earn channel_exclusivity and network back (Landlock here is ABI 7: abstract sockets only; a supervisor-held listening fd plus a seccomp filter on socket(AF_UNIX) is the candidate)
+- [x] #3 decision-0008 is amended (a dated note) with the rule that ENFORCED needs a kernel mechanism, and a draft names the mechanism that could earn channel_exclusivity and network back (Landlock here is ABI 7: abstract sockets only; a supervisor-held listening fd plus a seccomp filter on socket(AF_UNIX) is the candidate)
+- [ ] #4 network is capped by the socket half of channel_exclusivity only: VIOLATED when a host socket place (SOCKET_DIRECTORIES) is visible, at most BEST_EFFORT whenever the jail sees any host root a socket could sit in; a writable shared root alone, which carries files and not a route out, does not lower it; a unit test pins each case
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -210,4 +211,6 @@ done: all steps passed
 **What an embedder sees** (computed with ceilings): a writable project, the system read-only (readable /), credentials masked (~/.ssh, ~/.aws): fs_write ENFORCED, fs_read BEST_EFFORT, network VIOLATED (was ENFORCED), env ENFORCED, channel_exclusivity VIOLATED. The same with a write deny in the project (.git/hooks): fs_write BEST_EFFORT. A narrow system (/usr, /etc, home) with a writable project: the same as the first. A read-only project with a narrow system and no writable root: fs_write ENFORCED, fs_read ENFORCED, network BEST_EFFORT, env ENFORCED, channel_exclusivity BEST_EFFORT. network follows channel_exclusivity literally (AC #3), so a writable shared root alone makes network VIOLATED; a reviewer may prefer to cap network only by the socket half of the rule (VIOLATED for a visible socket place, BEST_EFFORT for any root), which this change does not do.
 
 **Not verified**: the fs_write host rename on another filesystem than ext4 or another kernel than 6.18 (here it moves the mount with the entry, as the review measured); a socket renamed over a file root; any kernel mechanism for the draft.
+
+Lead, 2026-11-03: finish moved twice, both by me. (1) I wrote the criteria in a separate edit after promoting the draft. (2) Criterion 3 as first written ('network never stronger than channel_exclusivity') made network VIOLATED for every embedder with a writable project, because channel_exclusivity is VIOLATED for any writable shared root, which carries files and not a route out. Replaced by the socket-half rule above.
 <!-- SECTION:NOTES:END -->
