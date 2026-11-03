@@ -3,10 +3,11 @@ id: TASK-0026
 title: >-
   compile_mounts keeps an absent deny or mask that sits under a read-only root
   nested in a writable one, which bwrap cannot mount
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-03T03:06:00Z'
-updated_date: '2026-11-03T03:10:00Z'
+updated_date: '2026-11-03T03:13:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -60,4 +61,6 @@ FAILED tests/e2e/test_fs_policy_battery.py::test_an_absent_entry_under_a_read_on
 FAILED tests/e2e/test_fs_policy_battery.py::test_a_root_absent_on_the_host_is_refused
 2 failed, 12 deselected in 0.11s
 ```
+
+Worker's report (Claude, 2026-11-03). Fixed at 0dc45c0. compile_mounts keeps an absent deny or mask only where the most specific entry above it is a writable root (_governing_role); under a readable root or a present deny nested in a writable root it is dropped (the command cannot create it, bwrap could not mount it). refusal refuses a readable or writable root that is absent on the host (RootAbsent, raised as PolicyRootAbsent). Tests: the e2e repros above (both pass now: the jail starts and writes beside; the absent root is refused), a unit case for the nested read-only parent and one for the absent root. uv run just done passes (recorded on TASK-0024.02, same tree).
 <!-- SECTION:NOTES:END -->
