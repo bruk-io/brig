@@ -20,13 +20,17 @@ from brig.domain.policy.paths import (
     CwdOutsideRoots,
     FsPolicy,
     HostPath,
+    InterpreterUnreachable,
     MaskHides,
     PathKind,
     PathNotAbsolute,
     RootAbsent,
+    StdioInWritableRoot,
     ThroughLink,
     cwd_refusal,
+    interpreter_refusal,
     refusal,
+    stdio_refusal,
 )
 from brig.domain.policy.stdio import INHERIT, Stdio
 from brig.infra import files as _files
@@ -38,10 +42,12 @@ from brig.presentation.errors import (
     ChannelDirectoryCreateFailed,
     ChannelNamespaceNotFound,
     PolicyCwdOutsideRoots,
+    PolicyInterpreterUnreachable,
     PolicyMaskHides,
     PolicyPathNotAbsolute,
     PolicyPathThroughLink,
     PolicyRootAbsent,
+    PolicyStdioInWritableRoot,
 )
 from brig.presentation.jail import (
     CHANNEL_DIRECTORIES,
@@ -136,6 +142,9 @@ def _supervisors_for(
         PolicyPathThroughLink: an entry is reached through a symbolic link inside a writable
             root.
         PolicyCwdOutsideRoots: `cwd` is in no root of the policy.
+        PolicyStdioInWritableRoot: a stdio path is inside a writable root.
+        PolicyInterpreterUnreachable: the policy does not mount the interpreter the supervisor
+            runs under, or a link on the way to it.
     """
     state_dir = resolved_state_dir()
     needed = (
@@ -176,6 +185,22 @@ def _supervisors_for(
                 pass
             case _ as unreachable:
                 assert_never(unreachable)
+    match stdio_refusal(policy, (stdio.stdin, stdio.stdout, stdio.stderr)):
+        case PathNotAbsolute(path=path):
+            raise PolicyPathNotAbsolute(path)
+        case StdioInWritableRoot(path=path):
+            raise PolicyStdioInWritableRoot(path)
+        case None:
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
+    match interpreter_refusal(policy, _files.link_chain(sys.executable)):
+        case InterpreterUnreachable(path=path):
+            raise PolicyInterpreterUnreachable(path)
+        case None:
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
     kinds = {path: found.kind for path, found in host.items()}
     empty_dir = str(_state_dir_mod.ensure_empty(Path(state_dir)))
     supervisor_path = _supervisor_path()

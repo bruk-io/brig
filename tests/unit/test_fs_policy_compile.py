@@ -6,13 +6,17 @@ from brig.domain.policy.paths import (
     CwdOutsideRoots,
     FsPolicy,
     HostPath,
+    InterpreterUnreachable,
     MaskHides,
     PathKind,
     PathNotAbsolute,
     RootAbsent,
+    StdioInWritableRoot,
     ThroughLink,
     cwd_refusal,
+    interpreter_refusal,
     refusal,
+    stdio_refusal,
 )
 
 _STATE = "/state"
@@ -205,3 +209,24 @@ def test_a_cwd_must_be_absolute_inside_a_root_and_under_no_mask() -> None:
     assert cwd_refusal(policy, "w") == PathNotAbsolute("w")
     assert cwd_refusal(policy, "/etc") == CwdOutsideRoots("/etc")
     assert cwd_refusal(policy, "/w/secret/x") == MaskHides("/w/secret", "/w/secret/x")
+
+
+def test_a_stdio_path_must_be_absolute_and_outside_every_writable_root() -> None:
+    policy = FsPolicy(readable=("/",), writable=("/w",))
+
+    assert stdio_refusal(policy, (None, "/logs/out", "/dev/null")) is None
+    assert stdio_refusal(policy, ("/w/in",)) == StdioInWritableRoot("/w/in")
+    assert stdio_refusal(policy, ("logs/out",)) == PathNotAbsolute("logs/out")
+
+
+def test_every_path_on_the_way_to_the_interpreter_must_be_mounted() -> None:
+    """A venv's link into a version manager's link into the install: each step inside a root."""
+    chain = ("/v/bin/python", "/u/py-3.15/bin/python3.15", "/u/py-3.15.0b4/bin/python3.15")
+
+    assert interpreter_refusal(FsPolicy(readable=("/v", "/u")), chain) is None
+    assert interpreter_refusal(FsPolicy(readable=("/v", "/u/py-3.15.0b4")), chain) == (
+        InterpreterUnreachable("/u/py-3.15/bin/python3.15")
+    )
+    assert interpreter_refusal(FsPolicy(readable=("/v", "/u"), masks=("/u/py-3.15",)), chain) == (
+        InterpreterUnreachable("/u/py-3.15/bin/python3.15")
+    )

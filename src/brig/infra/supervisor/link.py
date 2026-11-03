@@ -275,7 +275,8 @@ _NO_STDIO: Stdio = (None, None, None)
 
 def _open_stdio(stdio: Stdio) -> dict[int, int]:
     """Open each named stream (0 for reading; 1 and 2 for appending, created 0600), keyed by the
-    fd number the supervisor gets it on.
+    fd number the supervisor gets it on. Never through a link at the path itself (`O_NOFOLLOW`,
+    TASK-0031): a link there is refused as `OSError`.
 
     Raises:
         OSError: a path could not be opened; whatever was opened before it is closed.
@@ -286,7 +287,7 @@ def _open_stdio(stdio: Stdio) -> dict[int, int]:
             if path is None:
                 continue
             flags = os.O_RDONLY if number == 0 else os.O_WRONLY | os.O_APPEND | os.O_CREAT
-            opened[number] = os.open(path, flags | os.O_CLOEXEC, 0o600)
+            opened[number] = os.open(path, flags | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
     except OSError:
         for fd in opened.values():
             os.close(fd)

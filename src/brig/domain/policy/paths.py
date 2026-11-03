@@ -91,6 +91,22 @@ class CwdOutsideRoots:
     cwd: str
 
 
+@dataclass(frozen=True)
+class StdioInWritableRoot:
+    """A refusal: the stdio path `path` is inside a writable root, where a jail could replace it
+    with a link to any file the embedder can write (TASK-0031)."""
+
+    path: str
+
+
+@dataclass(frozen=True)
+class InterpreterUnreachable:
+    """A refusal: `path`, on the way to the interpreter brig runs its supervisor under, is in no
+    root of the policy (or under a mask), so the supervisor could not start (TASK-0029)."""
+
+    path: str
+
+
 def _is_normal_absolute(path: str) -> bool:
     if not path.startswith("/") or "//" in path:
         return False
@@ -158,4 +174,32 @@ def cwd_refusal(policy: FsPolicy, cwd: str) -> PathNotAbsolute | CwdOutsideRoots
     for mask in policy.masks:
         if within(cwd, mask):
             return MaskHides(mask, cwd)
+    return None
+
+
+def stdio_refusal(
+    policy: FsPolicy, streams: tuple[str | None, ...]
+) -> PathNotAbsolute | StdioInWritableRoot | None:
+    """Why the stdio paths `streams` cannot be used with `policy`, or `None`: each named one must
+    be absolute and outside every writable root (`"/dev/null"` is always fine)."""
+    for path in streams:
+        if path is None or path == "/dev/null":
+            continue
+        if not _is_normal_absolute(path):
+            return PathNotAbsolute(path)
+        if any(within(path, root) for root in policy.writable):
+            return StdioInWritableRoot(path)
+    return None
+
+
+def interpreter_refusal(policy: FsPolicy, chain: tuple[str, ...]) -> InterpreterUnreachable | None:
+    """Why the supervisor's interpreter cannot run under `policy`, or `None`. `chain` is every
+    path met on the way to it, the interpreter's own first and each link's target after it
+    (`infra/files.py`'s `link_chain`): each must be inside a root and under no mask, since a
+    mount shows a link's target only where the link itself is mounted too."""
+    roots = (*policy.readable, *policy.writable)
+    for path in chain:
+        inside = any(within(path, root) for root in roots)
+        if not inside or any(within(path, mask) for mask in policy.masks):
+            return InterpreterUnreachable(path)
     return None

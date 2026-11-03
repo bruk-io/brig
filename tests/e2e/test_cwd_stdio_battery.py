@@ -33,12 +33,15 @@ def _run(command: tuple[str, ...], **kwargs: object) -> int:
 
 
 def test_the_command_starts_in_cwd_and_its_streams_go_where_stdio_says() -> None:
-    with tempfile.TemporaryDirectory(dir="/tmp") as root:
+    with (
+        tempfile.TemporaryDirectory(dir="/tmp") as root,
+        tempfile.TemporaryDirectory(dir="/tmp") as streams,
+    ):
         work = Path(root) / "work"
         work.mkdir()
-        stdin = Path(root) / "in.txt"
+        stdin = Path(streams) / "in.txt"
         stdin.write_text("from stdin")
-        out, err = Path(root) / "out.txt", Path(root) / "err.txt"
+        out, err = Path(streams) / "out.txt", Path(streams) / "err.txt"
         exit_code = _run(
             (sys.executable, "-I", "-c", _REPORTER),
             policy=FsPolicy(readable=("/",), writable=(root,)),

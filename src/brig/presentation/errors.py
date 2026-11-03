@@ -49,6 +49,33 @@ class PolicyCwdOutsideRoots(Exception):
         self.cwd = cwd
 
 
+class PolicyStdioInWritableRoot(Exception):
+    """Raised when a stdio path a caller gives `create_bwrap_jail` is inside a writable root of
+    its policy: a jail may write there, so it could swap the file for a link and have a later
+    jail's output written into any file the embedder can write (TASK-0031)."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"stdio path {path!r} is inside a writable root of the policy, where a jail could "
+            "replace it with a link -- put the command's streams somewhere no jail can write"
+        )
+        self.path = path
+
+
+class PolicyInterpreterUnreachable(Exception):
+    """Raised when the policy does not mount the interpreter brig runs its supervisor under
+    (this process's own), or a link on the way to it: the supervisor could not start
+    (TASK-0029)."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"the jail's supervisor runs under this interpreter, and the policy does not mount "
+            f"{path!r} on the way to it -- add a readable root that contains it (and every link "
+            "it goes through, such as a version-manager's link to its install directory)"
+        )
+        self.path = path
+
+
 class PolicyRootAbsent(Exception):
     """Raised when a readable or writable root in a caller's `FsPolicy` does not exist on the
     host: a root is mounted from where it is, so it has to be there (decision-0007)."""
