@@ -1,10 +1,11 @@
 ---
 id: TASK-0043
 title: Three ceilings claim ENFORCED where only a list of places backs them
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T17:50:00Z'
+updated_date: '2026-11-03T17:57:00Z'
 labels:
   - brig
   - grades
