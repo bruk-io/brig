@@ -3,7 +3,7 @@ id: TASK-0029
 title: >-
   Refuse a policy that does not reach the supervisor's interpreter, before bwrap
   runs
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
@@ -95,4 +95,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Closed by review 2026-11-03. Full gate passes. AC#1 met: link_chain verified on relative, absolute, mid-path and chained links (a loop returns a bounded chain); a policy missing the cpython-3.15 link is refused naming it, and bwrap given that policy fails with execvp No such file (measured); a full system+venv+uv policy is accepted and the jail runs (exit 0). Findings filed as draft 'A policy without the interpreter's ELF loader and libraries passes interpreter_refusal...': loader/libc not checked (accepted policy still fails with the old symptom), over-refusal when the interpreter link itself is the root, lexical '..' in link_chain.
 <!-- SECTION:NOTES:END -->
