@@ -95,4 +95,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 done: 1 step(s) failed: gates
 error: recipe `done` failed on line 71 with exit code 1
 ```
+
+Review (reviewer, 2026-11-03): NOT CLOSED. AC #2 met and ticked: every law names a test or says none does, and every cited test file exists (test_report_battery, test_grades, test_policy_refusal, test_fs_policy_battery, test_cwd_stdio_battery with its stdio and interpreter refusals, test_fs_policy_compile, test_supervisor_isolation_battery, test_interrupt_battery including the early-interrupt case, test_supervisor_reaps_orphans, the channel batteries, and the socket case in test_report_battery). Every name a law uses exists at HEAD (FsPolicy, reserve_channels, interrupt_jail, destroy_jail, channel_exclusivity, the started/done events). AC #1 not met: law 9 drops the old law's rule that argv is counted in the channel_exclusivity enumeration and is never excused from it, and makes it an untested promise. Filed as a draft (Law 9 excuses argv from channel_exclusivity). Full gate: just done fails at gates, from the TASK-0033 finding in test_report_battery, not from this task.
 <!-- SECTION:NOTES:END -->
