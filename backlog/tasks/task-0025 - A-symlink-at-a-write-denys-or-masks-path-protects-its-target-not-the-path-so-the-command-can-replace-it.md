@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:06:00Z'
-updated_date: '2026-11-03T03:16:00Z'
+updated_date: '2026-11-03T03:18:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -61,4 +61,6 @@ FAILED tests/e2e/test_fs_policy_battery.py::test_a_deny_reached_through_a_link_i
 Worker's report (Claude, 2026-11-03). Fixed at 0dc45c0. infra.files.facts returns each policy path's kind and realpath; paths.refusal takes them (HostPath) and refuses with ThroughLink any entry (root, deny or mask) inside a writable root whose resolved path is not the root's resolved path plus the rest of the entry: a link between them. A link above the writable root (which the command cannot change) refuses nothing. Raised as PolicyPathThroughLink(path, root) before anything is created. Tests: the e2e repro above (now passing: create_bwrap_jail raises, the link is untouched), unit refusal cases for a link inside a root and a link above it. uv run just done passes (recorded on TASK-0024.02, same tree).
 
 Review (reviewer, 2026-11-03): not closed. AC2 ticked: the e2e plants a hooks link inside a writable root and the jail is refused before anything runs, the link left in place (a refusal means no command ever writes through or replaces it). AC1 not met: the code refuses (ThroughLink, raised as PolicyPathThroughLink), but the criterion asks that the decision say which, and decision-0007 does not mention links: item 2 still lists only the not-absolute and mask-hides refusals, and neither the RootAbsent nor the ThroughLink refusal appears in it or in docs/spec. To close: add both refusals to decision-0007 item 2 (and the SPEC's refusal list), with the reason (a mount onto a link lands on its target). Residual, low: the check and the mount are separate moments, so something sharing the writable root (another jail) could swap a directory for a link between them.
+
+Worker, 2026-11-03: decision-0007 item 2 now records both refusals and why (a mount onto a link lands on its target; the link stays replaceable), with the check-to-mount window noted; the SPEC's domain section lists all four refusals. The driver's docstring now says it is the shared interpreter.
 <!-- SECTION:NOTES:END -->
