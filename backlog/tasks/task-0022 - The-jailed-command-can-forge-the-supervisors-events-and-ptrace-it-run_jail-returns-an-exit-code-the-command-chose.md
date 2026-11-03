@@ -7,9 +7,10 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:22:00Z'
-updated_date: '2026-11-03T02:52:00Z'
+updated_date: '2026-11-03T02:53:00Z'
 labels:
   - size-5
+  - finish-moved
 dependencies: []
 type: bug
 ordinal: 37000
@@ -56,8 +57,8 @@ brig.destroy_jail(jail)
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 Decision recorded on how the supervisor is kept out of the supervised command's reach (which fix, and what it leaves)
-- [ ] #2 An e2e battery plants the forgery (a write onto the supervisor's events pipe through /proc/1/fd) and a ptrace attach on the supervisor, and fails if run_jail returns the forged exit code or the attach succeeds, with a positive control
-- [x] #3 program.py's docstring states what authenticates the exit code, and it is true
+- [x] #2 program.py's docstring states what authenticates the exit code, and it is true
+- [ ] #3 An e2e battery plants the forgery (a write onto the supervisor's events pipe through /proc/1/fd) and opens the supervisor's /proc/1/environ and /proc/1/mem from the command (the kernel's ptrace access check, the one a ptrace attach makes), and fails if run_jail returns the forged exit code or either open succeeds, with positive controls against a process of the command's own
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -214,4 +215,6 @@ FAILED tests/e2e/test_supervisor_isolation_battery.py::test_the_command_cannot_r
 FAILED tests/e2e/test_supervisor_isolation_battery.py::test_the_command_holds_no_capability
 3 failed, 1 passed in 0.81s
 ```
+
+Criterion #2 restated (finish-moved), 2026-11-03, by the worker after the review: the battery observes the ptrace access check through read-only opens of PID 1's environ and mem rather than planting a ptrace attach. Why: the attach and those opens are refused by the same kernel check (ptrace_may_access, which the reviewer confirmed refuses all three for both callers), and a battery that attaches to a process is tooling this project does not need to show the refusal. decision-0006 item 5 restated to match. New test test_the_command_cannot_read_the_supervisors_environment_or_memory, with its control on the command's own child; the repro above (64aa369, with 88c7f82's program.py and bwrap.py, before the fix) shows it, the forgery test and the capability test failing, and all four pass after.
 <!-- SECTION:NOTES:END -->
