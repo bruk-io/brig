@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T04:06:00Z'
+updated_date: '2026-11-03T04:09:00Z'
 labels:
   - size-3
 dependencies: []
@@ -20,7 +20,7 @@ Found by an architecture review, 2026-11-02, at 739dd94. Measured: a writable pr
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 After destroy_jail, no mountpoint brig's compile caused to be created on the host remains, and none that existed before is removed
+- [x] #1 After destroy_jail, no mountpoint brig's compile caused to be created on the host remains, and none that existed before is removed
 - [x] #2 An e2e test plants absent write-denied and masked paths under a writable bind and shows the host tree is as it was after teardown, including while a second jail over the same tree still runs
 <!-- AC:END -->
 
