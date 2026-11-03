@@ -1,7 +1,7 @@
 ---
-id: DRAFT-0018
+id: TASK-0037
 title: Docstrings carry the history and the SPEC has fallen behind the code
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-02T17:23:00Z'
 labels:
