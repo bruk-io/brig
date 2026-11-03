@@ -64,7 +64,11 @@ def test_a_jail_whose_command_exits_at_once_is_created_and_reads_as_finished(
 ) -> None:
     """`true` finishes in milliseconds, taking the in-jail PID 1 with it. With a channel
     declared, `create_bwrap_jail` neither raises `ChannelNamespaceNotFound` nor waits out
-    its scan deadline, and readiness says the jail finished.
+    its scan deadline, and readiness says the jail finished, at once.
+
+    Whether the scan held the jail's namespace before `true` ended is a race either way
+    lands (TASK-0023: it lost one run in three before TASK-0022's supervisor, every run
+    after), so this asserts what an embedder sees, not which side it landed on.
     """
     (tmp_path / "state").mkdir()
     directories = _DirectoryIn(root=str(tmp_path / "state"))
@@ -72,13 +76,14 @@ def test_a_jail_whose_command_exits_at_once_is_created_and_reads_as_finished(
     (reservation,) = reserved.reservations
 
     jail = create_bwrap_jail(("true",), channels=reserved, directories=directories)
+    started = time.monotonic()
     try:
         outcome = await_channel_ready(jail, reservation, timeout_s=10.0)
     finally:
         destroy_jail(jail, directories=directories)
 
-    assert jail.channel_namespace_fd is None
     assert outcome == ChannelJailFinished()
+    assert time.monotonic() - started < 2.0
 
 
 def _wait_until_zombie(pid: int) -> None:
