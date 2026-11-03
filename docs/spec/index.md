@@ -46,12 +46,16 @@ future contribution; a change that violates one is a SPEC change first, code sec
    while the jail comes up; `destroy_jail` ends the jail's whole PID namespace and verifies it is
    gone. A `create_bwrap_jail` that fails once its supervisor has started tears it down the same
    way, through the one cleanup `destroy_jail` runs, and the embedder never gets a running jail
-   it has no `Jail` for (TASK-0044); in both, the placeholders are released only once teardown
-   reads the group gone, and a group that survives is `JailTeardownFailed`. The pumps that carry the jail's stdio end with it: `destroy_jail` drains and closes
+   it has no `Jail` for (TASK-0044); so is a supervisor whose start failed after its spawn, which
+   the start hands back on its `JailSpawnFailed` (TASK-0046). In both, the placeholders are
+   released only once teardown reads the group gone, and a group that survives, or a teardown
+   that raises before it can verify the group gone, is `JailTeardownFailed`; the cleanup never
+   replaces the error of the step that failed, and adds its own to it as a note (TASK-0046). The pumps that carry the jail's stdio end with it: `destroy_jail` drains and closes
    them, so a command that never reads its stdin, or floods its stdout, cannot hold the host past
    teardown (TASK-0042). *Held by* `tests/e2e/test_interrupt_battery.py`,
    `tests/e2e/test_supervisor_reaps_orphans.py`, `tests/e2e/test_stdio_pumps_battery.py`, the
-   teardown integration tests and, for a failed create, `tests/integration/test_create_failure_*`; a battery that plants survivors from the host is not yet
+   teardown integration tests and, for a failed create, `tests/integration/test_create_failure_*`
+   and `tests/integration/test_create_error_edges*`; a battery that plants survivors from the host is not yet
    written.
 8. **Events are evidence, never the boundary.** No security claim rests on an event having been
    emitted: the supervisor's `started`/`done` say what happened, and the grades rest on
@@ -172,7 +176,9 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   so a full backlog is not ready at once.
 - `supervisor/`: the jail's PID 1 (decision-0002). `wire.py` and `program.py` assemble
   (`assemble.py`) into one stdlib-only file that refuses an interpreter older than 3.15;
-  `link.py` is the host's end, starting it and reading its events. `pumps.py` carries the
+  `link.py` is the host's end, starting it and reading its events; a start that fails after
+  the spawn hands back the spawned supervisor, unsignalled and unreaped, for the caller's verified
+  teardown (TASK-0046). `pumps.py` carries the
   command's stdio (TASK-0042): the supervisor gets a pipe as each of fd 0, 1 and 2, and one
   thread per jail pumps each to or from the embedder's file or its own fd, never blocking on the
   jail's end; closing the supervisor (when `run_jail` sees `done`, and in `destroy_jail`) stops
@@ -201,7 +207,9 @@ driver, holds its PID namespace for readiness, and exports `create_bwrap_jail`. 
 type shares is beside it: `jail.py` (the `Jail`, brig's state directory, the real ports'
 wiring, and `dismantle`: the verified kill ladder for a process that exists, then removing the
 script, the channel directory and the fds, and releasing the placeholders only on a group read
-gone, the one cleanup `destroy_jail` and a failed create both run), `api.py` (reserving channels, readiness, waiting, interrupting the command with
+gone, the one cleanup `destroy_jail` and a failed create both run; it raises nothing, and hands
+back what its ladder or the supervisor's close raised, a raising ladder reading as a group not
+verified gone, for its caller to attach to what it raises, TASK-0046), `api.py` (reserving channels, readiness, waiting, interrupting the command with
 `SIGINT` through its supervisor, teardown) and `report.py` (a report as text).
 
 An embedder talks to a channel only over the connection readiness verified. `await_channel_ready`
@@ -222,7 +230,8 @@ reads not ready until the deadline instead of holding the embedder (TASK-0045). 
 `tests/e2e/test_channel_readiness_dial.py` (the deadline against a full backlog, and a planted
 link never dialled) and `tests/e2e/test_channel_readiness_beneath.py`. `errors.py` names
 every exception an embedder can see, one per failure, so an embedder handles brig's own types
-and never infra's. `src/brig/__init__.py` re-exports exactly this layer's surface and the
+and never infra's: a host that refuses brig's own state directory, its empty directory or the
+supervisor script before a jail starts is `StateDirectoryWriteFailed` (TASK-0046). `src/brig/__init__.py` re-exports exactly this layer's surface and the
 domain's plain data, nothing from infra.
 
 Not yet built: `drivers/seatbelt.py` and `proxy_main.py`.

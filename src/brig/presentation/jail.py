@@ -31,6 +31,7 @@ from brig.infra.supervisor import link
 from brig.presentation.driver import run
 from brig.presentation.errors import (
     StateDirectoryInvalid,
+    StateDirectoryWriteFailed,
 )
 from brig.presentation.ports import (
     ChannelDirectoryPort,
@@ -61,12 +62,16 @@ def resolved_state_dir() -> str:
 
     Raises:
         StateDirectoryInvalid: `BRIG_HOME` is not an absolute path.
+        StateDirectoryWriteFailed: the host refused to make it (TASK-0046).
     """
     try:
         resolved = _state_dir_mod.resolve()
     except ValueError as exc:
         raise StateDirectoryInvalid(str(exc)) from exc
-    return str(_state_dir_mod.ensure(resolved))
+    try:
+        return str(_state_dir_mod.ensure(resolved))
+    except OSError as exc:
+        raise StateDirectoryWriteFailed(str(resolved)) from exc
 
 
 @dataclass(frozen=True)
@@ -105,7 +110,9 @@ def real_supervisor_port(live: link.LiveSupervisor) -> SupervisorPort:
 
 def _allocate_channel_directory() -> str:
     """A fresh channel directory path under brig's state directory, random per call; creates
-    nothing. `resolved_state_dir` raises `StateDirectoryInvalid` for a bad `BRIG_HOME`."""
+    nothing but brig's state directory itself: `resolved_state_dir` raises
+    `StateDirectoryInvalid` for a bad `BRIG_HOME`, and `StateDirectoryWriteFailed` when the host
+    refuses to make it."""
     return f"{resolved_state_dir()}/channels/{secrets.token_hex(8)}"
 
 
@@ -217,6 +224,18 @@ def _close_fd(fd: int) -> None:
         pass
 
 
+@dataclass(frozen=True)
+class _Dismantled:
+    """What `dismantle` found (TASK-0046). `state` is the group as the kill ladder's last verify
+    read it, or `GroupState.ALIVE` when the ladder itself raised `ladder_error`, since the group
+    was then never verified gone. `close_error` is what closing the supervisor's pipe raised.
+    Each is `None` when nothing raised, and is the caller's to attach to what it raises."""
+
+    state: GroupState
+    ladder_error: Exception | None = None
+    close_error: Exception | None = None
+
+
 def dismantle(
     process: Process | None,
     *,
@@ -230,26 +249,43 @@ def dismantle(
     channel_namespace_fd: int | None = None,
     channel_directory_fd: int | None = None,
     placeholder_record: str | None = None,
-) -> GroupState:
+) -> _Dismantled:
     """Tear down what a jail made, and return what teardown found: the one cleanup `destroy_jail`
     and a failed `create_bwrap_jail` both run, so the two cannot disagree (TASK-0044).
 
     Once a process exists, it goes first: the verified kill ladder (`operations.destroy`, its
     post-KILL poll bounded by `kill_grace_s`), then the supervisor's pipe is closed. With no
-    process (a create that failed before its start) there is nothing to tear down and the result
+    process (a create that failed before its spawn) there is nothing to tear down and the state
     is `GroupState.GONE`. Then, whatever the ladder found, the supervisor script and the channel
     directory are removed and the namespace and channel directory fds closed, swallowing
     `OSError` from each, so a repeated call is safe; removing the script after a failed teardown
     is safe, since by then the supervisor has read it or never will (TASK-0012). The placeholder
-    record is released only when the result is `GONE`: removing a placeholder a jail still
+    record is released only when the state is `GONE`: removing a placeholder a jail still
     mounts over detaches that mount (TASK-0027), so a record a live jail holds is left for a
-    later sweep. Raises nothing; the caller decides what an `ALIVE` result becomes.
+    later sweep.
+
+    Raises nothing, so it never hides the error of a failed step that called it (TASK-0046): an
+    exception from the ladder makes the state `ALIVE` (the group was not verified gone), and it
+    and one from the close are returned on the `_Dismantled`, the rest of the cleanup still run.
+    The caller decides what they become: `create_bwrap_jail` adds each to the step's error as a
+    note, and raises `JailTeardownFailed` from that error on an `ALIVE` state; `destroy_jail`
+    raises `JailTeardownFailed` from the ladder's error on an `ALIVE` state, and swallows the
+    close's, as it does every other cleanup's.
     """
     state = GroupState.GONE
+    ladder_error: Exception | None = None
+    close_error: Exception | None = None
     if process is not None:
         deadline = time.monotonic() + kill_grace_s
-        state = run(operations.destroy(process, deadline=deadline), processes, supervisors)
-        supervisors.close(process.pid)
+        try:
+            state = run(operations.destroy(process, deadline=deadline), processes, supervisors)
+        except Exception as error:
+            state = GroupState.ALIVE
+            ladder_error = error
+        try:
+            supervisors.close(process.pid)
+        except Exception as error:
+            close_error = error
     if supervisor_script is not None:
         try:
             supervisor_script.unlink(missing_ok=True)
@@ -268,4 +304,4 @@ def dismantle(
             placeholders.release(placeholder_record)
         except OSError:
             pass  # left for the next jail's release to sweep
-    return state
+    return _Dismantled(state, ladder_error, close_error)

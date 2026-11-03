@@ -46,6 +46,7 @@ from brig.presentation.driver import run
 from brig.presentation.errors import (
     ChannelDirectoryCreateFailed,
     ChannelNamespaceNotFound,
+    JailSpawnFailed,
     JailTeardownFailed,
     PlaceholdersFailed,
     PolicyCwdOutsideRoots,
@@ -58,6 +59,7 @@ from brig.presentation.errors import (
     PolicyStdioInWritableRoot,
     PolicyStdioNotOwnFile,
     PolicyStdioThroughLink,
+    StateDirectoryWriteFailed,
 )
 from brig.presentation.jail import (
     CHANNEL_DIRECTORIES,
@@ -76,24 +78,35 @@ from brig.presentation.ports import (
 )
 
 
-def _supervisor_path() -> tuple[str, ...]:
+def _supervisor_path(state_dir: str) -> tuple[str, ...]:
     """Write the assembled supervisor (`infra.supervisor.assemble`) to a fresh file in brig's
-    state directory and return the argv that runs it. A new file per jail, so `destroy_jail`
-    deletes only its own (TASK-0001.21); the compile binds it back inside the state directory's
-    mask, so any policy reaches it (TASK-0019).
+    state directory, `state_dir`, and return the argv that runs it. A new file per jail, so
+    `destroy_jail` deletes only its own (TASK-0001.21); the compile binds it back inside the
+    state directory's mask, so any policy reaches it (TASK-0019).
 
     `-I` keeps `PYTHONPATH`, `PYTHONHOME` and user site-packages out of the supervisor, beside
     `link.py` giving it no environment of the caller's; it does nothing for `LD_PRELOAD`, which
     only the environment split keeps out.
+
+    Raises:
+        StateDirectoryWriteFailed: the host refused the file or its write; a file written in
+            part is removed first (TASK-0046).
     """
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".py",
-        prefix="brig-supervisor-",
-        delete=False,
-        dir=resolved_state_dir(),
-    ) as handle:
-        handle.write(assemble.assembled_source())
+    written: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".py",
+            prefix="brig-supervisor-",
+            delete=False,
+            dir=state_dir,
+        ) as handle:
+            written = handle.name
+            handle.write(assemble.assembled_source())
+    except OSError as error:
+        if written is not None:
+            Path(written).unlink(missing_ok=True)
+        raise StateDirectoryWriteFailed(state_dir) from error
     return (sys.executable, "-I", handle.name)
 
 
@@ -120,6 +133,8 @@ def _supervisors_for(
         PolicyStdioNotOwnFile: an existing stdio path is not a regular file the embedder owns.
         PolicyInterpreterUnreachable: the policy does not mount the interpreter the supervisor
             runs under, or a link on the way to it.
+        StateDirectoryWriteFailed: the host refused to make the state directory or its empty
+            directory, or to write the supervisor script (TASK-0046).
     """
     state_dir = resolved_state_dir()
     needed = (
@@ -191,8 +206,11 @@ def _supervisors_for(
     kinds = {path: found.kind for path, found in host.items()}
     for path, (kind, _) in _files.facts(bwrap.pin_candidates(policy)).items():
         kinds.setdefault(path, PathKind(kind))
-    empty_dir = str(_state_dir_mod.ensure_empty(Path(state_dir)))
-    supervisor_path = _supervisor_path()
+    try:
+        empty_dir = str(_state_dir_mod.ensure_empty(Path(state_dir)))
+    except OSError as error:
+        raise StateDirectoryWriteFailed(f"{state_dir}/empty") from error
+    supervisor_path = _supervisor_path(state_dir)
     mounts = bwrap.compile_mounts(
         policy,
         kinds,
@@ -257,23 +275,30 @@ def create_bwrap_jail(
         proc_root: Where to scan for the jail's PID 1; `/proc` except in a test.
 
     A failure cleans up through `dismantle`, the cleanup `destroy_jail` runs (TASK-0044), before
-    the exception propagates. Once the supervisor has started, that is the verified kill ladder
-    first, and the placeholders are released only if it reports the group gone; before the
-    start there is no process, and everything made (the script, the channel directory, the
-    placeholders) is removed (TASK-0012). Beside what is listed below, the policy refusals of
-    `_supervisors_for`, `StateDirectoryInvalid`, `JailSpawnFailed` from the driver (an
-    unopenable stdio path included, TASK-0028), and `ChannelNamespaceNotFound` from
-    `_namespace_fd_for` propagate. A jail whose command finished before its namespace was found
-    has no namespace fd (TASK-0001.30).
+    the exception propagates. Once the supervisor has been spawned, that is the verified kill
+    ladder first, and the placeholders are released only if it reports the group gone; a
+    supervisor port whose start spawned the supervisor and then failed hands it back on its
+    `JailSpawnFailed`, so it is torn down the same way (TASK-0046). Before the spawn there is no
+    process, and everything made (the script, the channel directory, the placeholders) is
+    removed (TASK-0012). The cleanup never hides the step's error: what its kill ladder or the
+    supervisor's close raised is added to that error as a note (TASK-0046). Beside what is
+    listed below, the policy refusals of `_supervisors_for`, `StateDirectoryInvalid`,
+    `StateDirectoryWriteFailed` (the host refused to make brig's state directory or its empty
+    directory, or to write the supervisor script, before anything started; TASK-0046), and
+    `ChannelNamespaceNotFound` from `_namespace_fd_for` propagate. A jail whose command finished
+    before its namespace was found has no namespace fd (TASK-0001.30).
 
     Raises:
+        JailSpawnFailed: the driver could not start the supervisor (an unopenable stdio path
+            included, TASK-0028); a supervisor it spawned before the start failed was torn
+            down first (TASK-0046).
         ChannelDirectoryCreateFailed: the host refused to create the channel
             directory, or to open it once made.
         PlaceholdersFailed: the host refused a directory for an absent write deny or mask, or
             brig's record of it (TASK-0027), before the start or once it had started.
-        JailTeardownFailed: a step failed once the supervisor had started, and the teardown
-            that followed still found its group alive; the step's own exception is the
-            `__cause__`.
+        JailTeardownFailed: a step failed once the supervisor had been spawned, and the
+            teardown that followed still found its group alive, or itself raised so the group
+            was never verified gone; the step's own exception is the `__cause__`.
     """
     if supervisors is not None:
         resolved_supervisors: SupervisorPort = supervisors
@@ -310,7 +335,11 @@ def create_bwrap_jail(
             except OSError as error:
                 raise ChannelDirectoryCreateFailed(str(channel_directory)) from error
         plan = bwrap.compile_run(command, env=env)
-        process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
+        try:
+            process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
+        except JailSpawnFailed as error:
+            process = error.process  # spawned before the start failed: torn down below
+            raise
         if record is not None:
             try:
                 placeholders.attach(record, process.pid)
@@ -319,7 +348,7 @@ def create_bwrap_jail(
         if channel_directory is not None:
             namespace_fd = _namespace_fd_for(process, proc_root)
     except BaseException as error:
-        state = dismantle(
+        dismantled = dismantle(
             process,
             supervisors=resolved_supervisors,
             processes=processes,
@@ -331,7 +360,11 @@ def create_bwrap_jail(
             channel_directory_fd=directory_fd,
             placeholder_record=record,
         )
-        if process is not None and state is not GroupState.GONE:
+        if dismantled.ladder_error is not None:
+            error.add_note(f"tearing the jail down after this raised {dismantled.ladder_error!r}")
+        if dismantled.close_error is not None:
+            error.add_note(f"closing the supervisor's pipe raised {dismantled.close_error!r}")
+        if process is not None and dismantled.state is not GroupState.GONE:
             raise JailTeardownFailed(process) from error
         raise
     return Jail(

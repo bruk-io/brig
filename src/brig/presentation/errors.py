@@ -182,17 +182,41 @@ class StateDirectoryInvalid(Exception):
         self.value = value
 
 
+class StateDirectoryWriteFailed(Exception):
+    """Raised when the host refused what brig makes in its own state directory (`BRIG_HOME`,
+    else `~/.brig`) before a jail starts: the directory itself, the empty read-only directory a
+    jail mounts over what it masks, or the jail's supervisor script (a full disk, a file size
+    limit, a permission, something already at the path). The host's `OSError` is the
+    `__cause__`; nothing was started, and a script written in part was removed (TASK-0046).
+
+    Args:
+        path: What could not be made or written: the state directory, or its empty directory.
+    """
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"could not make or write {path!r} in brig's state directory -- check its free "
+            "space, permissions and file size limit, and that its 'empty' directory holds "
+            "nothing, or set BRIG_HOME to an absolute path brig can write"
+        )
+        self.path = path
+
+
 class JailSpawnFailed(Exception):
     """Raised when a jail's supervisor could not be started (an unopenable stdio path
-    included).
+    included). A `SupervisorPort` raises it itself, with `process` set, when the supervisor
+    was spawned and a later step of its start failed (TASK-0046).
 
     Args:
         argv: The command the jail was to run.
+        process: The supervisor spawned before the start failed, which `create_bwrap_jail`
+            tears down before this propagates; `None` when nothing was spawned.
     """
 
-    def __init__(self, argv: tuple[str, ...]) -> None:
+    def __init__(self, argv: tuple[str, ...], process: Process | None = None) -> None:
         super().__init__(f"could not spawn jail process: {argv!r}")
         self.argv = argv
+        self.process = process
 
 
 class JailWaitTimedOut(Exception):
@@ -222,9 +246,12 @@ class JailExitUnknown(Exception):
 
 
 class JailTeardownFailed(Exception):
-    """Raised when a jail's process group was still alive after TERM, KILL and the grace poll:
-    by `destroy_jail`, and by `create_bwrap_jail` when a step after the start failed and the
-    teardown that followed could not end the jail (that step's error is the `__cause__`).
+    """Raised when a jail's process group was still alive after TERM, KILL and the grace poll,
+    or the teardown itself raised so the group could not be verified gone: by `destroy_jail`
+    (the teardown's own error, if any, is the `__cause__`), and by `create_bwrap_jail` when a
+    step after the spawn failed and the teardown that followed could not end the jail (that
+    step's error is the `__cause__`, with the teardown's own failure added to it as a note,
+    TASK-0046).
 
     Args:
         process: The jail's supervisor, whose group is still alive.

@@ -64,7 +64,8 @@ def reserve_channels(
     `Reservation.endpoint` into the command's argv (never env, old SPEC decision-184/186) and
     then pass these `Reservations` to `create_bwrap_jail`. `directories` names the channel
     directory; by default a fresh path under brig's state directory, whose resolution raises
-    `StateDirectoryInvalid` for a bad `BRIG_HOME`.
+    `StateDirectoryInvalid` for a bad `BRIG_HOME`, and `StateDirectoryWriteFailed` when the
+    host refuses to make it.
 
     Raises:
         ChannelNameRefused: a channel's name would escape or repeat in the channel
@@ -182,12 +183,15 @@ def destroy_jail(
     the supervisor's pipe, deletes the supervisor script and the channel directory, and closes
     the namespace and channel directory fds, swallowing `OSError` from each, so a repeated call
     is safe. Placeholders are released only once the group is verified gone, since removing one
-    a jail still mounts over detaches that mount (TASK-0027).
+    a jail still mounts over detaches that mount (TASK-0027). A failure to close the
+    supervisor's pipe is swallowed the same way: it says nothing of whether the group is gone.
 
     Raises:
-        JailTeardownFailed: the kill ladder's last verify still found the group alive.
+        JailTeardownFailed: the kill ladder's last verify still found the group alive, or the
+            ladder itself raised, so the group was never verified gone; then that error is the
+            `__cause__` (TASK-0046).
     """
-    state = dismantle(
+    dismantled = dismantle(
         jail.process,
         supervisors=supervisors if supervisors is not None else jail.supervisors,
         processes=processes,
@@ -200,8 +204,8 @@ def destroy_jail(
         channel_directory_fd=jail.channel_directory_fd,
         placeholder_record=jail.placeholders,
     )
-    if state is not GroupState.GONE:
-        raise JailTeardownFailed(jail.process)
+    if dismantled.state is not GroupState.GONE:
+        raise JailTeardownFailed(jail.process) from dismantled.ladder_error
 
 
 def interrupt_jail(jail: Jail) -> bool:

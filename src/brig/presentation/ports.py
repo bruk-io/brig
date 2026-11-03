@@ -58,7 +58,14 @@ class SupervisorPort(Protocol):
 
     def start(self, argv: tuple[str, ...], env: frozendict[str, str]) -> _ProcessIdentity:
         """Start the jail's supervisor with `argv` in `env` as its one command, and return the
-        supervisor's identity: the one process the host tracks."""
+        supervisor's identity: the one process the host tracks.
+
+        Raises:
+            OSError: the supervisor could not be started, and nothing was spawned.
+            JailSpawnFailed: the supervisor was spawned and a later step of the start failed;
+                its `process` is the spawned supervisor, which the caller tears down
+                (TASK-0046).
+        """
         ...
 
     def await_done(self, pid: int, deadline: float) -> ExitOutcome:

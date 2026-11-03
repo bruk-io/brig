@@ -16,6 +16,8 @@ from brig import (
     ChannelReady,
     ChannelRefused,
     ExitCodeUnknown,
+    JailSpawnFailed,
+    Process,
 )
 
 
@@ -103,9 +105,10 @@ class FakeSupervisors:
     `start` hands back an identity from `next_pid`, or raises `OSError` while `fail_start`
     (which the driver turns into `JailSpawnFailed`). While `fail_after_start`, `start` takes
     an identity from `next_pid`, records it in `spawned` (a supervisor that is now running),
-    and then fails. `await_done` reports `exit_code`, `None` while `expires` (a wait that timed
-    out), or `ExitCodeUnknown` while `done_unknown`. `close` records the pid, then raises
-    `OSError` while `fail_close`.
+    and then fails as the port says a start that spawned fails: `JailSpawnFailed` carrying
+    that supervisor (TASK-0046). `await_done` reports `exit_code`, `None` while `expires` (a
+    wait that timed out), or `ExitCodeUnknown` while `done_unknown`. `close` records the pid,
+    then raises `OSError` while `fail_close`.
     """
 
     exit_code: int = 0
@@ -126,7 +129,8 @@ class FakeSupervisors:
         identity.
 
         Raises:
-            OSError: `fail_start` or `fail_after_start` is set.
+            OSError: `fail_start` is set.
+            JailSpawnFailed: `fail_after_start` is set; its `process` is the one spawned.
         """
         self.started.append((argv, env))
         if self.fail_start:
@@ -135,7 +139,7 @@ class FakeSupervisors:
         self.next_pid += 1
         if self.fail_after_start:
             self.spawned.append(pid)
-            raise OSError(32, "fake supervisor: started, then its request could not be written")
+            raise JailSpawnFailed(argv, Process(pid=pid, pgid=pid))
         return _SupervisorIdentity(pid=pid, pgid=pid)
 
     def await_done(self, pid: int, deadline: float) -> int | None | ExitCodeUnknown:

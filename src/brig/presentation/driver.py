@@ -3,7 +3,9 @@ performs each effect a domain generator yields through a `ProcessPort` or `Super
 
 The driver exception boundary (`.claude/rules/driver-exception-boundary.md`): the arms that
 call `SupervisorPort.start` and `await_done` catch what was measured crossing them (`OSError`
-and `SupervisorSpawnError` from a start; `OSError` and `wire.WireError` from a read, TASK-0001.15).
+and `SupervisorSpawnError` from a start, the latter carrying the supervisor it spawned when the
+start failed after the spawn, TASK-0046; `OSError` and `wire.WireError` from a read,
+TASK-0001.15).
 The other ports return a value and never raise; one measured raising gets a wrapped arm too.
 """
 
@@ -46,7 +48,9 @@ def run[T](
     `supervisors`, and return its result.
 
     Raises:
-        JailSpawnFailed: a `StartSupervisedCommand`'s supervisor could not be started.
+        JailSpawnFailed: a `StartSupervisedCommand`'s supervisor could not be started; its
+            `process` is the supervisor when one was spawned before the start failed, for the
+            caller to tear down (TASK-0046). A port's own `JailSpawnFailed` passes through.
     """
     sent: Any = None
     effect = next(generator)
@@ -55,7 +59,10 @@ def run[T](
             case StartSupervisedCommand(argv=argv, env=env):
                 try:
                     supervisor = supervisors.start(argv, env)
-                except (SupervisorSpawnError, OSError) as exc:
+                except SupervisorSpawnError as exc:
+                    spawned = None if exc.spawned is None else Process(*exc.spawned)
+                    raise JailSpawnFailed(argv, spawned) from exc
+                except OSError as exc:
                     raise JailSpawnFailed(argv) from exc
                 sent = Process(pid=supervisor.pid, pgid=supervisor.pgid)
             case AwaitSupervisorDone(process=process, deadline=deadline):

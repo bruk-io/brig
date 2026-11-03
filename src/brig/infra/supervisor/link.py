@@ -34,15 +34,20 @@ glibc and Apple's libc, TASK-0014)."""
 
 
 class SupervisorSpawnError(Exception):
-    """Raised when the supervisor process itself could not be started.
+    """Raised when the supervisor process itself could not be started, or was spawned and a
+    later step of its start failed.
 
     Args:
         argv: The command that could not be run.
+        spawned: The `(pid, pgid)` of a supervisor that was spawned before the start failed:
+            still this process's child, unreaped and possibly running, for the caller to tear
+            down and reap; `None` when nothing was spawned.
     """
 
-    def __init__(self, argv: tuple[str, ...]) -> None:
+    def __init__(self, argv: tuple[str, ...], spawned: tuple[int, int] | None = None) -> None:
         super().__init__(f"could not start the supervisor: {argv!r}")
         self.argv = argv
+        self.spawned = spawned
 
 
 @dataclass(frozen=True)
@@ -216,9 +221,12 @@ def _start(
     `command_env` goes only into the request; the supervisor runs in `_SUPERVISOR_ENV`.
 
     Raises:
-        SupervisorSpawnError: `supervisor_argv` could not be started, or started
-            and then died (or otherwise closed its own `wire.REQUEST_FD`) before
-            the one exec request could be written to it.
+        SupervisorSpawnError: `supervisor_argv` could not be started (`spawned` is `None`), or
+            it was spawned and then its pumps could not start, or the one exec request could
+            not be written to it (it died, or otherwise closed its own `wire.REQUEST_FD`).
+            Then `spawned` is its `(pid, pgid)`: it is neither signalled nor reaped here, since
+            only the caller's verified teardown can say its group is gone (TASK-0046), and
+            every fd this start opened is closed.
     """
     jail_ends, flows = _plumb(stdio)
     request_read_fd, request_write_fd = os.pipe()
@@ -242,19 +250,23 @@ def _start(
             os.close(fd)
     os.close(request_read_fd)
     os.close(events_write_fd)
-    pumps = Pumps(flows)
+    pumps: Pumps | None = None
     try:
+        pumps = Pumps(flows)
         with os.fdopen(request_write_fd, "w") as request_pipe:
             request_pipe.write(wire.encode_exec_request(command_argv, command_env))
-    except OSError as exc:
-        # The supervisor is gone (the write hit a closed pipe): reap it, best-effort.
+    except (OSError, RuntimeError) as exc:
+        # Spawned, then failed: a thread that could not start (`RuntimeError`), or a request
+        # that hit a pipe its reader closed. Left for the caller's verified teardown.
         os.close(events_read_fd)
-        try:
-            os.waitpid(spawned.pid, 0)
-        except OSError:
-            pass
-        pumps.finish(time.monotonic())
-        raise SupervisorSpawnError(supervisor_argv) from exc
+        if pumps is None:
+            os.close(request_write_fd)
+            for flow in flows:
+                os.close(flow.source)
+                os.close(flow.sink)
+        else:
+            pumps.finish(time.monotonic())
+        raise SupervisorSpawnError(supervisor_argv, (spawned.pid, spawned.pgid)) from exc
     return Supervisor(pid=spawned.pid, pgid=spawned.pgid, events_fd=events_read_fd, pumps=pumps)
 
 
@@ -298,7 +310,8 @@ class LiveSupervisor:
 
     def start(self, argv: tuple[str, ...], env: Mapping[str, str]) -> Supervisor:
         """Start the supervisor with `argv` in `env` as its one command; `_start` raises
-        `SupervisorSpawnError` if it cannot."""
+        `SupervisorSpawnError` if it cannot, with the supervisor it spawned, if any, for the
+        caller to tear down."""
         supervisor = _start(self._supervisor_argv, argv, env, self._stdio)
         self._supervisor = supervisor
         return supervisor
