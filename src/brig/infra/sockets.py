@@ -1,6 +1,7 @@
-"""Channels on the real host: the channel directory's creation and removal, finding and holding
-the jail's PID namespace, the verified connect that says a channel is ready (decision-0005), and
-signalling the jail's PID 1. Plain data in and out (decision-0001 rule 1).
+"""Channels on the real host: the channel directory's creation, the fd held on it, and its
+removal, finding and holding the jail's PID namespace, the verified connect beneath that fd that
+says a channel is ready (decision-0005, TASK-0045), and signalling the jail's PID 1. Plain data
+in and out (decision-0001 rule 1).
 """
 
 import errno
@@ -54,7 +55,8 @@ class _Verified:
 
 @dataclass(frozen=True)
 class ChannelNotReady:
-    """The connect failed: nothing listens there yet. Transient."""
+    """Nothing there takes a connection yet: no socket at the name, or the connect failed (a
+    full backlog included). Transient."""
 
 
 @dataclass(frozen=True)
@@ -68,7 +70,8 @@ class ChannelRefused:
 
 
 PEER_OUTSIDE_JAIL = "peer_outside_jail"
-"""The listener's PID namespace is not the jail's; a nested one is refused too."""
+"""The listener's PID namespace is not the jail's, a nested one included; or the channel's name
+is a symbolic link, refused before any connect, since what it names can be anywhere."""
 
 PEER_LOOKUP_FAILED = "peer_lookup_failed"
 """The listener could not be identified: an `OSError` on its way, or the pid and the pidfd
@@ -216,21 +219,32 @@ def _signal_checked(bwrap_pid: int, child: int, sig: int, proc_root: str) -> boo
 
 
 def channel_ready(
-    path: str, jail_namespace_fd: int, *, so_peerpidfd: int = SO_PEERPIDFD
+    directory_fd: int, name: str, jail_namespace_fd: int, *, so_peerpidfd: int = SO_PEERPIDFD
 ) -> ChannelReady | ChannelNotReady | ChannelRefused:
-    """Connect to `path` once and verify that the process that called `listen()` on the socket
-    that answered is in the PID namespace `jail_namespace_fd` names (decision-0005).
+    """Connect once to the socket `name` names directly beneath the directory `directory_fd`
+    holds, and verify that the process that called `listen()` on the socket that answered is in
+    the PID namespace `jail_namespace_fd` names (decision-0005).
 
-    `ChannelReady` carries the verified connection, open, and its receiver owns it: readiness is
-    a property of that one connection, and a later dial of `path` follows whatever the jail has
-    put there since, a symbolic link to a host socket included (TASK-0001.34). Every other
-    outcome, and the one raise, closes the connection first, so only a ready attempt leaves a
-    socket open. The socket is blocking and, like every socket Python makes, not inherited by a
-    process spawned later.
+    The name is opened beneath the held directory with `O_PATH | O_NOFOLLOW`, so the lookup
+    follows no link and no path the jail can change on the way (TASK-0045). What it opens must
+    be a socket: a symbolic link is `PEER_OUTSIDE_JAIL` without any connect, since a link can
+    name a socket anywhere the embedder can reach and dialling it would reach that socket as
+    the embedder; anything else (a file, a directory, nothing at all) is `ChannelNotReady`. The
+    connect goes to that very inode through `/proc/self/fd/N`, and it never blocks: a listener
+    whose backlog is full is `ChannelNotReady` at once (`EAGAIN`), so the caller's deadline
+    holds however the jail listens.
 
-    A failed connect is `ChannelNotReady`. The peer's pid comes from `SO_PEERCRED`, its pidfd
-    from `SO_PEERPIDFD`, its namespace from `/proc/<pid>/ns/pid`, and the pidfd's `fdinfo` must
-    name the same pid, so a pid reused in between cannot pass. `ENOPROTOOPT` from
+    `ChannelReady` carries the verified connection, open and set back to blocking, and its
+    receiver owns it: readiness is a property of that one connection, and a later dial of the
+    path follows whatever the jail has put there since, a symbolic link to a host socket
+    included (TASK-0001.34). Every other outcome, and the one raise, closes the connection
+    first, so only a ready attempt leaves a socket open; the `O_PATH` fd is closed on every
+    path. Like every socket Python makes, the connection is not inherited by a process spawned
+    later.
+
+    A failed open or connect is `ChannelNotReady`. The peer's pid comes from `SO_PEERCRED`, its
+    pidfd from `SO_PEERPIDFD`, its namespace from `/proc/<pid>/ns/pid`, and the pidfd's
+    `fdinfo` must name the same pid, so a pid reused in between cannot pass. `ENOPROTOOPT` from
     `SO_PEERPIDFD` is `KERNEL_UNSUPPORTED`; any other `OSError` (measured: `EINVAL` from a
     listener that exited while its child kept the socket) is `PEER_LOOKUP_FAILED`.
 
@@ -239,12 +253,28 @@ def channel_ready(
     `so_peerpidfd` is a test's seam: an option number no kernel defines fails as a kernel
     without `SO_PEERPIDFD` would (TASK-0001.27).
     """
-    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        verdict = _verify(connection, path, jail_namespace_fd, so_peerpidfd)
-    except BaseException:
-        connection.close()
-        raise
+        target = os.open(name, os.O_PATH | os.O_NOFOLLOW, dir_fd=directory_fd)
+    except OSError:
+        return ChannelNotReady()
+    try:
+        kind = os.fstat(target).st_mode
+        if stat.S_ISLNK(kind):
+            return ChannelRefused(PEER_OUTSIDE_JAIL)
+        if not stat.S_ISSOCK(kind):
+            return ChannelNotReady()
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            verdict = _verify(
+                connection, f"/proc/self/fd/{target}", jail_namespace_fd, so_peerpidfd
+            )
+            if isinstance(verdict, _Verified):
+                connection.setblocking(True)
+        except BaseException:
+            connection.close()
+            raise
+    finally:
+        os.close(target)
     if isinstance(verdict, _Verified):
         return ChannelReady(connection)
     connection.close()
@@ -252,12 +282,14 @@ def channel_ready(
 
 
 def _verify(
-    connection: socket.socket, path: str, jail_namespace_fd: int, so_peerpidfd: int
+    connection: socket.socket, target: str, jail_namespace_fd: int, so_peerpidfd: int
 ) -> _Verified | ChannelNotReady | ChannelRefused:
-    """`channel_ready`'s connect and check on `connection`, which it neither keeps nor closes.
-    The one raise is `OSError` reading `jail_namespace_fd`."""
+    """`channel_ready`'s connect to `target` and check on `connection`, which it neither keeps
+    nor closes. The connect is non-blocking: any `OSError` from it, `EAGAIN` from a full backlog
+    included, is `ChannelNotReady`. The one raise is `OSError` reading `jail_namespace_fd`."""
+    connection.setblocking(False)
     try:
-        connection.connect(path)
+        connection.connect(target)
     except OSError:
         return ChannelNotReady()
     try:
@@ -299,6 +331,13 @@ def create(path: str) -> None:
     directory = Path(path)
     directory.mkdir(parents=True, exist_ok=True)
     directory.chmod(stat.S_IRWXU)
+
+
+def open_directory(path: str) -> int:
+    """An `O_PATH` fd on the directory `path`, opened through no link at its last component,
+    for `channel_ready` to open each channel's name beneath (TASK-0045). The caller owns it and
+    closes it; like every fd Python opens, it is not inherited. An `OSError` propagates."""
+    return os.open(path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW)
 
 
 def remove(path: str) -> None:

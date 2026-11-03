@@ -122,14 +122,14 @@ CHANNEL_DIRECTORIES: ChannelDirectoryPort = _RealChannelDirectories()
 
 
 def _channel_ready(
-    path: str, jail_namespace_fd: int
+    directory_fd: int, name: str, jail_namespace_fd: int
 ) -> ChannelReady | ChannelNotReady | ChannelRefused:
     """infra's `channel_ready`, its values translated into this port's; a ready outcome's
     connection passes through, still open.
 
     `isinstance`, not `match`: pypeeker cannot resolve a class pattern reached through a module
     alias (`case _sockets.X()`), and reports `X` as unused (measured)."""
-    outcome = _sockets.channel_ready(path, jail_namespace_fd)
+    outcome = _sockets.channel_ready(directory_fd, name, jail_namespace_fd)
     if isinstance(outcome, _sockets.ChannelReady):
         return ChannelReady(outcome.connection)
     if isinstance(outcome, _sockets.ChannelNotReady):
@@ -143,7 +143,9 @@ def _channel_ready(
 class _RealChannelReadiness:
     """`_channel_ready` as the default `ChannelReadinessPort`."""
 
-    ready: Callable[[str, int], ChannelReady | ChannelNotReady | ChannelRefused] = _channel_ready
+    ready: Callable[[int, str, int], ChannelReady | ChannelNotReady | ChannelRefused] = (
+        _channel_ready
+    )
 
 
 CHANNEL_READINESS: ChannelReadinessPort = _RealChannelReadiness()
@@ -190,8 +192,10 @@ class Jail:
     `channel_namespace_fd` is an open fd on the jail's PID namespace that readiness compares a
     peer against, held so its inode cannot be recycled (decision-0005 item 1); `None` with no
     channel, or with `channel_directory` set when the command had finished before the namespace
-    was found. `mounts` is what the jail was compiled with and `report` its ceiling per claim
-    (decision-0008).
+    was found. `channel_directory_fd` is an fd on the channel directory, opened right after it
+    was made and held for the jail's lifetime, beneath which readiness opens each channel's name
+    (TASK-0045); `None` with no channel. `mounts` is what the jail was compiled with and
+    `report` its ceiling per claim (decision-0008).
     """
 
     process: Process
@@ -199,12 +203,13 @@ class Jail:
     supervisor_script: Path | None = None
     channel_directory: Path | None = None
     channel_namespace_fd: int | None = None
+    channel_directory_fd: int | None = None
     mounts: tuple[bwrap.Mount, ...] = ()
     placeholders: str | None = None
     report: frozendict[Claim, Grade] = frozendict()
 
 
-def _close_namespace_fd(fd: int) -> None:
+def _close_fd(fd: int) -> None:
     """Close `fd`, swallowing `OSError`: teardown cleanup never raises past its verify."""
     try:
         os.close(fd)
@@ -223,6 +228,7 @@ def dismantle(
     supervisor_script: Path | None = None,
     channel_directory: Path | None = None,
     channel_namespace_fd: int | None = None,
+    channel_directory_fd: int | None = None,
     placeholder_record: str | None = None,
 ) -> GroupState:
     """Tear down what a jail made, and return what teardown found: the one cleanup `destroy_jail`
@@ -232,12 +238,12 @@ def dismantle(
     post-KILL poll bounded by `kill_grace_s`), then the supervisor's pipe is closed. With no
     process (a create that failed before its start) there is nothing to tear down and the result
     is `GroupState.GONE`. Then, whatever the ladder found, the supervisor script and the channel
-    directory are removed and the namespace fd closed, swallowing `OSError` from each, so a
-    repeated call is safe; removing the script after a failed teardown is safe, since by then the
-    supervisor has read it or never will (TASK-0012). The placeholder record is released only
-    when the result is `GONE`: removing a placeholder a jail still mounts over detaches that
-    mount (TASK-0027), so a record a live jail holds is left for a later sweep. Raises nothing;
-    the caller decides what an `ALIVE` result becomes.
+    directory are removed and the namespace and channel directory fds closed, swallowing
+    `OSError` from each, so a repeated call is safe; removing the script after a failed teardown
+    is safe, since by then the supervisor has read it or never will (TASK-0012). The placeholder
+    record is released only when the result is `GONE`: removing a placeholder a jail still
+    mounts over detaches that mount (TASK-0027), so a record a live jail holds is left for a
+    later sweep. Raises nothing; the caller decides what an `ALIVE` result becomes.
     """
     state = GroupState.GONE
     if process is not None:
@@ -254,8 +260,9 @@ def dismantle(
             directories.remove(str(channel_directory))
         except OSError:
             pass
-    if channel_namespace_fd is not None:
-        _close_namespace_fd(channel_namespace_fd)
+    for fd in (channel_namespace_fd, channel_directory_fd):
+        if fd is not None:
+            _close_fd(fd)
     if state is GroupState.GONE and placeholder_record is not None:
         try:
             placeholders.release(placeholder_record)

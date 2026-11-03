@@ -52,6 +52,20 @@ pytestmark = pytest.mark.skipif(
     "reason -- this is not what AC#5 pins",
 )
 
+
+def _channel_ready(
+    path: str, namespace_fd: int, **seams: int
+) -> sockets.ChannelReady | sockets.ChannelNotReady | sockets.ChannelRefused:
+    """infra's `channel_ready` for the socket at `path`, through an fd on its directory held
+    for this one call, the way a jail holds its channel directory's (TASK-0045); the fd is
+    closed again before this returns or raises."""
+    directory_fd = sockets.open_directory(os.path.dirname(path))
+    try:
+        return sockets.channel_ready(directory_fd, os.path.basename(path), namespace_fd, **seams)
+    finally:
+        os.close(directory_fd)
+
+
 _LISTENER = r"""
 import socket, sys
 listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -115,7 +129,7 @@ def test_a_kernel_without_so_peerpidfd_refuses_with_a_typed_reason() -> None:
         # platform.
         placeholder_fd = os.open(os.devnull, os.O_RDONLY)
         try:
-            outcome = sockets.channel_ready(
+            outcome = _channel_ready(
                 listener_path, placeholder_fd, so_peerpidfd=_NO_REAL_KERNEL_DEFINES_THIS
             )
         finally:
@@ -155,7 +169,7 @@ def test_the_real_so_peerpidfd_default_does_not_report_kernel_unsupported() -> N
         # the option) or some other, non-kernel refusal; never `KERNEL_UNSUPPORTED`.
         namespace_fd = os.open(f"/proc/{os.getpid()}/ns/pid", os.O_RDONLY)
         try:
-            outcome = sockets.channel_ready(listener_path, namespace_fd)
+            outcome = _channel_ready(listener_path, namespace_fd)
         finally:
             os.close(namespace_fd)
             listener.kill()

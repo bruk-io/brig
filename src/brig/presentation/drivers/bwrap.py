@@ -240,7 +240,9 @@ def create_bwrap_jail(
         env_policy: The environment allow-list.
         channels: What `reserve_channels` returned for this jail. Its channel directory is
             created here, private to the owning user, and bound writable into the jail; it is
-            never put in `env` (old SPEC decision-184/186).
+            never put in `env` (old SPEC decision-184/186). An fd on it is opened as soon as it
+            is made and held on the `Jail` for readiness to open each channel's name beneath
+            (TASK-0045).
         cwd: The command's working directory, inside a root of `policy`; the embedder's own
             when unset.
         stdio: Where the command's fd 0, 1 and 2 are pumped from and to; the embedder's own by
@@ -266,7 +268,7 @@ def create_bwrap_jail(
 
     Raises:
         ChannelDirectoryCreateFailed: the host refused to create the channel
-            directory.
+            directory, or to open it once made.
         PlaceholdersFailed: the host refused a directory for an absent write deny or mask, or
             brig's record of it (TASK-0027), before the start or once it had started.
         JailTeardownFailed: a step failed once the supervisor had started, and the teardown
@@ -288,6 +290,7 @@ def create_bwrap_jail(
         else None
     )
     created: Path | None = None
+    directory_fd: int | None = None
     namespace_fd: int | None = None
     record: str | None = None
     process: Process | None = None
@@ -302,6 +305,10 @@ def create_bwrap_jail(
             except OSError as error:
                 raise ChannelDirectoryCreateFailed(str(channel_directory)) from error
             created = channel_directory
+            try:
+                directory_fd = _sockets.open_directory(str(channel_directory))
+            except OSError as error:
+                raise ChannelDirectoryCreateFailed(str(channel_directory)) from error
         plan = bwrap.compile_run(command, env=env)
         process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
         if record is not None:
@@ -321,6 +328,7 @@ def create_bwrap_jail(
             supervisor_script=supervisor_script,
             channel_directory=created,
             channel_namespace_fd=namespace_fd,
+            channel_directory_fd=directory_fd,
             placeholder_record=record,
         )
         if process is not None and state is not GroupState.GONE:
@@ -332,6 +340,7 @@ def create_bwrap_jail(
         supervisor_script=supervisor_script,
         channel_directory=created,
         channel_namespace_fd=namespace_fd,
+        channel_directory_fd=directory_fd,
         mounts=mounts,
         placeholders=record,
         report=(

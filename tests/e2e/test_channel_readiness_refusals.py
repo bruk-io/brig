@@ -42,6 +42,20 @@ pytestmark = pytest.mark.skipif(
     ),
 )
 
+
+def _channel_ready(
+    path: str, namespace_fd: int, **seams: int
+) -> sockets.ChannelReady | sockets.ChannelNotReady | sockets.ChannelRefused:
+    """infra's `channel_ready` for the socket at `path`, through an fd on its directory held
+    for this one call, the way a jail holds its channel directory's (TASK-0045); the fd is
+    closed again before this returns or raises."""
+    directory_fd = sockets.open_directory(os.path.dirname(path))
+    try:
+        return sockets.channel_ready(directory_fd, os.path.basename(path), namespace_fd, **seams)
+    finally:
+        os.close(directory_fd)
+
+
 _LISTENER = r"""
 import socket, sys
 listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -184,7 +198,7 @@ def test_a_peer_in_the_same_namespace_reads_ready(peer: _Peer) -> None:
     """
     namespace_fd = _own_namespace_fd()
     try:
-        outcome = sockets.channel_ready(peer.path, namespace_fd)
+        outcome = _channel_ready(peer.path, namespace_fd)
     finally:
         os.close(namespace_fd)
 
@@ -207,7 +221,7 @@ def test_a_refused_connection_is_closed_before_the_refusal_returns(peer: _Peer) 
     other = _DifferentNamespace()
     try:
         before = _open_fds()
-        outcome = sockets.channel_ready(peer.path, other.fd)
+        outcome = _channel_ready(peer.path, other.fd)
         after = _open_fds()
     finally:
         other.close()
@@ -223,7 +237,7 @@ def test_a_connect_that_fails_leaves_no_socket_open(tmp_path: Path) -> None:
     namespace_fd = _own_namespace_fd()
     try:
         before = _open_fds()
-        outcome = sockets.channel_ready(str(tmp_path / "never-created"), namespace_fd)
+        outcome = _channel_ready(str(tmp_path / "never-created"), namespace_fd)
         after = _open_fds()
     finally:
         os.close(namespace_fd)
@@ -243,7 +257,7 @@ def test_the_one_raise_closes_the_connection_too(peer: _Peer) -> None:
     before = _open_fds()
 
     with pytest.raises(OSError):
-        sockets.channel_ready(peer.path, not_open)
+        _channel_ready(peer.path, not_open)
 
     assert _open_fds() == before
 
@@ -254,7 +268,7 @@ def test_a_peer_in_a_different_namespace_is_refused(peer: _Peer) -> None:
     """
     other = _DifferentNamespace()
     try:
-        outcome = sockets.channel_ready(peer.path, other.fd)
+        outcome = _channel_ready(peer.path, other.fd)
     finally:
         other.close()
 
@@ -267,7 +281,7 @@ def test_channel_ready_never_raises_for_a_path_with_no_listener(tmp_path: Path) 
     """
     namespace_fd = _own_namespace_fd()
     try:
-        outcome = sockets.channel_ready(str(tmp_path / "never-created"), namespace_fd)
+        outcome = _channel_ready(str(tmp_path / "never-created"), namespace_fd)
     finally:
         os.close(namespace_fd)
 
@@ -302,7 +316,7 @@ def test_a_reaped_listen_caller_refuses_rather_than_raising(tmp_path: Path) -> N
 
     namespace_fd = _own_namespace_fd()
     try:
-        outcome = sockets.channel_ready(listener_path, namespace_fd)
+        outcome = _channel_ready(listener_path, namespace_fd)
     finally:
         os.close(namespace_fd)
         caller.stdout.close()

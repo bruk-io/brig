@@ -67,7 +67,7 @@ def test_a_reservation_reaches_the_command_through_argv_and_never_through_env(
     )
     destroy_jail(jail, processes=processes, supervisors=supervisors, directories=directories)
 
-    assert reservation.endpoint == "/fake/state/channels/0001/ctl"
+    assert reservation.endpoint == f"{directories.path}/ctl"
     assert directories.allocated == 1
     [(argv, env)] = supervisors.started
     assert argv == command

@@ -3,13 +3,13 @@ public API, with the world faked at infra's edge, the polling loop retries a cha
 that is not ready yet, stops the moment it is ready or refused, and reports the last
 "not ready" once its own deadline passes.
 
-`FakeChannelReadiness` scripts the sequence and records every `(path,
+`FakeChannelReadiness` scripts the sequence and records every `(directory_fd, name,
 jail_namespace_fd)` it was asked about, so each assertion reads exactly what brig
 asked the world. The `Jail` is built directly, the way
 `tests/e2e/test_processes_gateway.py` builds one, rather than through
 `create_bwrap_jail`: this layer is the loop's own logic, and a `Jail` built by hand
-is the shortest path to a fabricated `channel_namespace_fd` -- no real socket, no
-real `/proc`, and no real bwrap is involved in any test here.
+is the shortest path to a fabricated `channel_namespace_fd` and `channel_directory_fd` -- no
+real socket, no real `/proc`, and no real bwrap is involved in any test here.
 """
 
 from dataclasses import dataclass
@@ -32,10 +32,13 @@ from brig import (
 )
 
 _NAMESPACE_FD = 7
-"""The fd a test's own `Jail` carries. The fake never dereferences it, so any number
+"""The namespace fd a test's own `Jail` carries. The fake never dereferences it, so any number
 works; naming it once makes "the jail's own fd reached every attempt" what the
 assertions read.
 """
+
+_DIRECTORY_FD = 8
+"""The channel directory fd a test's own `Jail` carries, never dereferenced either."""
 
 
 def _jail(namespace_fd: int | None = _NAMESPACE_FD) -> Jail:
@@ -50,6 +53,7 @@ def _jail(namespace_fd: int | None = _NAMESPACE_FD) -> Jail:
         process=cast(Any, _FabricatedProcess(pid=4242, pgid=4242)),
         supervisors=FakeSupervisors(),
         channel_namespace_fd=namespace_fd,
+        channel_directory_fd=_DIRECTORY_FD,
     )
 
 
@@ -119,8 +123,7 @@ def test_the_loop_keeps_asking_until_the_channel_reads_ready(
     try:
         assert isinstance(outcome, ChannelReady)
         assert len(readiness.asked) == len(outcomes)
-        assert {path for path, _fd in readiness.asked} == {reservation.bound_path}
-        assert {fd for _path, fd in readiness.asked} == {_NAMESPACE_FD}
+        assert set(readiness.asked) == {(_DIRECTORY_FD, reservation.name, _NAMESPACE_FD)}
     finally:
         readiness.close()
         for connection in readiness.handed_out:

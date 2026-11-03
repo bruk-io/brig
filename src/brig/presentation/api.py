@@ -92,6 +92,12 @@ def await_channel_ready(
     """Poll a verified connect to `reservation`'s channel (decision-0005) until it reads ready or
     refused, or `timeout_s` passes, and return the last outcome.
 
+    Each attempt opens `reservation.name` beneath the fd `jail` holds on its own channel
+    directory, through no link, and connects without blocking, so no attempt outlasts the
+    deadline by more than its own few reads, however the jail listens; a symbolic link at the
+    name is refused as `PEER_OUTSIDE_JAIL` without the embedder dialling what it names
+    (TASK-0045).
+
     `ChannelReady` carries the verified connection, open: the embedder uses it, owns it and
     closes it, and never dials `reservation.bound_path` itself, since the jail can swap its
     socket for a symbolic link to a host socket once readiness has passed (TASK-0001.34). Only
@@ -107,18 +113,20 @@ def await_channel_ready(
 
     Raises:
         ValueError: the jail declared no channel (`channel_namespace_fd` and
-            `channel_directory` are both `None`).
+            `channel_directory` are both `None`), or holds no `channel_directory_fd`.
     """
     if jail.channel_namespace_fd is None and jail.channel_directory is not None:
         return ChannelJailFinished()
-    if jail.channel_namespace_fd is None:
+    if jail.channel_namespace_fd is None or jail.channel_directory_fd is None:
         raise ValueError(
-            "jail declared no channel: await_channel_ready has no namespace to "
-            "verify a peer against"
+            "jail declared no channel: await_channel_ready has no channel directory to open "
+            "the reservation beneath, or no namespace to verify a peer against"
         )
     deadline = time.monotonic() + timeout_s
     while True:
-        outcome = readiness.ready(reservation.bound_path, jail.channel_namespace_fd)
+        outcome = readiness.ready(
+            jail.channel_directory_fd, reservation.name, jail.channel_namespace_fd
+        )
         if not isinstance(outcome, ChannelNotReady):
             return outcome
         if processes.peek(jail.process.pid) is not None:
@@ -172,9 +180,9 @@ def destroy_jail(
     Runs `dismantle`, the cleanup a failed `create_bwrap_jail` runs too (TASK-0044):
     `kill_grace_s` bounds the post-KILL rung's poll; then, whatever the ladder found, it closes
     the supervisor's pipe, deletes the supervisor script and the channel directory, and closes
-    the namespace fd, swallowing `OSError` from each, so a repeated call is safe. Placeholders
-    are released only once the group is verified gone, since removing one a jail still mounts
-    over detaches that mount (TASK-0027).
+    the namespace and channel directory fds, swallowing `OSError` from each, so a repeated call
+    is safe. Placeholders are released only once the group is verified gone, since removing one
+    a jail still mounts over detaches that mount (TASK-0027).
 
     Raises:
         JailTeardownFailed: the kill ladder's last verify still found the group alive.
@@ -189,6 +197,7 @@ def destroy_jail(
         supervisor_script=jail.supervisor_script,
         channel_directory=jail.channel_directory,
         channel_namespace_fd=jail.channel_namespace_fd,
+        channel_directory_fd=jail.channel_directory_fd,
         placeholder_record=jail.placeholders,
     )
     if state is not GroupState.GONE:

@@ -67,7 +67,7 @@ model {
     // presentation -> infra (rule 1: presentation knows infra)
     api -> sockets 'interrupts the jail\'s PID 1 through'
     bwrapDriver -> files 'looks up the policy\'s host facts through'
-    bwrapDriver -> sockets 'finds the jail\'s PID namespace through'
+    bwrapDriver -> sockets 'opens the channel directory\'s fd, and finds the jail\'s PID namespace, through'
     bwrapDriver -> stateDir 'makes the empty read-only directory through'
     bwrapDriver -> supervisorLink 'assembles the supervisor file, and builds the live supervisor, with'
     driver -> supervisorLink 'catches start and wire failures from'

@@ -99,7 +99,9 @@ class ChannelReadinessRefusal(Enum):
 
     PEER_OUTSIDE_JAIL = "peer_outside_jail"
     """The listener's PID namespace is not the jail's own; a nested one is refused too
-    (strict equality, decision-0005 item 2)."""
+    (strict equality, decision-0005 item 2). A symbolic link at the channel's name is refused
+    so too, before any connect: what it names can be any socket the embedder can reach
+    (TASK-0045)."""
 
     PEER_LOOKUP_FAILED = "peer_lookup_failed"
     """The listener could not be identified: an `OSError` reading its pidfd or namespace, or
@@ -129,7 +131,8 @@ class ChannelReady:
 
 @dataclass(frozen=True)
 class ChannelNotReady:
-    """Nothing is listening at the channel's path yet: transient, worth polling."""
+    """Nothing at the channel's name takes a connection yet (no socket there, or a listener
+    whose backlog is full): transient, worth polling."""
 
 
 @dataclass(frozen=True)
@@ -151,12 +154,14 @@ class ChannelReadinessPort(Protocol):
     """What a driver needs from infra to verify a channel is ready (decision-0005)."""
 
     def ready(
-        self, path: str, jail_namespace_fd: int
+        self, directory_fd: int, name: str, jail_namespace_fd: int
     ) -> ChannelReady | ChannelNotReady | ChannelRefused:
-        """Connect to `path` once and verify the listener is in the PID namespace
-        `jail_namespace_fd` names. `ChannelReady` carries that connection, open, for the caller
-        to own; every other outcome has closed it. Every outcome is returned; only a
-        `jail_namespace_fd` that is not open raises `OSError`, its connection closed too."""
+        """Open `name` beneath the channel directory `directory_fd` holds, through no link,
+        connect once to the socket it is, without blocking, and verify the listener is in the
+        PID namespace `jail_namespace_fd` names. A link there is refused without a connect
+        (TASK-0045). `ChannelReady` carries that connection, open, for the caller to own; every
+        other outcome has closed it. Every outcome is returned; only a `jail_namespace_fd` that
+        is not open raises `OSError`, its connection closed too."""
         ...
 
 

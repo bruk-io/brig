@@ -4,8 +4,11 @@ public API (rule 4), so each satisfies its port structurally.
 """
 
 import os
+import secrets
+import shutil
 import signal
 import socket
+import tempfile
 from dataclasses import dataclass, field
 
 from brig import (
@@ -130,14 +133,22 @@ class FakeSupervisors:
         self.closed.append(pid)
 
 
+def _throwaway_channel_directory() -> str:
+    """A fresh, not yet made path under one throwaway directory in the system's temp space."""
+    return os.path.join(tempfile.gettempdir(), "brig-fake-channels", secrets.token_hex(8))
+
+
 @dataclass
 class FakeChannelDirectories:
     """A fake `ChannelDirectoryPort`: `allocate` hands back `path` and counts itself; `create`
-    and `remove` record the path; while `fail_create`, `create` raises `OSError` and records
-    nothing. Touches no filesystem.
+    makes `path` for real and records it, since `create_bwrap_jail` holds an fd on the
+    directory it made (TASK-0045); `remove` records the path and removes it again; while
+    `fail_create`, `create` raises `OSError` and makes and records nothing. By default `path`
+    is a fresh name under a throwaway directory in the system's temp space; a test that names
+    its own `path` must not let a create reach it unless it can be made.
     """
 
-    path: str = "/fake/state/channels/0001"
+    path: str = field(default_factory=_throwaway_channel_directory)
     fail_create: bool = False
     allocated: int = 0
     created: list[str] = field(default_factory=list)
@@ -149,18 +160,21 @@ class FakeChannelDirectories:
         return self.path
 
     def create(self, path: str) -> None:
-        """Record `path`; raise `OSError` while `fail_create`, recording nothing.
+        """Make `path` and record it; raise `OSError` while `fail_create`, making and recording
+        nothing.
 
         Raises:
             OSError: `fail_create` is set.
         """
         if self.fail_create:
             raise OSError(28, "fake host: no space left on device")
+        os.makedirs(path, mode=0o700, exist_ok=True)
         self.created.append(path)
 
     def remove(self, path: str) -> None:
-        """Record `path`."""
+        """Record `path` and remove it, and whatever is in it, if it is there."""
         self.removed.append(path)
+        shutil.rmtree(path, ignore_errors=True)
 
 
 @dataclass
@@ -203,7 +217,8 @@ class FakeChannelReadiness:
     """A fake `ChannelReadinessPort`: `ready` records what it was asked and answers with the
     next of `outcomes`, repeating the last once they run out. No `/proc`, clock or path.
 
-    `ChannelReady` in the script (the class, not an instance) is an attempt that connects: the
+    `asked` records each attempt's `(directory_fd, name, jail_namespace_fd)`. `ChannelReady` in
+    the script (the class, not an instance) is an attempt that connects: the
     fake makes a socket pair, hands one end out in a `ChannelReady` for the caller to own, and
     keeps the other in `peers`, so a test can show the connection the caller got is the one the
     fake made and is still open. `close` closes the peers.
@@ -212,18 +227,18 @@ class FakeChannelReadiness:
     outcomes: list[type[ChannelReady] | ChannelNotReady | ChannelRefused] = field(
         default_factory=lambda: [ChannelReady]
     )
-    asked: list[tuple[str, int]] = field(default_factory=list)
+    asked: list[tuple[int, str, int]] = field(default_factory=list)
     handed_out: list[socket.socket] = field(default_factory=list)
     peers: list[socket.socket] = field(default_factory=list)
 
     def ready(
-        self, path: str, jail_namespace_fd: int
+        self, directory_fd: int, name: str, jail_namespace_fd: int
     ) -> ChannelReady | ChannelNotReady | ChannelRefused:
-        """Record `(path, jail_namespace_fd)`; answer with the next scripted outcome,
-        repeating the last one once the script is exhausted, and a fresh connection for each
-        ready one.
+        """Record `(directory_fd, name, jail_namespace_fd)`; answer with the next scripted
+        outcome, repeating the last one once the script is exhausted, and a fresh connection for
+        each ready one.
         """
-        self.asked.append((path, jail_namespace_fd))
+        self.asked.append((directory_fd, name, jail_namespace_fd))
         index = min(len(self.asked), len(self.outcomes)) - 1
         outcome = self.outcomes[index]
         if outcome is ChannelReady:

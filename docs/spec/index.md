@@ -161,10 +161,15 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   recorded per jail and removed once no live jail mounts over them (TASK-0027). A teardown sweeps
   every finished jail's directories together, deepest first, and one it cannot remove yet (not
   empty) stays in a record for a later sweep (TASK-0001.32).
-- `sockets.py`: the channel directory's creation and removal, finding and holding the jail's PID
-  namespace, the verified connect that says a channel is ready (decision-0005), and signalling
-  the jail's PID 1. A ready connect is handed back open, the one connection the check vouches
-  for; a refusal, a failed connect and the one raise each close theirs (TASK-0001.34).
+- `sockets.py`: the channel directory's creation, the fd held on it, and its removal, finding
+  and holding the jail's PID namespace, the verified connect that says a channel is ready
+  (decision-0005), and signalling the jail's PID 1. A ready connect is handed back open, the one
+  connection the check vouches for; a refusal, a failed connect and the one raise each close
+  theirs (TASK-0001.34). The connect never follows a path the jail can change and never blocks
+  (TASK-0045): the channel's name is opened beneath the held directory fd with
+  `O_PATH | O_NOFOLLOW`, a symbolic link there is refused before any connect, anything else but
+  a socket is not ready, and the socket is dialled through `/proc/self/fd/N` without blocking,
+  so a full backlog is not ready at once.
 - `supervisor/`: the jail's PID 1 (decision-0002). `wire.py` and `program.py` assemble
   (`assemble.py`) into one stdlib-only file that refuses an interpreter older than 3.15;
   `link.py` is the host's end, starting it and reading its events. `pumps.py` carries the
@@ -206,8 +211,16 @@ directory, so once readiness has passed it can replace its socket with a symboli
 socket the embedder's user can reach on the host, and a plain connect follows the link
 (TASK-0001.34). Readiness is a property of one connection (decision-0005 item 1): a second
 connection is a second `await_channel_ready`. Only the attempt that reads ready leaves a socket
-open. *Held by* `tests/e2e/test_channel_readiness_battery.py` (the swap after readiness) and
-`tests/e2e/test_channel_readiness_refusals.py` (every other outcome closes its socket). `errors.py` names
+open. Readiness itself never dials as the embedder what the jail planted, and never outlasts its
+deadline (law 7): `create_bwrap_jail` opens an fd on the channel directory as soon as it is
+made and holds it on the `Jail` until `destroy_jail` closes it, each attempt opens the
+reservation's name beneath that fd through no link, refuses a link there as `PEER_OUTSIDE_JAIL`
+without connecting, and connects without blocking, so a jail that fills its own listen backlog
+reads not ready until the deadline instead of holding the embedder (TASK-0045). *Held by*
+`tests/e2e/test_channel_readiness_battery.py` (the swap after readiness),
+`tests/e2e/test_channel_readiness_refusals.py` (every other outcome closes its socket),
+`tests/e2e/test_channel_readiness_dial.py` (the deadline against a full backlog, and a planted
+link never dialled) and `tests/e2e/test_channel_readiness_beneath.py`. `errors.py` names
 every exception an embedder can see, one per failure, so an embedder handles brig's own types
 and never infra's. `src/brig/__init__.py` re-exports exactly this layer's surface and the
 domain's plain data, nothing from infra.

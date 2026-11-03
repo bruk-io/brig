@@ -34,7 +34,7 @@
 : A started process's identity (pid and pgid), enough to signal, verify or release it later (`domain/effects.py`, decision-0001 rule 10).
 
 **readiness**
-: A verified connect to a reservation's `bound_path`: ready when a process in the jail's own PID namespace called `listen()` on the socket that answered (decision-0005). `await_channel_ready`'s `ChannelReady` carries that connection, open; the embedder uses it, owns it and closes it, and never dials the path, since the jail can replace its socket with a symbolic link to a host socket once readiness has passed (TASK-0001.34).
+: A verified connect to a reservation's socket, opened by its name beneath the fd the jail holds on its channel directory, through no link and without blocking (TASK-0045): ready when a process in the jail's own PID namespace called `listen()` on the socket that answered (decision-0005). `await_channel_ready`'s `ChannelReady` carries that connection, open; the embedder uses it, owns it and closes it, and never dials the path, since the jail can replace its socket with a symbolic link to a host socket once readiness has passed (TASK-0001.34).
 
 **reservation**
 : A channel's place in the jail's channel directory, made before the jail's process starts: its `bound_path` on the host and its `endpoint` inside the jail, which the embedder passes to the jailed command in argv, never env (`domain/channels.py`, decision-0002). The embedder never dials `bound_path`: it talks over the connection readiness hands back (TASK-0001.34).
