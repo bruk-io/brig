@@ -239,3 +239,49 @@ def test_a_stdio_path_whose_lookup_passes_through_a_writable_root_is_refused() -
 
     assert stdio_refusal(policy, ("/o/logs/out",), chains) == StdioInWritableRoot("/o/logs/out")
     assert stdio_refusal(policy, ("/o/logs/out",), {"/o/logs/out": ("/o/logs/out",)}) is None
+
+
+def test_each_directory_on_the_way_to_a_deny_or_mask_in_a_writable_root_is_pinned() -> None:
+    """TASK-0001.31: each existing directory strictly between a writable root and a deny or mask
+    is bound over itself, writable as its root is, so the command cannot rename it and take the
+    deny or mask with it; each mounts before what it leads to. Not one under a readable root
+    (nothing there can be renamed), nor a policy entry (a mount point already)."""
+    policy = FsPolicy(
+        readable=("/w/ro",),
+        writable=("/w",),
+        write_denies=("/w/a/b/config",),
+        masks=("/w/home/keys", "/w/ro/x/secret"),
+    )
+    kinds = {
+        "/w/a": PathKind.DIRECTORY,
+        "/w/a/b": PathKind.DIRECTORY,
+        "/w/a/b/config": PathKind.FILE,
+        "/w/home": PathKind.DIRECTORY,
+        "/w/home/keys": PathKind.DIRECTORY,
+        "/w/ro/x": PathKind.DIRECTORY,
+        "/w/ro/x/secret": PathKind.FILE,
+    }
+
+    assert _policy_mounts(policy, kinds) == (
+        Mount(MountKind.WRITABLE, "/w", "/w"),
+        Mount(MountKind.READ_ONLY, "/w/ro", "/w/ro"),
+        Mount(MountKind.WRITABLE, "/w/a", "/w/a"),
+        Mount(MountKind.WRITABLE, "/w/home", "/w/home"),
+        Mount(MountKind.WRITABLE, "/w/a/b", "/w/a/b"),
+        Mount(MountKind.READ_ONLY, "/w/home/keys", _EMPTY),
+        Mount(MountKind.READ_ONLY, "/w/a/b/config", "/w/a/b/config"),
+        Mount(MountKind.READ_ONLY, "/w/ro/x/secret", "/dev/null"),
+    )
+
+
+def test_the_directories_brig_makes_for_an_absent_deny_are_pinned_too() -> None:
+    """An absent deny's missing parents are made on the host before the jail starts (its
+    placeholders), so they exist when bwrap mounts and are pinned like any other."""
+    policy = FsPolicy(writable=("/w",), write_denies=("/w/cfg/deep/rc",))
+
+    assert _policy_mounts(policy, {}) == (
+        Mount(MountKind.WRITABLE, "/w", "/w"),
+        Mount(MountKind.WRITABLE, "/w/cfg", "/w/cfg"),
+        Mount(MountKind.WRITABLE, "/w/cfg/deep", "/w/cfg/deep"),
+        Mount(MountKind.READ_ONLY, "/w/cfg/deep/rc", _EMPTY),
+    )
