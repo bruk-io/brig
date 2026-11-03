@@ -3,11 +3,11 @@ id: TASK-0042
 title: >-
   A jail reopens its stdio files through /proc/self/fd with more rights than
   brig granted
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-03T18:25:00Z'
+updated_date: '2026-11-03T18:27:00Z'
 labels:
   - brig
   - stdio
@@ -283,4 +283,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review (reviewer, 2026-11-03): closed. record-check --tier full passed (reopen and pumps batteries included). Probed in real bwrap: with DEVNULL/PATH stdio, fd 0-2 in the jail are FIFOs and O_RDWR|O_TRUNC reopen reaches only the pipe; after destroy_jail on an 8 MB unread stdin and a stdout flood, host fd count and thread count were back to baseline (flood destroy 0.01 s). INHERIT read-ahead is stated on the INHERIT docstring. Finding (low, no draft): isatty being false under INHERIT is stated only in these notes and the TIOCSTI skip reason; Stdio's docstring says the command gets a pipe but should say outright that it is never a terminal. Finding (process): the worker ticked the criteria; each was judged independently here and holds.
 <!-- SECTION:NOTES:END -->
