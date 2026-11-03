@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:31:00Z'
-updated_date: '2026-11-03T03:46:00Z'
+updated_date: '2026-11-03T03:50:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -129,4 +129,18 @@ done: all steps passed
 ```
 
 Review 2026-11-03 (reviewer, not closed). Full gate passes. AC#2 met (e2e plants the link, next create refused, target untouched). AC#1 not met: the refusal is lexical, so a stdio path outside the writable roots that reaches one through a link in a parent directory is not refused, and O_NOFOLLOW covers only the last component. Measured: writable root R with R/logs, an outside link O/logs -> R/logs; jail 1 replaces R/logs with a link to victim dir V; jail 2 with stdout=O/logs/out.txt is accepted and V/out.txt becomes 'beforeappended'. Fix: check the stdio path's resolved parent (realpath) against the resolved writable roots, or open with openat2 RESOLVE_NO_SYMLINKS. Also not covered by design: a stdio path in a root another jail of the same embedder may write; brig cannot see that policy, so only no-symlink resolution (RESOLVE_NO_SYMLINKS on the whole path) closes it, or a documented embedder rule.
+
+Repro at d9352822539a, test files: tests/e2e/test_cwd_stdio_battery.py; command: `uv run pytest -q -p no:cacheprovider tests/e2e/test_cwd_stdio_battery.py -k parent_link` exited 1
+
+(28 earlier lines omitted)
+```text
+E            +  where True = exists()
+E            +    where exists = (PosixPath('/tmp/tmp2671uobs') / 'out.txt').exists
+E            +      where PosixPath('/tmp/tmp2671uobs') = Path('/tmp/tmp2671uobs')
+
+tests/e2e/test_cwd_stdio_battery.py:137: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_cwd_stdio_battery.py::test_a_stdio_path_reaching_a_writable_root_through_a_parent_link_is_refused
+1 failed, 5 deselected in 0.17s
+```
 <!-- SECTION:NOTES:END -->
