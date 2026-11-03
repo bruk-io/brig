@@ -27,6 +27,7 @@ genuinely cleaned up.
 
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -110,6 +111,60 @@ confused deputy, standing in for old SPEC decision-185's own.
 """
 
 
+_SWAPPING_JAIL_PROGRAM = r"""
+import os, socket, sys, time
+
+path, outside = sys.argv[1], sys.argv[2]
+
+pid = os.fork()
+if pid == 0:
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(path)
+    listener.listen(8)
+    first, _ = listener.accept()
+    os.unlink(path)
+    os.symlink(outside, path)
+    held = [first]
+    while True:
+        for connection in held:
+            try:
+                connection.sendall(b"jail")
+            except OSError:
+                pass
+        connection, _ = listener.accept()
+        held = [connection]
+while True:
+    try:
+        os.wait()
+    except ChildProcessError:
+        time.sleep(3600)
+"""
+"""A jail that turns on its embedder once readiness has passed (TASK-0001.34): its listener
+answers the first connection, the readiness check's, then swaps its socket at the reserved path
+for a symbolic link to `outside`, a socket on the host, and answers `jail` on that first
+connection and every later one it accepts. The listener keeps its socket after the unlink, so a
+connection already made still reaches it; a dial of the path follows the link to the host.
+"""
+
+_ANSWERING_LISTENER = r"""
+import socket, sys
+listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+listener.bind(sys.argv[1])
+listener.listen(8)
+print("up", flush=True)
+while True:
+    connection, _ = listener.accept()
+    try:
+        connection.sendall(sys.argv[2].encode())
+    except OSError:
+        pass
+    connection.close()
+"""
+"""A host listener outside any jail that answers each connection with its second argument:
+what the jail's link points the embedder at (an agent's or a daemon's socket, in a real host).
+"""
+
+
 @dataclass(frozen=True)
 class _DirectoryIn:
     """A `ChannelDirectoryPort` that allocates under a test's own directory, with the
@@ -155,6 +210,17 @@ class _Run:
         reserved = reserve_channels((Channel("svc.sock"),), directories=self.directories())
         (reservation,) = reserved.reservations
         return reserved, reservation
+
+    def start_answering_listener(self, answer: str) -> subprocess.Popen[bytes]:
+        """Start a host listener at `outside/host.sock` that answers `answer`, and wait until
+        it is up."""
+        process = subprocess.Popen(
+            [sys.executable, "-c", _ANSWERING_LISTENER, str(self.outside / "host.sock"), answer],
+            stdout=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        assert process.stdout.readline() == b"up\n"
+        return process
 
     def start_outside_listener(self) -> subprocess.Popen[bytes]:
         """Start the outside listener and wait until it reports itself up, so the test
@@ -281,3 +347,76 @@ def test_the_jail_namespace_is_not_the_bwrap_processs_own(run: _Run) -> None:
     assert jail_namespace.startswith("pid:[")
     assert bwrap_namespace.startswith("pid:[")
     assert jail_namespace != bwrap_namespace
+
+
+def _wait_for_link(path: str, *, timeout_s: float = 10.0) -> None:
+    """Poll until `path` is a symbolic link: the jail's swap has happened.
+
+    Raises:
+        TimeoutError: `path` was not a link before `timeout_s` passed.
+    """
+    deadline = time.monotonic() + timeout_s
+    while not os.path.islink(path):
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"{path} never became a link")
+        time.sleep(0.05)
+
+
+def _dial(path: str) -> socket.socket:
+    """A plain connect to `path` from the host, the way an embedder dials a socket: it follows a
+    symbolic link."""
+    dialer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    dialer.settimeout(10)
+    dialer.connect(path)
+    return dialer
+
+
+def _embedders_connection(outcome: object, reservation: Reservation) -> socket.socket:
+    """The connection an embedder holds once readiness reads ready: the one the outcome
+    carries, or, where it carries none, a dial of the reservation's host path, which is all an
+    embedder could do."""
+    carried = getattr(outcome, "connection", None)
+    if isinstance(carried, socket.socket):
+        return carried
+    return _dial(reservation.bound_path)
+
+
+def test_a_link_the_jail_plants_after_readiness_does_not_redirect_the_embedder(
+    run: _Run,
+) -> None:
+    """TASK-0001.34: readiness verifies one connection, the jail's own listener answers it,
+    and then the jail swaps its socket for a link to a host socket. The connection the
+    embedder speaks over must still reach the jail's listener, never the host socket the
+    link names.
+    """
+    host = run.start_answering_listener("host")
+    reserved, reservation = run.reserve()
+    jail = create_bwrap_jail(
+        (
+            sys.executable,
+            "-c",
+            _SWAPPING_JAIL_PROGRAM,
+            reservation.endpoint,
+            str(run.outside / "host.sock"),
+        ),
+        channels=reserved,
+        directories=run.directories(),
+    )
+    try:
+        outcome = await_channel_ready(jail, reservation, timeout_s=10.0)
+        assert isinstance(outcome, ChannelReady), outcome
+        _wait_for_link(reservation.bound_path)
+        with _embedders_connection(outcome, reservation) as connection:
+            connection.settimeout(10)
+            answer = connection.recv(16)
+    finally:
+        destroy_jail(jail)
+        host.kill()
+        host.wait()
+        assert host.stdout is not None
+        host.stdout.close()
+
+    assert answer == b"jail", (
+        f"the embedder's connection after readiness answered {answer!r}: the jail's link "
+        "sent it to a host socket"
+    )
