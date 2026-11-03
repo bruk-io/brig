@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-31T11:00:00Z'
-updated_date: '2026-11-03T04:09:00Z'
+updated_date: '2026-11-03T04:10:00Z'
 labels:
   - size-5
 dependencies: []
@@ -104,4 +104,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Review 2026-11-03 (reviewer): not closed. Full gate passes (recorded above). AC#1 met (five claims re-exported from brig), AC#3 met (grade() with no evidence gives UNENFORCED; a jail with no compile reports {}). AC#2 not met: (high, measured) a mask in a read-only root is stated ENFORCED but the host can undo it. Policy FsPolicy(readable=('/',), masks=(f'{root}/secret',)); report[FS_READ_CLAIM] == ENFORCED; the host os.replace()s a new file over secret while the jail runs; the jail then reads NEW-SECRET. Detaching a mount when its dentry is renamed over happens in every namespace, so it does not matter whether the root is writable. ceilings() applies BEST_EFFORT only to deny or mask targets inside policy.writable; it should apply to any deny or mask bound over a host entry. The same holds for write denies, and the battery's best-effort case and test_fs_read should plant the host-side rename. (medium) No battery case plants a write at a write deny, so dropping the deny mounts would fail nothing: fs_write's 'nothing a write deny names' is stated without evidence. (low) fs_read's 'reads only the policy's roots' is measured only indirectly, through the narrow-policy socket dial; add a read outside a narrow policy's roots.
 <!-- SECTION:NOTES:END -->
