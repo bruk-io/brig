@@ -8,50 +8,55 @@ vocabulary rather than redefining it.
 
 ## The ten laws
 
-Carried verbatim from the old SPEC's section 2, amendments folded in, per decision-0001 rule 18.
-These bind every mechanism, driver and future contribution; a change that violates one is a SPEC
-change first, code second.
+The old SPEC's section 2, restated against this design (TASK-0036): each keeps its number and its
+intent, names only what brig has, and says what holds it. These bind every jail type, driver and
+future contribution; a change that violates one is a SPEC change first, code second.
 
 1. **Honesty over strength.** A weak jail honestly reported beats a strong claim untested. Every
-   axis of every report carries a grade; `detail` names the known gaps in prose. A mechanism that
-   cannot deliver what the spec asks refuses (raises) — it never silently downgrades.
-2. **Refuse, never downgrade.** Asking for a mechanism/stack/launcher by name gets that thing or
-   an error. There is no fallback the caller did not write.
-3. **The Spec is constant; only delivery varies.** Policy (denies, allows, limits, channels) is
-   expressed identically whether it lands on a kernel jail or on nothing. What varies per stack is
-   the grade each field earns.
-4. **Observation is read-only or it is not observation.** Anything that can inject into the jail
-   (a read-write attach, stdin) is a channel, declared in the Spec, subject to policy. Observation
-   never appears in the enforcement report and never alters enforcement.
-5. **Authority never travels inbound as data.** A message into a jail is only ever content.
-   Everything a jailed process *does* with it exits back through declared channels where the
-   embedder's policy applies. Corollary: a jail dialing or replaying its own inbound traffic gains
-   nothing.
-6. **Provenance is stamped by the deliverer.** Origin labels on inbound messages are written by
-   trusted code at delivery time, never taken from the sender's claim.
-7. **Control must not require cooperation.** Interrupt and kill are delivered by mechanism-level
-   means that work when the jail is spinning, wedged, or hostile. Teardown reaches everything the
-   jail contains (group, tree, namespace, container), never a single process, and is verified; its
-   deliverability is graded per scope. (old SPEC decision-189: the "namespace" case is a supervised
-   bwrap jail, whose instance is a pid namespace that ends with its PID 1, §8. *Amended, old SPEC
-   decision-196:* each `Process` carries its `control` grade. *Amended, old SPEC decision-201:* the
-   two scopes are the jail's (`Jail.destroy`, the report's `control` axis) and one process's
-   (`Process.stop`, `Process.control`); each is graded no higher than a battery that plants
-   survivors from the host proves, per jail type, §4.)
-8. **Events are evidence, never the boundary.** Telemetry is best-effort by nature. No security
-   claim may rest on an event having been emitted.
-9. **Nothing crosses the boundary anonymously.** The exclusivity claim — "these declared channels
-   and enumerated shared media are the only ways in or out" — is a reportable axis with a grade,
-   like any other. **Argv is one of the enumerated shared media.** Anything a mechanism transits
-   through the child's command line is visible in `ps` to every user who can see the process, for
-   as long as it runs; §5's `EnvPolicy.set` is the first case brig ships. It is counted in the
-   enumeration and covered by the `channel_exclusivity` grade, never excused from it because the
-   exposure is the host's rather than the jail's. (old SPEC decision-093.) *Amended, old SPEC
-   decision-202:* a jail type that can keep a value out of argv does: `oci` puts the environment
-   in a file of mode 0600 that `docker create` reads and the runtime removes (§6), never in `-e`.
+   claim a jail's compile states carries a grade in the jail's report, never stronger than an e2e
+   battery measures (decision-0008). *Held by* `tests/e2e/test_report_battery.py` (each claim's
+   report against its measured grade) and `tests/unit/test_grades.py`.
+2. **Refuse, never downgrade.** A request brig cannot meet is refused with brig's own error before
+   anything starts, never met partly: a policy it cannot compile, a stdio path a jail could
+   redirect, an interpreter the policy does not mount. There is no fallback the caller did not
+   write. *Held by* `tests/integration/test_policy_refusal.py`, the refusal cases in
+   `tests/e2e/test_fs_policy_battery.py` and `tests/e2e/test_cwd_stdio_battery.py`.
+3. **The policy is constant; only delivery varies.** An `FsPolicy` states intent (roots, denies,
+   masks), and each jail type compiles the same value its own way (decision-0007); what varies per
+   jail type is the grade each claim earns. *Held by* `tests/unit/test_fs_policy_compile.py` for
+   bwrap; not yet tested across jail types, since Seatbelt is not built.
+4. **Observation is read-only or it is not observation.** Anything that can inject into the jail is
+   a channel, declared and reserved (`reserve_channels`), subject to policy. brig has no
+   observation surface today; this binds any that is added. *Held by* nothing yet beyond the
+   channel batteries (`tests/e2e/test_channel_*`).
+5. **Authority never travels inbound as data.** What reaches a jail through a channel is only
+   content; what the command does with it leaves through its declared channels, where the
+   embedder's policy applies. brig carries no messages itself, so this binds embedders' channels
+   and any relay brig adds (the egress proxy). *Held by* nothing in brig yet.
+6. **Provenance is stamped by the deliverer.** What the host believes about a jail comes from code
+   the command cannot reach: the supervisor's events are written by a PID 1 the command can
+   neither reopen nor ptrace (decision-0006), never by the command's own claim. *Held by*
+   `tests/e2e/test_supervisor_isolation_battery.py`.
+7. **Control must not require cooperation.** Interrupt and teardown work when the command is
+   spinning, wedged or hostile: `interrupt_jail` signals through the supervisor and loses nothing
+   while the jail comes up; `destroy_jail` ends the jail's whole PID namespace and verifies it is
+   gone. *Held by* `tests/e2e/test_interrupt_battery.py`, `tests/e2e/test_supervisor_reaps_orphans.py`
+   and the teardown integration tests; a battery that plants survivors from the host is not yet
+   written.
+8. **Events are evidence, never the boundary.** No security claim rests on an event having been
+   emitted: the supervisor's `started`/`done` say what happened, and the grades rest on
+   batteries. *Held by* the report battery grading from measured evidence only.
+9. **Nothing crosses the boundary anonymously.** `channel_exclusivity` grades whether the declared
+   channels are the only shared media: every writable path the jail shares with the host, and
+   every place where the host keeps sockets the jail could dial (decision-0008 item 5). Argv is a
+   shared medium too: anything put in a command line is visible in `ps` to every user who can see
+   the process, so brig puts no secret there (channel endpoints are paths, never secrets). *Held
+   by* `tests/e2e/test_channel_exclusivity_battery.py`, `tests/e2e/test_cross_jail_channel_battery.py`
+   and the socket case in `tests/e2e/test_report_battery.py`.
 10. **Prove gates by planting violations.** A probe or test that observes a clean run proves
-    nothing. Every enforcement claim has a probe that attempts the violation and a positive
-    control that proves the probe mechanism itself works.
+    nothing. Every enforcement claim has a battery that attempts the violation and a positive
+    control that proves the probe works, and every bug fix lands its failing test first. *Held
+    by* each battery above, and the pypeeker rule tests that plant each rule's violation.
 
 ## Domain
 
