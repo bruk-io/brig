@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T03:06:00Z'
-updated_date: '2026-11-03T03:10:00Z'
+updated_date: '2026-11-03T03:13:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -57,4 +57,6 @@ tests/e2e/test_fs_policy_battery.py:551: AttributeError
 FAILED tests/e2e/test_fs_policy_battery.py::test_a_deny_reached_through_a_link_inside_a_writable_root_is_refused
 1 failed, 13 deselected in 0.12s
 ```
+
+Worker's report (Claude, 2026-11-03). Fixed at 0dc45c0. infra.files.facts returns each policy path's kind and realpath; paths.refusal takes them (HostPath) and refuses with ThroughLink any entry (root, deny or mask) inside a writable root whose resolved path is not the root's resolved path plus the rest of the entry: a link between them. A link above the writable root (which the command cannot change) refuses nothing. Raised as PolicyPathThroughLink(path, root) before anything is created. Tests: the e2e repro above (now passing: create_bwrap_jail raises, the link is untouched), unit refusal cases for a link inside a root and a link above it. uv run just done passes (recorded on TASK-0024.02, same tree).
 <!-- SECTION:NOTES:END -->
