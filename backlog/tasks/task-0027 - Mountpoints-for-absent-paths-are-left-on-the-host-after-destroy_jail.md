@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-02T17:23:00Z'
-updated_date: '2026-11-03T03:53:00Z'
+updated_date: '2026-11-03T03:55:00Z'
 labels:
   - size-3
 dependencies: []
@@ -44,4 +44,70 @@ FAILED tests/e2e/test_placeholders_battery.py::test_placeholders_outlive_no_jail
 ```
 
 Accepted 2026-11-03. Worker's report (Claude): fixed at 9d9671e. infra/placeholders.py: hold() makes every directory missing on the way to each absent deny/mask target the compile mounts, records them with (st_dev, st_ino), and records which paths this jail holds (those it made, and any another jail's record says that jail made, so a placeholder still mounted by another jail is held too: found while building, when the second jail classed the first's placeholder as present and held nothing); attach() records the jail's bwrap by pid and start time; release(), under one per-user flock, drops this record and every dead one (alive while its bwrap, or before it starts its embedder, is the same process), removing each made directory no live record holds, still the same inode and empty, deepest first, and keeping a dead record's directories a live jail still holds for a later release. create_bwrap_jail holds before the supervisor starts and releases on a failed start (PlaceholdersFailed on an OSError); destroy_jail releases only once the jail is verified gone. tests/e2e/test_placeholders_battery.py (committed first; repro above: the tree kept .envrc, .git/hooks and secret.env): two jails over one tree; the first's teardown leaves the second's holds and the second still cannot create any held path; the second's teardown leaves the tree as it was (.git, there before, kept and empty). 5 runs in 5. uv run just done passes.
+
+Check `uv run just done` exited 0
+
+(254 earlier lines omitted)
+```text
+[2m03:55:46.353[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:react/[39m[95marchitecture[39m[0m
+[2m03:55:46.355[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:model/[39m[95marchitecture[39m[0m
+[2m03:55:46.369[0m [1m[32mINFO [0m [1m[36mlikec4.vite[0m [2mgenerating [22m[35mlikec4:icons/[39m[95marchitecture[39m[0m
+[2m03:55:48.462[0m [1m[32mINFO [0m [1m[36mlikec4.vite.webcomponent[0m ✓ built in 2.27s
+[2m03:55:48.465[0m [1m[32mINFO [0m [1m[36mlikec4.c4:codegen[0m [2mgenerated[22m /home/user/brig/site/assets/mkdocs_likec4/likec4_views.js[0m
+[2m03:55:48.468[0m [1m[32mINFO [0m [1m[36mlikec4.c4:codegen[0m [32mdone in 3s[39m[0m
+
+   ┌───────────────────────────────────────────────────────────────┐
+   │                                                               │
+   │                                                               │
+   │   [2mWebcomponents generated to:[22m                                 │
+   │    site/assets/mkdocs_likec4/likec4_views.js                  │
+   │                                                               │
+   │   [2mSetup and usage instructions:[22m                               │
+   │    [34mhttps://likec4.dev/tooling/code-generation/webcomponent/[39m   │
+   │                                                               │
+   │                                                               │
+   └───────────────────────────────────────────────────────────────┘
+
+uv run mkdocs build --strict
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+
+[31m │  ⚠  Warning from the Material for MkDocs team[0m
+[31m │[0m
+[31m │[0m  MkDocs 2.0, the underlying framework of Material for MkDocs,
+[31m │[0m  will introduce backward-incompatible changes, including:
+[31m │[0m
+[31m │  × [0mAll plugins will stop working – the plugin system has been removed
+[31m │  × [0mAll theme overrides will break – the theming system has been rewritten
+[31m │  × [0mNo migration path exists – existing projects cannot be upgraded
+[31m │  × [0mClosed contribution model – community members can't report bugs
+[31m │  × [0mCurrently unlicensed – unsuitable for production use
+[31m │[0m
+[31m │[0m  Our full analysis:
+[31m │[0m
+[31m │[0m  [4mhttps://squidfunk.github.io/mkdocs-material/blog/2026/02/18/mkdocs-2.0/[0m
+[0m
+INFO    -  mkdocs-likec4: No projects discovered, using default root project
+INFO    -  Cleaning site directory
+INFO    -  Building documentation to directory: /home/user/brig/site
+INFO    -  mkdocs-likec4: Generating web component for default project from /home/user/brig/docs
+INFO    -  Documentation built in 5.62 seconds
+
+== architecture validate: PASS ==
+[2m03:55:50.129[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mlayout[22m wasm[0m
+[2m03:55:50.147[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m /home/user/brig/docs/architecture[0m
+[2m03:55:50.175[0m [1m[32mINFO [0m [1m[36mlikec4.server.projects[0m add [32m'architecture'[39m
+[2m03:55:50.176[0m [1m[32mINFO [0m [1m[36mlikec4.server.workspace[0m loaded [33m1[39m projects
+[2m03:55:50.669[0m [1m[32mINFO [0m [1m[36mlikec4.lang[0m [2mworkspace:[22m found 27 source files[0m
+[2m03:55:50.887[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32m✓ Valid[39m[2m (27 files)[22m[0m
+[2m03:55:50.887[0m [1m[32mINFO [0m [1m[36mlikec4.c4:validate[0m [32mvalidate 759ms[39m[0m
+npx -y likec4@1.60.0 validate docs/architecture
+
+== architecture lint: PASS ==
+
+c4lint: 0 error(s), 0 warning(s) across 20 elements, 20 relationships, 5 views
+uv run python3 scripts/c4lint.py docs/architecture
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+
+done: all steps passed
+```
 <!-- SECTION:NOTES:END -->
