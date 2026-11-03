@@ -31,4 +31,70 @@ Architecture review 2026-11-03 (both demonstrated): (a) a jail that calls listen
 
 <!-- SECTION:NOTES:BEGIN -->
 Lead, 2026-11-03: criteria written in a separate edit right after promotion (finish-moved for that reason only).
+
+Repro at 7e437873fcfd, test files: tests/e2e/test_channel_readiness_dial.py; command: `uv run pytest tests/e2e/test_channel_readiness_dial.py -q` exited 1
+
+(16 earlier lines omitted)
+```text
+            daemon=True,
+        )
+        started = time.monotonic()
+        try:
+            waiter.start()
+            waiter.join(_DEADLINE_S + _BOUND_S)
+            elapsed = time.monotonic() - started
+            finished = not waiter.is_alive()
+        finally:
+            destroy_jail(jail, directories=directories)
+            waiter.join(10.0)
+            for outcome in outcomes:
+                if isinstance(outcome, ChannelReady):
+                    outcome.connection.close()
+    
+>       assert finished, f"await_channel_ready was still blocked after {elapsed:.1f} s"
+E       AssertionError: await_channel_ready was still blocked after 4.0 s
+E       assert False
+
+tests/e2e/test_channel_readiness_dial.py:153: AssertionError
+________ test_a_planted_link_is_refused_without_dialling_what_it_names _________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-529/test_a_planted_link_is_refused0')
+
+    def test_a_planted_link_is_refused_without_dialling_what_it_names(tmp_path: Path) -> None:
+        """(b): the reserved name is a link to a host listener; readiness refuses it, and that
+        listener has no connection waiting."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        host = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        host.bind(str(outside / "host.sock"))
+        host.listen(8)
+        try:
+            jail, reservation, directories = _jail(tmp_path, _PLANTED_LINK, str(outside / "host.sock"))
+            try:
+                outcome = await_channel_ready(jail, reservation, timeout_s=_DEADLINE_S)
+            finally:
+                destroy_jail(jail, directories=directories)
+            if isinstance(outcome, ChannelReady):
+                outcome.connection.close()
+            host.setblocking(False)
+            try:
+                dialled, _ = host.accept()
+            except BlockingIOError:
+                dialled = None
+            if dialled is not None:
+                dialled.close()
+        finally:
+            host.close()
+    
+        assert isinstance(outcome, ChannelRefused | ChannelNotReady), outcome
+>       assert dialled is None, "the host listener behind the link was dialled"
+E       AssertionError: the host listener behind the link was dialled
+E       assert <socket.socket [closed] fd=-1, family=1, type=1, proto=0> is None
+
+tests/e2e/test_channel_readiness_dial.py:185: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_channel_readiness_dial.py::test_readiness_honours_its_deadline_against_a_full_backlog
+FAILED tests/e2e/test_channel_readiness_dial.py::test_a_planted_link_is_refused_without_dialling_what_it_names
+2 failed in 4.37s
+```
 <!-- SECTION:NOTES:END -->
