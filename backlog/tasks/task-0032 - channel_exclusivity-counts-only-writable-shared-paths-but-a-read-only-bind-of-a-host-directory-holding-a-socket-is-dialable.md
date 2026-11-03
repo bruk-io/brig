@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-10-31T14:41:00Z'
-updated_date: '2026-11-03T04:01:00Z'
+updated_date: '2026-11-03T04:09:00Z'
 labels:
   - size-3
 dependencies: []
@@ -24,7 +24,7 @@ Measured: TASK-0019's reproduction dialled through brig's read-only state-direct
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Decision recorded: whether channel_exclusivity (old SPEC law 9) covers dialable read-only media, and if so how they are enumerated and what the default policy then grades
+- [x] #1 Decision recorded: whether channel_exclusivity (old SPEC law 9) covers dialable read-only media, and if so how they are enumerated and what the default policy then grades
 <!-- AC:END -->
 
 ## Implementation Notes
