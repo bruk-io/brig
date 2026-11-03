@@ -3,9 +3,11 @@ id: TASK-0025
 title: >-
   A symlink at a write deny's or mask's path protects its target, not the path,
   so the command can replace it
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-03T03:06:00Z'
+updated_date: '2026-11-03T03:09:00Z'
 labels: []
 dependencies: []
 type: bug
@@ -22,3 +24,9 @@ Found reviewing TASK-0024.01 (c4ef292). infra/files.py kinds() follows links, an
 - [ ] #1 A deny or mask whose path is a symlink is refused, or compiled so the path itself cannot be written, created or read, with the decision saying which
 - [ ] #2 An e2e test plants a symlink at a deny path inside a writable root and shows the command can neither write through it nor replace it
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Accepted 2026-11-03 under the owner's goal. Measured before any change (bubblewrap 0.9.0, as root): writable root W holding hooks -> real (a symlink), write deny W/hooks; the command unlinked W/hooks, made a directory there and wrote W/hooks/pre-commit, exit 0, and the host's W/hooks is now a real directory. Confirmed: the deny protects the link's target, not the path.
+<!-- SECTION:NOTES:END -->
