@@ -24,9 +24,9 @@ Found by TASK-0044/0045's worker and review (2026-11-03): (1) writing the superv
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Every OSError create_bwrap_jail can raise before the start (writing the supervisor script, preparing the state directory) crosses as one of presentation/errors.py's types, with the OSError as its cause; integration tests with fakes pin each; recorded failing before the fix
-- [ ] #2 dismantle never hides the failed step's error: a teardown or close failure inside it is attached to the step's error (add_note or a chained cause) or raises JailTeardownFailed, and its docstring says which
-- [ ] #3 If operations.create raises after bwrap has spawned, the spawned process is still torn down (the create effect hands back what it spawned, or the driver reaps by pidfd); a test with a fake that spawns then fails pins it
+- [x] #1 Every OSError create_bwrap_jail can raise before the start (writing the supervisor script, preparing the state directory) crosses as one of presentation/errors.py's types, with the OSError as its cause; integration tests with fakes pin each; recorded failing before the fix
+- [x] #2 dismantle never hides the failed step's error: a teardown or close failure inside it is attached to the step's error (add_note or a chained cause) or raises JailTeardownFailed, and its docstring says which
+- [x] #3 If operations.create raises after bwrap has spawned, the spawned process is still torn down (the create effect hands back what it spawned, or the driver reaps by pidfd); a test with a fake that spawns then fails pins it
 <!-- AC:END -->
 
 ## Implementation Notes
