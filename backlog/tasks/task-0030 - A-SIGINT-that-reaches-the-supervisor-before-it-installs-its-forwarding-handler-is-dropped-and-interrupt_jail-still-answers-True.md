@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0020
+id: TASK-0030
 title: >-
   A SIGINT that reaches the supervisor before it installs its forwarding handler
   is dropped, and interrupt_jail still answers True
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T03:21:00Z'
 labels: []
