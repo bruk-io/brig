@@ -5,8 +5,8 @@ title: >-
   runner
 status: Draft
 assignee: []
-created_date: '2026-10-17 21:53'
-updated_date: '2026-10-18 01:22'
+created_date: 2026-10-17 21:53
+updated_date: '2026-11-04T12:40:00Z'
 labels:
   - brig
   - ci
@@ -188,4 +188,6 @@ Notes on the shape of it:
   observe) already covers confirming it.
 
 Fix applied, 2026-10-18: .github/workflows/ci.yml now runs 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true' after installing bubblewrap, per this draft's investigation. Owner approved applying it now (before the push decision) since it's a single guarded line with no downside on a kernel that lacks the Ubuntu patch. Residual open items from the investigation, NOT addressed by this fix: (1) the AppArmor unprivileged_userns transition profile still denies capabilities inside the new namespace independently of bwrap's own policy, so a future battery cannot yet attribute a denial to bwrap vs the host LSM -- a separate spike if a battery ever needs that; (2) re-verify this step when ubuntu-latest migrates off 24.04 to 26.04, rather than assuming it carries forward; (3) confirmed Docker is NOT used by brig's e2e tests (bwrap runs directly on the runner's kernel), so the Docker-container seccomp finding in this draft is not load-bearing for CI. This draft's own push-and-read criterion still stands -- this fix is informed prediction, not a verified CI pass.
+
+Review 2026-11-04: answered. CI run 41764611538 logs kernel.apparmor_restrict_unprivileged_userns = 0 from the guarded sysctl step in .github/workflows/ci.yml, then the e2e journey passed; the leftovers (attributing a host-LSM denial, re-checking at ubuntu 26.04) are future work, not this question.
 <!-- SECTION:NOTES:END -->
