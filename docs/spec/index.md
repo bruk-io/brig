@@ -180,7 +180,10 @@ are made before the jail starts, so they are pinned too. What the pins cover is 
 inside the jail of a directory that was there when it started; what they do not is a directory
 the host itself creates, removes or renames on the way while the jail runs. The cost: a rename
 between a pinned directory and the rest of its root crosses a mount and fails with `EXDEV`. `channels.py` reserves each declared channel
-in the jail's channel directory before the jail starts (decision-0002). `claims.py` and
+in the jail's channel directory before the jail starts (decision-0002), and refuses, as a value, a
+name that would escape it and an endpoint whose bytes and NUL do not fit AF_UNIX's `sun_path` (108
+bytes on Linux, 104 on macOS; the platform's size enters as data), which `reserve_channels` raises
+as `ChannelEndpointTooLong` (TASK-0001.38). `claims.py` and
 `grades.py` hold the claims a compile states and `grade`, the one function that grades them
 from evidence. A jail's runtime report is the ceiling its compile states per claim (`fs_write`,
 `fs_read`, `network`, `env`, `channel_exclusivity`), and an e2e battery holds each ceiling to what

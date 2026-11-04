@@ -50,6 +50,7 @@ from brig.presentation.api import (
 from brig.presentation.drivers.bwrap import create_bwrap_jail
 from brig.presentation.errors import (
     ChannelDirectoryCreateFailed,
+    ChannelEndpointTooLong,
     ChannelNameRefused,
     ChannelNamespaceNotFound,
     EgressProxySourceUnreadable,
@@ -107,6 +108,7 @@ __all__ = [
     "ChannelDirectory",
     "ChannelDirectoryPort",
     "ChannelDirectoryCreateFailed",
+    "ChannelEndpointTooLong",
     "ChannelJailFinished",
     "ChannelNameRefused",
     "ChannelNamespaceNotFound",

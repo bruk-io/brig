@@ -487,6 +487,30 @@ class ChannelNameRefused(Exception):
         self.name = name
 
 
+class ChannelEndpointTooLong(Exception):
+    """Raised by `reserve_channels` when a channel's endpoint, its path inside the jail, does not
+    fit the platform's AF_UNIX `sun_path` (108 bytes on Linux and 104 on macOS, the NUL
+    included), so no program could bind or connect to it. Nothing was reserved.
+
+    Args:
+        name: The channel whose endpoint is too long.
+        endpoint: The endpoint, the channel directory joined with `name`.
+        length: The endpoint's length in bytes, encoded.
+        limit: The size of `sun_path`, its NUL included.
+    """
+
+    def __init__(self, name: str, endpoint: str, length: int, limit: int) -> None:
+        super().__init__(
+            f"channel {name!r}'s endpoint {endpoint!r} is {length} bytes, and an AF_UNIX socket "
+            f"path must be under {limit} -- shorten BRIG_HOME (the channel directory is made "
+            f"beneath it) or the channel name by at least {length - limit + 1} bytes"
+        )
+        self.name = name
+        self.endpoint = endpoint
+        self.length = length
+        self.limit = limit
+
+
 class JailHasNoEgress(Exception):
     """Raised by `allow_egress`, `revoke_egress`, `egress_decisions` and `egress_record` for a jail
     with no egress proxy: one created without an `EgressPolicy`, which has loopback and nothing

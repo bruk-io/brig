@@ -4,6 +4,7 @@ command's exit, interrupt it, tear the jail down. Creating a jail is each jail t
 (`presentation/drivers/<type>.py`)."""
 
 import signal
+import sys
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, fields
@@ -14,6 +15,7 @@ from brig.domain import operations
 from brig.domain.channels import (
     Channel,
     ChannelDirectory,
+    ChannelEndpointRefusal,
     ChannelNameRefusal,
     Reservation,
     Reservations,
@@ -37,6 +39,7 @@ from brig.infra.proxy import program as _proxy_program
 from brig.infra.supervisor import wire as _wire
 from brig.presentation.driver import run
 from brig.presentation.errors import (
+    ChannelEndpointTooLong,
     ChannelNameRefused,
     JailExitUnknown,
     JailHasNoEgress,
@@ -76,6 +79,11 @@ _DEFAULT_WAIT_TIMEOUT_S = 30.0
 
 _DEFAULT_CHANNEL_READY_TIMEOUT_S = 30.0
 """How long `await_channel_ready` polls when the embedder names no `timeout_s`."""
+
+_SUN_PATH_BYTES = (
+    _channels.SUN_PATH_BYTES_DARWIN if sys.platform == "darwin" else _channels.SUN_PATH_BYTES_LINUX
+)
+"""This platform's AF_UNIX `sun_path` size, the fact `reserve` measures each endpoint against."""
 
 _CHANNEL_READY_POLL_INTERVAL_S = 0.05
 """The pause between readiness attempts: each is a connect and several `/proc` reads."""
@@ -239,14 +247,18 @@ def reserve_channels(
     Raises:
         ChannelNameRefused: a channel's name would escape or repeat in the channel
             directory (`domain/channels.py`'s `reserve`).
+        ChannelEndpointTooLong: a channel's endpoint does not fit this platform's AF_UNIX
+            `sun_path`: `BRIG_HOME`, or the channel's name, is too long (TASK-0001.38).
     """
     host_path = directories.allocate()
     directory = ChannelDirectory(host_path=host_path, jail_path=host_path)
-    match _channels.reserve(channels, directory):
+    match _channels.reserve(channels, directory, sun_path_bytes=_SUN_PATH_BYTES):
         case Reservations() as reservations:
             return reservations
         case ChannelNameRefusal(name=name):
             raise ChannelNameRefused(name)
+        case ChannelEndpointRefusal(name=name, endpoint=endpoint, length=length, limit=limit):
+            raise ChannelEndpointTooLong(name, endpoint, length, limit)
         case _ as unreachable:
             assert_never(unreachable)
 
