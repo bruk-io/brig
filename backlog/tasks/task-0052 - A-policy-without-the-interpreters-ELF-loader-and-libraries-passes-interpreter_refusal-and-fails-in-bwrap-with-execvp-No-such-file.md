@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-11-03T03:46:00Z'
-updated_date: '2026-11-04T14:20:00Z'
+updated_date: '2026-11-04T14:23:00Z'
 labels:
   - brig
   - fs-policy
@@ -24,9 +24,9 @@ Found reviewing TASK-0029 at 55336cd. FsPolicy(readable=(.venv, ~/.local/share/u
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 infra.files.link_chain resolves a/link/../b as the kernel does (the link first, then ..), not by normalising .. as text; a tmp-tree test pins it; repro test recorded failing
-- [ ] #2 A policy whose readable root is the venv's python3 link itself is not refused by interpreter_refusal
-- [ ] #3 The ELF loader and DT_NEEDED half is split out as a design draft of its own
+- [x] #1 infra.files.link_chain resolves a/link/../b as the kernel does (the link first, then ..), not by normalising .. as text; a tmp-tree test pins it; repro test recorded failing
+- [x] #2 A policy whose readable root is the venv's python3 link itself is not refused by interpreter_refusal
+- [x] #3 The ELF loader and DT_NEEDED half is split out as a design draft of its own
 <!-- AC:END -->
 
 ## Implementation Notes
