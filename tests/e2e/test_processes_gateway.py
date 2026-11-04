@@ -49,10 +49,11 @@ asks for is about confidence in a real run, not about tuning odds.
 """
 
 _LEADER_EXITS_BEFORE_GROUP_NO_PRE_SLEEP_ITERATIONS = 40
-"""Lower than `_LEADER_EXITS_BEFORE_GROUP_ITERATIONS` on purpose: TASK-0017 measured
-this shape's race at 200/200 `JailTeardownFailed` on Linux with `kill_grace_s=0.0`,
-near-deterministic, so a far smaller count is already decisive there. Running 150 of
-these would not buy more confidence, only a longer e2e suite.
+"""Lower than `_LEADER_EXITS_BEFORE_GROUP_ITERATIONS` on purpose: on Linux this shape's
+race is near-deterministic with `kill_grace_s=0.0` (40 of 40 on native Linux, and 200 of
+200 in `brig-probe-amd64:latest`; the test's own docstring names each figure's host and
+method), so a far smaller count is already decisive there. Running 150 of these would not
+buy more confidence, only a longer e2e suite.
 """
 
 
@@ -153,19 +154,41 @@ def test_destroy_jail_survives_the_leader_exiting_before_its_group() -> None:
     some iterations, as the correctly-typed outcome of the TASK-0001.07 timing race
     (the kill ladder's post-KILL verify could still see a group mid-death). That
     race is now closed by the post-KILL rung's own bounded grace-window poll
-    (`destroy_jail`'s default `kill_grace_s`), measured directly against this exact
-    reproduction on macOS (149/150 `JailTeardownFailed` with `kill_grace_s=0.0`,
-    0/150 against the real default) -- so this loop no longer tolerates
+    (`destroy_jail`'s default `kill_grace_s`), so this loop no longer tolerates
     `JailTeardownFailed` either.
 
-    TASK-0017: this test's 0.05s pre-sleep between spawning the leader and calling
-    `destroy_jail` is what gives it that discrimination on macOS -- but on Linux
-    (`brig-probe-amd64:latest`), by 0.05s the leader has already exited and its
-    orphaned sibling has already settled, so the race this test exists to catch
-    never fires: measured at 0/150 `JailTeardownFailed` with `kill_grace_s=0.0`
-    there, identical to the real default. CI runs Linux, so this test alone would
-    not catch a regression of TASK-0001.07's fix. See the no-pre-sleep variant
-    below, which does.
+    Which test catches a regression of that fix depends on the host (TASK-0051). On
+    native Linux the one that discriminates is the no-pre-sleep variant below (40 of
+    40 there, 2026-11-04); this test's power depends on the host, from 0 to 4 in 150
+    on that native Linux host (0 to 3 in its lead's runs) to 150 of 150 under
+    emulation and on macOS, so keep both. Each figure counts `JailTeardownFailed` in
+    one run of this test with the grace window off (`kill_grace_s=0.0`) unless it
+    says the real default. The method, where a figure says "forced": the test
+    unmodified, `brig.destroy_jail.__kwdefaults__["kill_grace_s"]` set to 0.0 before
+    it runs; a figure without it records only that the window was 0.0.
+
+    - Native Linux, 2026-11-04: an x86_64 Firecracker microVM under KVM (hardware
+      virtualisation, no CPU emulation), 4 vCPUs, kernel 6.18.44-fc-v233, Ubuntu
+      24.04 userland in a container, Python 3.15.0b4, the host shared with other
+      work. 0, 1 and 3 of 150 in three runs (TASK-0051's lead); forced, 0, 2 and 4
+      of 150 in three more, and 0 of 150 in three runs against the real default
+      (TASK-0051's worker).
+    - `brig-probe-amd64:latest` (privileged, `--platform linux/amd64`) on a Darwin
+      27 host, the amd64 image emulated, its Linux kernel not recorded. Forced: 150
+      of 150, twice (TASK-0017's reviewer).
+    - `brig-probe-amd64:latest` (privileged), host, kernel and emulation not
+      recorded: 0 of 150, and 0 of 150 against the real default (TASK-0017's
+      description, from TASK-0013's review). Near the native Linux figures above,
+      far from the emulated ones on the same image.
+    - Native macOS, Darwin 27, no emulation, its kernel build not recorded: 149 of
+      150 (as first recorded in this docstring, its run not on the board), 145 of
+      150 and 0 of 150 against the real default (TASK-0017's description), and,
+      forced, 150 of 150 (TASK-0017's reviewer).
+
+    As measured, the race fires through the 0.05s pre-sleep between spawning the
+    leader and calling `destroy_jail` on macOS and under emulation, and seldom on
+    native Linux, where the leader has usually exited and its orphaned sibling
+    settled by the time `destroy_jail` looks.
     """
     escaped: list[BaseException] = []
     teardown_failed = 0
@@ -196,27 +219,37 @@ def test_destroy_jail_survives_the_leader_exiting_before_its_group() -> None:
 
 
 def test_destroy_jail_survives_the_leader_exiting_before_its_group_without_a_pre_sleep() -> None:
-    """TASK-0017: the race the test above exists to catch is real and decisive on
-    Linux only without the 0.05s pre-sleep between spawning the leader and calling
-    `destroy_jail` -- with it, the leader has already exited and its orphaned
-    sibling has already settled by the time `destroy_jail` looks, so the race never
-    fires there. Dropping the pre-sleep calls `destroy_jail` the instant after
-    spawning, while the leader may still be exiting and the sibling still forking,
-    which is exactly when the post-KILL verify can still see a group mid-death.
+    """TASK-0017: the test above without its 0.05s pre-sleep, calling `destroy_jail`
+    the instant after spawning, while the leader may still be exiting and its sibling
+    still forking, which is exactly when the post-KILL verify can still see a group
+    mid-death.
 
-    Measured against this exact reproduction in `brig-probe-amd64:latest`: 200/200
-    `JailTeardownFailed` with `kill_grace_s=0.0` (the grace window disabled), 0/200
-    against the real default -- the race is real and decisive there, and the
-    default grace window is what closes it.
+    On native Linux this is the test that discriminates a regression of
+    TASK-0001.07's fix (TASK-0051): 40 of 40 there, where the pre-sleep test above
+    caught 0 to 4 in 150 on the same host. Keep it; the pre-sleep test's power
+    depends on the host. Each figure counts `JailTeardownFailed` in one run of this
+    test with the grace window off (`kill_grace_s=0.0`) unless it says the real
+    default, by the method the test above names ("forced" where it was used).
 
-    On macOS this same shape is noisy and weak rather than decisive (measured
-    across several runs of 150: `JailTeardownFailed` anywhere from ~2% to ~23% of
-    iterations with `kill_grace_s=0.0`) -- the leader typically finishes exiting
-    and forking its sibling before this process even gets scheduled back in, so
-    this test does not lean on macOS for discrimination; the test above already
-    does that, with its pre-sleep. What this variant does confirm on macOS is that
-    dropping the pre-sleep introduces no flakiness against the real default
-    (measured at 0/150 across several runs).
+    - Native Linux, 2026-11-04: the Firecracker microVM the test above names (x86_64
+      under KVM, no CPU emulation, 4 vCPUs, kernel 6.18.44-fc-v233, Ubuntu 24.04
+      userland in a container, Python 3.15.0b4, shared with other work). 40 of 40
+      (TASK-0051's lead); forced, 38, 40, 40 and 40 of 40 in four runs, and 0 of 40
+      in three runs against the real default (TASK-0051's worker).
+    - `brig-probe-amd64:latest` (privileged, `--platform linux/amd64`) on a Darwin
+      27 host, the amd64 image emulated, its Linux kernel not recorded. Forced: 39
+      of 40 (TASK-0017's reviewer).
+    - `brig-probe-amd64:latest` (privileged), host, kernel and emulation not
+      recorded: 200 of 200, and 0 of 200 against the real default, at 200
+      iterations (TASK-0017's description, from TASK-0013's review).
+    - Native macOS, Darwin 27, no emulation, its kernel build not recorded: weak and
+      noisy, 2% to 34% of 150 across several runs, and 0 of 150 against the real
+      default across several runs (TASK-0017's implementer, as reported); forced, 2
+      of 40 (TASK-0017's reviewer). There the leader typically finishes exiting and
+      forking its sibling before this process is scheduled back in, so this test
+      leans on Linux for discrimination and the pre-sleep test on macOS. What it
+      confirms on macOS is that dropping the pre-sleep adds no flakiness against
+      the real default.
     """
     escaped: list[BaseException] = []
     teardown_failed = 0
