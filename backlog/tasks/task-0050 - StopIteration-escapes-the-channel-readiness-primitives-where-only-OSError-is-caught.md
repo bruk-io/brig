@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: 2026-10-25 16:57
-updated_date: '2026-11-04T14:22:00Z'
+updated_date: '2026-11-04T14:23:00Z'
 labels:
   - brig
   - channels
@@ -32,10 +32,10 @@ Does not breach TASK-0001.27 AC#4, whose enumeration is literally OSError.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 channel_ready returns ChannelRefused(PEER_LOOKUP_FAILED) rather than raising when /proc/self/fdinfo/<pidfd> carries no Pid: line, and a test pins it
-- [ ] #2 jail_pid1_namespace skips a candidate whose status carries no NSpid: line and keeps scanning until its deadline, as _nspid's docstring already specifies, and a test pins it
-- [ ] #3 No StopIteration escapes infra/sockets.py: _verify's fdinfo parse and jail_pid1_namespace's NSpid read each treat a missing line as their documented outcome; repro test: a fake proc_root child whose status has PPid but no NSpid makes jail_pid1_namespace raise StopIteration today
-- [ ] #4 A test pins each site
+- [x] #1 channel_ready returns ChannelRefused(PEER_LOOKUP_FAILED) rather than raising when /proc/self/fdinfo/<pidfd> carries no Pid: line, and a test pins it
+- [x] #2 jail_pid1_namespace skips a candidate whose status carries no NSpid: line and keeps scanning until its deadline, as _nspid's docstring already specifies, and a test pins it
+- [x] #3 No StopIteration escapes infra/sockets.py: _verify's fdinfo parse and jail_pid1_namespace's NSpid read each treat a missing line as their documented outcome; repro test: a fake proc_root child whose status has PPid but no NSpid makes jail_pid1_namespace raise StopIteration today
+- [x] #4 A test pins each site
 <!-- AC:END -->
 
 ## Implementation Notes
