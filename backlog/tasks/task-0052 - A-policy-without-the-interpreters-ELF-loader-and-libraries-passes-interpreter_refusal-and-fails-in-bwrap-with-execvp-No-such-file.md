@@ -3,7 +3,7 @@ id: TASK-0052
 title: >-
   A policy without the interpreter's ELF loader and libraries passes
   interpreter_refusal and fails in bwrap with execvp No such file
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-11-03T03:46:00Z'
 updated_date: '2026-11-04T14:10:00Z'
@@ -173,4 +173,12 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Worker, 2026-11-04 (branch claude/small-bugs): repros 99f0ddc (tests/e2e/test_files_link_chain_dotdot.py, AC#4) and 69e2edf (tests/unit/test_interpreter_link_root.py, AC#5), both recorded failing above; fix e39e676.
+
+- AC#3/#4, `infra.files.link_chain`: walks the lookup component by component as the kernel does: `..` is taken from where the components before it lead, a link among them followed first. Each path in the chain is spelled with every component up to the next link resolved and the rest as written, so a `..` straight after a link is kept (`/t/a/link/../b`, then `/t/x/b`), never cancelled as text. For an ordinary path (no `..` after a link) the chain is exactly what it was. A relative path is now returned alone (before, its links were read against the working directory; both callers pass absolute paths or refuse a relative one first). tests/e2e/test_files_link_chain_kernel.py pins the venv chain shape, `..` inside a link's target, `..` before any link, a link to `/`, a link loop, a relative path, and a mixed case against `os.path.realpath` and `os.stat`.
+- AC#5, `interpreter_refusal`: a chain path that is itself a readable or writable root ends the walk (after the inside-a-root and mask checks), since bwrap binds what a root leads to at the root's own path and the jail follows none of the links after it. Pinned by the unit repro (root = `.venv/bin/python3`; root = a later path on the way; a root on a later link does not excuse an earlier one; a mask still refuses) and by tests/e2e/test_interpreter_link_root_battery.py, which starts the supervisor under readable=(system, `.venv/bin/python3`, `.venv/pyvenv.cfg`, the base install's directory as `pyvenv.cfg`'s `home` names it) and sees exit 0. SPEC updated.
+- AC#6 is met by DRAFT-0029 (the ELF half). AC#1 and AC#2 belong to that half and are not addressed here.
+- Finding for the lead, not fixed: a policy of (system, uv's python directory, `.venv/bin/python3`) without `.venv/pyvenv.cfg` now passes `interpreter_refusal` (before this change it was refused, by the over-refusal AC#5 removes) and fails in the jail: the interpreter, a plain file at the link's path there, finds no `pyvenv.cfg`, cannot find its standard library (`ModuleNotFoundError: No module named 'base64'`), and `run_jail` raises `JailExitUnknown`. Measured with the real API on this host. It is the same class as DRAFT-0029 (the interpreter needs more than its link chain: its prefix and `pyvenv.cfg` too); worth folding into that draft's question.
+- `uv run just done`: all steps passed (recorded above). Criteria left for the reviewer.
 <!-- SECTION:NOTES:END -->
