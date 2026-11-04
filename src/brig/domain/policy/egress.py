@@ -246,7 +246,11 @@ def _numeric(label: str) -> bool:
 
 
 def _name(host: str) -> str | None:
-    """`host` as a valid hostname, lower-case and with one trailing dot dropped; else `None`."""
+    """`host` as a valid hostname, lower-case and with one trailing dot dropped; else `None`.
+    ASCII is checked before the case is folded, since folding maps some other characters onto
+    ASCII letters (the Kelvin sign onto `k`)."""
+    if not host.isascii():
+        return None
     name = host.lower().removesuffix(".")
     if not name or len(name) > 253:
         return None

@@ -99,6 +99,7 @@ def test_the_empty_policy_is_the_default_and_refuses_nothing_in_itself() -> None
         (".example.com", InvalidHostname),
         ("example.com..", InvalidHostname),
         ("bücher.example", InvalidHostname),
+        ("\u212aample.com", InvalidHostname),
         ("a" * 64 + ".com", InvalidHostname),
         (".".join(["a" * 63] * 4), InvalidHostname),
         ("10.1", InvalidHostname),
@@ -212,6 +213,8 @@ def test_an_absolute_url_s_authority_takes_the_scheme_s_default_port() -> None:
         ("127.1:443", AuthorityProblem.BAD_HOST),
         ("0x7f000001:443", AuthorityProblem.BAD_HOST),
         ("010.0.0.1:443", AuthorityProblem.BAD_HOST),
+        ("\u212a.example.com:443", AuthorityProblem.BAD_HOST),
+        ("\uff11.2.3.4:443", AuthorityProblem.BAD_HOST),
         ("example.com\r\n:443", AuthorityProblem.BAD_HOST),
     ],
 )
