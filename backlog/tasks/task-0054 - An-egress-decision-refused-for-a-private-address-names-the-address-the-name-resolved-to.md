@@ -3,7 +3,7 @@ id: TASK-0054
 title: >-
   An egress decision refused for a private address names the address the name
   resolved to
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-04T20:22:00Z'
@@ -184,4 +184,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Reviewed by philosophy:reviewer: closed. Full check passed (record-check, tree clean after). address is set only for a PrivateAddress outcome in _judge, '' otherwise; _decision requires a str address so a line without it is dropped (no back-compat, proxy and reader ship together); proxy program change uses only existing stdlib and the decision module, and the live battery that runs it passes. The new real-jail test runs (not skipped) and passes; before the change EgressDecision had no address, so it fails there. Minor, filed nowhere: no unit test pins that a line missing address is dropped; docs/spec/index.md line rewrapped past width.
 <!-- SECTION:NOTES:END -->
