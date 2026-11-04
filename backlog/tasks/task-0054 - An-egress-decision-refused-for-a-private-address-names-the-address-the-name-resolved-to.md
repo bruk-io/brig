@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0036
+id: TASK-0054
 title: >-
   An egress decision refused for a private address names the address the name
   resolved to
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-04T20:22:00Z'
 labels:
