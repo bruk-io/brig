@@ -285,7 +285,9 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
     arrival at the proxy to its destination named. Every read before then waits only for what
     is left of it, so a client that sends one byte a second is closed at it as surely as one
     that sends nothing. Past it, the connection is closed. A relayed connection has no deadline,
-    since a held tunnel is legitimate, and the caps bound those instead.
+    since a held tunnel is legitimate, and the caps bound those instead. After the proxy closes a
+    connection, the bridge's relay for it lasts until the client in the jail sends or closes:
+    only the bridge's cap bounds that, and it costs the jail's own PID 1, not the host.
 
   Each lowered limit travels on the host's own line to its program: the proxy's two on its
   config line (`connections`, `handshake_s`), the bridge's in the supervisor's exec request
