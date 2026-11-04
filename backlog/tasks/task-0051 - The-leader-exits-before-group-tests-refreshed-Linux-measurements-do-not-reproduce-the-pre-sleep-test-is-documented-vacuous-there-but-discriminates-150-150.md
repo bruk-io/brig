@@ -1,12 +1,12 @@
 ---
-id: DRAFT-0009
+id: TASK-0051
 title: >-
   The leader-exits-before-group tests' refreshed Linux measurements do not
   reproduce -- the pre-sleep test is documented vacuous there but discriminates
   150/150
-status: Draft
+status: To Do
 assignee: []
-created_date: '2026-10-18 22:30'
+created_date: 2026-10-18 22:30
 labels: []
 dependencies: []
 type: bug
