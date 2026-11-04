@@ -3,10 +3,10 @@ id: TASK-0053
 title: >-
   test_an_interrupt_sent_as_soon_as_the_jail_exists_is_not_lost fails
   intermittently in the full tier
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-04T14:23:00Z'
-updated_date: '2026-11-04T15:19:00Z'
+updated_date: '2026-11-04T15:20:00Z'
 labels:
   - brig
   - tests
@@ -183,4 +183,6 @@ done: all steps passed
 ```
 
 No repro: the defect was in the test, not brig. brig delivered every interrupt; the failure was CPython swallowing a SIGINT during its own startup, measured with no jail (1 of 580 exits 0) and in the old test under load (2 of 50 rounds). The fixed test uses /bin/sleep, which cannot swallow SIGINT, so there is no failing test of brig to record.
+
+Reviewer, 2026-11-04: closed. Full tier passed (recorded above), nothing reformatted. #1/#3: six failures under load, all the first assert, message kept. #4: the cause is the test (CPython swallows a SIGINT during startup in an importlib weakref callback), shown with no jail (1 of 580); brig delivered every time. No repro note above says why. #2 met by its second branch, and #5: the fixed test pins exact -SIGINT, 50 of 50 under the probe load where the old one failed 2 of 50; without the probe both pass 50 of 50, so the probe load is the one that discriminates, and /bin/sleep cannot swallow SIGINT by construction. The property (delivery to the command) is kept. Findings: (low) the spec's 'loses nothing' does not say a Python command can swallow an early interrupt: filed as a draft. (info) the other e2e flakes seen under heavier-than-full-tier load (egress caps fd count and leftover thread, JailExitUnknown in report_battery) not filed: never seen in the full tier.
 <!-- SECTION:NOTES:END -->
