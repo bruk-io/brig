@@ -3,7 +3,7 @@ id: TASK-0048
 title: >-
   Egress per destination: a jail reaches only the hostnames or IP addresses and
   ports an embedder grants, through a proxy it cannot route around
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-11-03T18:23:00Z'
 updated_date: '2026-11-04T01:59:00Z'
@@ -107,4 +107,6 @@ done: all steps passed
 Review (reviewer agent, 2026-11-04): not closed. close-task refused: the task was accepted (promoted in f1ffe56) with no acceptance criteria, and '#1 Decision recorded' was added afterwards without the finish-moved label or a note saying why. The decision itself passes review: decision-0009 answers the question (egress enforced through one route: --unshare-net kept, the supervisor bridges loopback via SCM_RIGHTS to a per-jail host-side proxy) and settles every point the description lists (policy shape, wildcards, proxy-side resolution with private-address refusal, where the proxy runs, refusal as data via egress_decisions, the grade capped by DRAFT-0028, the JSON log line). It is written as Context, Decision and Consequences, status accepted, acceptance recorded. Full check passed with no file changes. To close: whoever owns the finish line adds the finish-moved label and a note on the added criterion, commits, and close-task is run again.
 
 Lead, 2026-11-04: finish moved by me. The draft was promoted with no criteria, and I added 'Decision recorded' in a separate edit, as record-decision asks of a design task; the label and this note were missed then.
+
+Review (reviewer agent, 2026-11-04): closed. decision-0009 answers the question (egress enforced through one route: --unshare-net kept, the supervisor bridges loopback via SCM_RIGHTS to a per-jail host-side proxy) and settles every point the description lists. Written as Context, Decision and Consequences, status accepted, acceptance by @bruk recorded. Full check passed with no file changes. The earlier refusal (criterion added after promotion) is answered by the finish-moved label and the coordinator's note. No findings filed.
 <!-- SECTION:NOTES:END -->
