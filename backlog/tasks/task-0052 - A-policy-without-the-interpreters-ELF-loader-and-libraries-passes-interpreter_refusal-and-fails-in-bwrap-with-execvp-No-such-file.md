@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-11-03T03:46:00Z'
-updated_date: '2026-11-04T14:10:00Z'
+updated_date: '2026-11-04T14:11:00Z'
 labels:
   - brig
   - fs-policy
@@ -24,12 +24,9 @@ Found reviewing TASK-0029 at 55336cd. FsPolicy(readable=(.venv, ~/.local/share/u
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A policy that lacks the interpreter's ELF interpreter or a shared library it needs is refused before bwrap with a typed error naming the path
-- [ ] #2 A policy that bwrap can start the supervisor under is not refused
-- [ ] #3 link_chain resolves '..' after a link as the kernel does
-- [ ] #4 infra.files.link_chain resolves a/link/../b as the kernel does (the link first, then ..), not by normalising .. as text; a tmp-tree test pins it; repro test recorded failing
-- [ ] #5 A policy whose readable root is the venv's python3 link itself is not refused by interpreter_refusal
-- [ ] #6 The ELF loader and DT_NEEDED half is split out as a design draft of its own
+- [ ] #1 infra.files.link_chain resolves a/link/../b as the kernel does (the link first, then ..), not by normalising .. as text; a tmp-tree test pins it; repro test recorded failing
+- [ ] #2 A policy whose readable root is the venv's python3 link itself is not refused by interpreter_refusal
+- [ ] #3 The ELF loader and DT_NEEDED half is split out as a design draft of its own
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -181,4 +178,6 @@ Worker, 2026-11-04 (branch claude/small-bugs): repros 99f0ddc (tests/e2e/test_fi
 - AC#6 is met by DRAFT-0029 (the ELF half). AC#1 and AC#2 belong to that half and are not addressed here.
 - Finding for the lead, not fixed: a policy of (system, uv's python directory, `.venv/bin/python3`) without `.venv/pyvenv.cfg` now passes `interpreter_refusal` (before this change it was refused, by the over-refusal AC#5 removes) and fails in the jail: the interpreter, a plain file at the link's path there, finds no `pyvenv.cfg`, cannot find its standard library (`ModuleNotFoundError: No module named 'base64'`), and `run_jail` raises `JailExitUnknown`. Measured with the real API on this host. It is the same class as DRAFT-0029 (the interpreter needs more than its link chain: its prefix and `pyvenv.cfg` too); worth folding into that draft's question.
 - `uv run just done`: all steps passed (recorded above). Criteria left for the reviewer.
+
+Lead, 2026-11-04 (finish moved, already labelled): the draft's own three criteria are removed. #1 (refuse a policy lacking the ELF interpreter or a needed library) is the ELF half, split out as DRAFT-0029. #2 (any policy bwrap can start the supervisor under is not refused) is replaced by its checkable case, the venv link root, as the draft review said (now #2 below). #3 duplicated the kernel-order link_chain criterion (now #1).
 <!-- SECTION:NOTES:END -->
