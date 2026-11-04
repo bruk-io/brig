@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-11-03T18:23:00Z'
-updated_date: '2026-11-03T19:27:00Z'
+updated_date: '2026-11-04T01:55:00Z'
 labels:
   - brig
   - egress
@@ -27,11 +27,13 @@ An embedder (bh-02, DRAFT-0026 on its board) wants network grants per hostname a
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Decision recorded
+- [x] #1 Decision recorded
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
 Lead, 2026-11-03: decision-0009 written (proposed), under TASK-0001 (criterion 5 and its egress open question). Once accepted it answers that question (enforced, through the supervisor's bridge to a host-side proxy) and the network half of the embedder's capability-grants intent. Awaiting the owner's acceptance.
+
+Decision accepted by @bruk, 2026-11-04 (decision-0009, status accepted). Build tasks follow under TASK-0001.
 <!-- SECTION:NOTES:END -->
