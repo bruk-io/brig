@@ -7,7 +7,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: 2026-10-18 22:30
-updated_date: '2026-11-04T12:40:00Z'
+updated_date: '2026-11-04T14:00:00Z'
 labels:
   - brig
   - tests
@@ -48,4 +48,6 @@ Note for whoever picks this up: the reviewer's host runs the amd64 image emulate
 
 <!-- SECTION:NOTES:BEGIN -->
 Lead, 2026-11-04: promoted from a draft review; criteria written right after promotion (finish-moved for that reason only).
+
+No repro: this bug is in docstrings only (tests/e2e/test_processes_gateway.py's two leader-exits tests and the no-pre-sleep iteration constant), and no test's behaviour may change (AC#5), so there is no behaviour for a test to fail on. The evidence is the measurement recorded with the change, and an AST comparison showing the module's code, docstrings aside, is unchanged.
 <!-- SECTION:NOTES:END -->
