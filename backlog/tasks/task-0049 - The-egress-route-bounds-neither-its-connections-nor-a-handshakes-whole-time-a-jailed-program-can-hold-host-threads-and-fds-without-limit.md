@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-11-04T02:59:00Z'
-updated_date: '2026-11-04T12:40:00Z'
+updated_date: '2026-11-04T13:14:00Z'
 labels:
   - brig
   - egress
@@ -35,4 +35,38 @@ Review of TASK-0001.36. infra/proxy/program.py starts one daemon thread per conn
 
 <!-- SECTION:NOTES:BEGIN -->
 Lead, 2026-11-04: promoted from a draft review; criteria written right after promotion (finish-moved for that reason only).
+
+Repro at 58ad7bd98517, test files: tests/e2e/test_egress_handshake_deadline.py; command: `uv run pytest tests/e2e/test_egress_handshake_deadline.py -q` exited 1
+
+```text
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_client_sending_one_header_byte_a_second_is_closed_past_the_total_limit _
+
+    def test_a_client_sending_one_header_byte_a_second_is_closed_past_the_total_limit() -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as streams:
+            out = Path(streams) / "out.json"
+            jail = create_bwrap_jail(
+                (sys.executable, "-I", "-c", _CLIENT, str(_HORIZON_S)),
+                egress=EgressPolicy((Destination("granted.test", 80),)),
+                egress_limits=EgressLimits(handshake_s=_LIMIT_S),
+                stdio=Stdio(stdout=str(out)),
+            )
+            try:
+                assert run_jail(jail, timeout_s=60) == 0
+            finally:
+                destroy_jail(jail)
+            seen = json.loads(out.read_text())
+    
+        closed_after = seen["closed_after"]
+>       assert closed_after is not None, "the slow handshake was still open past the total limit"
+E       AssertionError: the slow handshake was still open past the total limit
+E       assert None is not None
+
+tests/e2e/test_egress_handshake_deadline.py:76: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_egress_handshake_deadline.py::test_a_client_sending_one_header_byte_a_second_is_closed_past_the_total_limit
+1 failed in 8.37s
+```
 <!-- SECTION:NOTES:END -->
