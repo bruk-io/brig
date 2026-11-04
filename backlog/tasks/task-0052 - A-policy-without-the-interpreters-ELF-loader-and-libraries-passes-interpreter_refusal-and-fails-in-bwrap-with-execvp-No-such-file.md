@@ -73,4 +73,38 @@ tests/e2e/test_files_link_chain_dotdot.py:29: AssertionError
 FAILED tests/e2e/test_files_link_chain_dotdot.py::test_dotdot_after_a_link_is_taken_from_where_the_link_leads
 1 failed in 0.23s
 ```
+
+Repro at 69e2edf88d58, test files: tests/unit/test_interpreter_link_root.py; command: `uv run pytest tests/unit/test_interpreter_link_root.py -q` exited 1
+
+```text
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+FF..                                                                     [100%]
+=================================== FAILURES ===================================
+________ test_a_root_that_is_the_interpreter_link_itself_is_not_refused ________
+
+    def test_a_root_that_is_the_interpreter_link_itself_is_not_refused() -> None:
+        """The root is the first path of the chain: the jail sees the interpreter there."""
+>       assert interpreter_refusal(FsPolicy(readable=("/usr", "/r/.venv/bin/python3")), _CHAIN) is None
+E       AssertionError: assert InterpreterUnreachable(path='/r/.venv/bin/python') is None
+E        +  where InterpreterUnreachable(path='/r/.venv/bin/python') = interpreter_refusal(FsPolicy(readable=('/usr', '/r/.venv/bin/python3'), writable=(), write_denies=(), masks=()), ('/r/.venv/bin/python3', '/r/.venv/bin/python', '/u/cpython-3.15/bin/python3.15', '/u/cpython-3.15.0b4/bin/python3.15'))
+E        +    where FsPolicy(readable=('/usr', '/r/.venv/bin/python3'), writable=(), write_denies=(), masks=()) = FsPolicy(readable=('/usr', '/r/.venv/bin/python3'))
+
+tests/unit/test_interpreter_link_root.py:20: AssertionError
+_ test_a_root_that_is_a_later_path_on_the_way_is_not_refused_once_the_earlier_ones_are _
+
+    def test_a_root_that_is_a_later_path_on_the_way_is_not_refused_once_the_earlier_ones_are() -> None:
+        """Both venv links are inside `.venv`, and the path the second leads to, through the
+        version's link, is a root of its own: bwrap binds the interpreter there."""
+        policy = FsPolicy(readable=("/r/.venv", "/u/cpython-3.15/bin/python3.15"))
+    
+>       assert interpreter_refusal(policy, _CHAIN) is None
+E       AssertionError: assert InterpreterUnreachable(path='/u/cpython-3.15.0b4/bin/python3.15') is None
+E        +  where InterpreterUnreachable(path='/u/cpython-3.15.0b4/bin/python3.15') = interpreter_refusal(FsPolicy(readable=('/r/.venv', '/u/cpython-3.15/bin/python3.15'), writable=(), write_denies=(), masks=()), ('/r/.venv/bin/python3', '/r/.venv/bin/python', '/u/cpython-3.15/bin/python3.15', '/u/cpython-3.15.0b4/bin/python3.15'))
+
+tests/unit/test_interpreter_link_root.py:28: AssertionError
+=========================== short test summary info ============================
+FAILED tests/unit/test_interpreter_link_root.py::test_a_root_that_is_the_interpreter_link_itself_is_not_refused
+FAILED tests/unit/test_interpreter_link_root.py::test_a_root_that_is_a_later_path_on_the_way_is_not_refused_once_the_earlier_ones_are
+2 failed, 2 passed in 0.20s
+```
 <!-- SECTION:NOTES:END -->
