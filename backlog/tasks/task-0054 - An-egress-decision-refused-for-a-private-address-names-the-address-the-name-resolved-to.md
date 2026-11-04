@@ -28,9 +28,9 @@ An embedder that turns a refusal into a prompt can't offer the one grant that wo
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A private-address refusal's decision line and `EgressDecision.address` name the address the name resolved to; every other decision's is ''
-- [ ] #2 A real-jail test: a name granted by host, resolving to 127.0.0.1 with no IP-literal grant, is refused with reason private-address and address 127.0.0.1
-- [ ] #3 just done passes
+- [x] #1 A private-address refusal's decision line and `EgressDecision.address` name the address the name resolved to; every other decision's is ''
+- [x] #2 A real-jail test: a name granted by host, resolving to 127.0.0.1 with no IP-literal grant, is refused with reason private-address and address 127.0.0.1
+- [x] #3 just done passes
 <!-- AC:END -->
 
 ## Implementation Plan
