@@ -3,10 +3,10 @@ id: TASK-0049
 title: >-
   The egress route bounds neither its connections nor a handshake's whole time:
   a jailed program can hold host threads and fds without limit
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-11-04T02:59:00Z'
-updated_date: '2026-11-04T13:25:00Z'
+updated_date: '2026-11-04T13:26:00Z'
 labels:
   - brig
   - egress
@@ -135,4 +135,16 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Worker, 2026-11-04 (branch claude/egress-bounds): commits c63cd3d (the handshake limit lowerable on the proxy's config line, still per read), 58ad7bd (the repro, tests/e2e/test_egress_handshake_deadline.py, recorded failing above: closed_after was None at 8 s with the limit at 2 s), bada963 (the fix, its tests and docs).
+
+What changed:
+- Proxy (infra/proxy/program.py): CONNECTION_LIMIT = 256 connections served at once. One more gets no thread: _Capped holds it in _main's own select loop until its first byte (at most as many again, each for at most the handshake deadline; past that it is closed unanswered), then _refuse answers 403 (body 'brig: egress refused: the jail holds as many connections as it may') or a SOCKS5 method choice plus reply 0x01, and closes it. It makes no decision line, since it named no destination. HANDSHAKE_DEADLINE_S = 30 s is now a total: _recv sets each handshake read's timeout to what is left of the deadline taken at arrival. A thread that cannot start gives its slot back instead of ending the proxy.
+- Bridge (infra/supervisor/program.py): at most wire.BRIDGE_CONNECTION_LIMIT = 256 relayed at once, one BoundedSemaphore across both listeners; one more is accepted and closed at once, never handed to the proxy.
+- How a test lowers them: EgressLimits(connections, bridge_connections, handshake_s) on create_bwrap_jail. Each field defaults to its program's constant, and check_egress_limits refuses one that is not above zero or is above that default (PolicyEgressLimitOutOfRange), so a limit can be lowered and never raised. Each value travels on the host's own line to its program: the proxy's config line (connections, handshake_s) and the supervisor's exec request (bridge_limit). Both are closed JSON shapes the host writes on fds the command never holds. argv was not used for three reasons. The supervisor's argv is readable in the jail as /proc/1/cmdline. The proxy's argv (python -I -) is how the host and the batteries find it. And neither program parses arguments.
+- Docs: the spec's infra section (the limits, and why the lines and not argv), its presentation section and law 7's held-by list; a glossary entry 'egress limits'; and the docstrings of both programs, wire, launch, link, EgressLimits and create_bwrap_jail.
+- Tests: tests/e2e/test_egress_connection_caps.py. With the proxy's cap at 3, the proxy serves 3 tunnels, refuses one more with 403 and SOCKS 0x01, and its count on the host is +2 threads and +2 fds per tunnel, unchanged by the refusals. With the bridge's cap at 3, one more is closed unanswered, the proxy's count does not move, and PID 1's threads, counted in the jail, do not move either. In both, closing a tunnel frees a slot. destroy_jail with the route full leaves no proxy, thread or fd (law 7). tests/integration/test_egress_create_refusal.py checks the refusal of a raised or zero limit. The repro now passes. The new e2e files passed 8 runs in a row.
+- Not bounded, and stated: after the proxy closes a connection, the bridge's relay for it lasts until the client in the jail sends or closes. That relay is bounded by the bridge's cap only, and costs the jail's own PID 1, not the proxy.
+
+just done passed (record above). Criteria left unticked for the reviewer.
 <!-- SECTION:NOTES:END -->
