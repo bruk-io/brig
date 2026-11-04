@@ -250,10 +250,15 @@ def interpreter_refusal(policy: FsPolicy, chain: tuple[str, ...]) -> Interpreter
     """Why the supervisor's interpreter cannot run under `policy`, or `None`. `chain` is every
     path met on the way to it, the interpreter's own first and each link's target after it
     (`infra/files.py`'s `link_chain`): each must be inside a root and under no mask, since a
-    mount shows a link's target only where the link itself is mounted too."""
+    mount shows a link's target only where the link itself is mounted too. A path that is a
+    root itself ends the walk: bwrap binds what a root leads to at the root's own path, so the
+    jail finds the interpreter there and follows none of the links after it (TASK-0052; a
+    policy whose root is the venv's `python3` link itself)."""
     roots = (*policy.readable, *policy.writable)
     for path in chain:
         inside = any(within(path, root) for root in roots)
         if not inside or any(within(path, mask) for mask in policy.masks):
             return InterpreterUnreachable(path)
+        if path in roots:
+            return None
     return None

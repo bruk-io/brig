@@ -29,27 +29,40 @@ _MAX_LINKS = 40
 
 
 def link_chain(path: str) -> tuple[str, ...]:
-    """Every path a lookup of `path` passes through: `path` itself, then, each time a component
-    on the way is a symbolic link, the path with that link replaced by its target, until none
-    is. Absolute and normalised; stops after `_MAX_LINKS` links, as the kernel does. An
-    `OSError` from reading a link propagates: one this process may not read (another user's
-    `/proc/<pid>/cwd`), or one replaced or removed between finding it and reading it."""
-    chain = [os.path.normpath(path)]
-    for _ in range(_MAX_LINKS):
-        current = chain[-1]
-        parts = current.split("/")
-        for depth in range(2, len(parts) + 1):
-            prefix = "/".join(parts[:depth])
-            if os.path.islink(prefix):
-                target = os.readlink(prefix)
-                base = os.path.dirname(prefix)
-                rest = "/".join(parts[depth:])
-                joined = os.path.join(base, target, rest) if rest else os.path.join(base, target)
-                chain.append(os.path.normpath(joined))
-                break
-        else:
-            return tuple(dict.fromkeys(chain))
+    """Every path a lookup of the absolute `path` passes through: `path` itself, then, each time
+    a component on the way is a symbolic link, the path with that link replaced by its target,
+    until none is, so the last is where `path` leads. A relative `path` is returned alone.
+
+    The lookup is the kernel's: each component is taken in order, and `..` is taken from where
+    the components before it lead, a link among them followed first, never by removing the
+    component before it as text (TASK-0052). So each path is spelled with every component up to
+    the next link resolved (no `.`, no `..` and no link among them) and the rest as written,
+    where a `..` straight after a link is kept: `a/link/../b`, not `a/b`. Stops after
+    `_MAX_LINKS` links, as the kernel does. An `OSError` from reading a link propagates: one
+    this process may not read (another user's `/proc/<pid>/cwd`), or one replaced or removed
+    between finding it and reading it."""
+    if not path.startswith("/"):
+        return (path,)
+    resolved = ""
+    rest = _components(path)
+    chain: list[str] = []
+    for followed in range(_MAX_LINKS + 1):
+        while rest and (rest[0] == ".." or not os.path.islink(f"{resolved}/{rest[0]}")):
+            resolved = resolved.rpartition("/")[0] if rest[0] == ".." else f"{resolved}/{rest[0]}"
+            rest = rest[1:]
+        chain.append("/".join((resolved, *rest)) or "/")
+        if not rest or followed == _MAX_LINKS:
+            break
+        target = os.readlink(f"{resolved}/{rest[0]}")
+        if target.startswith("/"):
+            resolved = ""
+        rest = (*_components(target), *rest[1:])
     return tuple(dict.fromkeys(chain))
+
+
+def _components(path: str) -> tuple[str, ...]:
+    """`path`'s components, without the empty ones and `.`, which change nothing in a lookup."""
+    return tuple(part for part in path.split("/") if part not in ("", "."))
 
 
 def link_count(path: str) -> int:

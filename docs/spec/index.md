@@ -107,7 +107,11 @@ winning where two overlap. Its refusals say why a request cannot be compiled: `r
 not absolute, a mask hiding a root or a path brig needs, a root absent on the host, an entry
 reached through a symbolic link inside a writable root), `cwd_refusal` (a working directory in
 no root), `stdio_refusal` (a stdio path inside a writable root, through a link, or with another
-name) and `interpreter_refusal` (a policy that does not mount the supervisor's interpreter).
+name) and `interpreter_refusal` (a policy that does not mount the supervisor's interpreter,
+or a link on the way to it, as infra's `link_chain` follows the lookup the kernel makes: each
+link before the `..` after it; a root that is itself one of those paths, such as a venv's
+`python3` link, ends the walk, since bwrap binds what a root leads to at its own path;
+TASK-0052).
 `env.py`'s `EnvPolicy` is the environment's allow-list and `scrub_env` its filter; with an
 egress policy, `proxy_environment(port)` is what the jail sets itself over it (`HTTP_PROXY`,
 `HTTPS_PROXY` and `ALL_PROXY=socks5h://...` at the bridge on `127.0.0.1:<port>`, their
