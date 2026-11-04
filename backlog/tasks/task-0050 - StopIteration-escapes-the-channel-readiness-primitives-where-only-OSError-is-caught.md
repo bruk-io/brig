@@ -3,7 +3,7 @@ id: TASK-0050
 title: >-
   StopIteration escapes the channel-readiness primitives where only OSError is
   caught
-status: To Do
+status: In Progress
 assignee: []
 created_date: 2026-10-25 16:57
 updated_date: '2026-11-04T13:51:00Z'
@@ -152,4 +152,13 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Worker, 2026-11-04 (branch claude/small-bugs): repro 627b070 (tests/e2e/test_sockets_nspid_missing.py, recorded failing above on StopIteration out of _nspid), fix 867970c.
+
+- AC#2/#3, jail_pid1_namespace: `_nspid` now returns `None` for a status with no `NSpid:` line (`next(..., None)`), and the scan skips that candidate and keeps going to its deadline. The comparison is now `nspid.split()[-1:] != ["1"]`, so an `NSpid:` line with nothing on it is skipped too instead of raising `IndexError` (a third escape of the same class, found while fixing).
+- AC#1/#3, `_verify`: the fdinfo read is `next(..., None)`; `None` differs from the peer pid, so it is `PEER_LOOKUP_FAILED`. Docstrings of `channel_ready`, `_verify`, `_nspid` and `jail_pid1_namespace` say so.
+- Seam: `channel_ready` gains a keyword `proc_root: str = "/proc"` (infra only, not brig's public API), used for `<proc_root>/<pid>/ns/pid` and `<proc_root>/self/fdinfo/<pidfd>`; the connect and the jail's namespace still go through the real `/proc/self/fd`. presentation passes nothing, so behaviour is unchanged.
+- AC#4: tests/e2e/test_sockets_missing_proc_lines.py pins each site: a real listener with a planted fdinfo lacking `Pid:` is `ChannelRefused(PEER_LOOKUP_FAILED)`, its positive control (same tree with `Pid:` naming the listener) is `ChannelReady`; the scan finds PID 1 beside a no-NSpid child; an empty NSpid line is skipped. Planted fdinfo covers every fd number up to this process's highest open fd + 64, since the pidfd's number is the kernel's.
+- Two e2e helpers (test_channel_readiness_kernel.py, test_channel_readiness_refusals.py) forwarded `**seams: int`, which mypy rejects now that one seam is a str; kernel's names `so_peerpidfd` instead, refusals' (which never passed one) takes none.
+- `uv run just done`: all steps passed (recorded above). Criteria left for the reviewer.
 <!-- SECTION:NOTES:END -->
