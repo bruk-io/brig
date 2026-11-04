@@ -103,11 +103,15 @@ def _children(pid: int, proc_root: str = "/proc") -> list[int]:
     return found
 
 
-def _nspid(pid: int, proc_root: str = "/proc") -> str:
-    """`pid`'s `NSpid` line: its pid in each PID namespace, outermost first. Its `OSError` and
-    `StopIteration` (no `NSpid:` line) are left to the caller."""
+def _nspid(pid: int, proc_root: str = "/proc") -> str | None:
+    """`pid`'s `NSpid` line: its pid in each PID namespace, outermost first; `None` when its
+    `status` carries no `NSpid:` line (a task read mid-exit can open `status` and yield none,
+    TASK-0050), which the caller reads as "this candidate is not the jail's PID 1", never "the
+    scan is over". Its `OSError` is left to the caller."""
     with open(f"{proc_root}/{pid}/status") as handle:
-        return next(line.split(":", 1)[1].strip() for line in handle if line.startswith("NSpid:"))
+        return next(
+            (line.split(":", 1)[1].strip() for line in handle if line.startswith("NSpid:")), None
+        )
 
 
 def _gone(pid: int, proc_root: str = "/proc") -> bool:
@@ -135,12 +139,14 @@ def jail_pid1_namespace(
     TASK-0001.24): comparing peers against it would pass every peer. The fd is held, never read,
     so the namespace's inode cannot be recycled (decision-0005 item 1). The PID 1 is looked for
     before bwrap's exit is checked, so a PID 1 that exists is always found. An unreadable
-    candidate is skipped; an `OSError` listing `proc_root` propagates.
+    candidate, or one whose `status` has no `NSpid:` line, is skipped and the scan goes on until
+    `deadline`; an `OSError` listing `proc_root` propagates.
     """
     while True:
         for child in _children(bwrap_pid, proc_root):
             try:
-                if _nspid(child, proc_root).split()[-1] != "1":
+                nspid = _nspid(child, proc_root)
+                if nspid is None or nspid.split()[-1:] != ["1"]:
                     continue
                 return os.open(f"{proc_root}/{child}/ns/pid", os.O_RDONLY)
             except OSError:
@@ -219,7 +225,12 @@ def _signal_checked(bwrap_pid: int, child: int, sig: int, proc_root: str) -> boo
 
 
 def channel_ready(
-    directory_fd: int, name: str, jail_namespace_fd: int, *, so_peerpidfd: int = SO_PEERPIDFD
+    directory_fd: int,
+    name: str,
+    jail_namespace_fd: int,
+    *,
+    so_peerpidfd: int = SO_PEERPIDFD,
+    proc_root: str = "/proc",
 ) -> ChannelReady | ChannelNotReady | ChannelRefused:
     """Connect once to the socket `name` names directly beneath the directory `directory_fd`
     holds, and verify that the process that called `listen()` on the socket that answered is in
@@ -246,12 +257,16 @@ def channel_ready(
     pidfd from `SO_PEERPIDFD`, its namespace from `/proc/<pid>/ns/pid`, and the pidfd's
     `fdinfo` must name the same pid, so a pid reused in between cannot pass. `ENOPROTOOPT` from
     `SO_PEERPIDFD` is `KERNEL_UNSUPPORTED`; any other `OSError` (measured: `EINVAL` from a
-    listener that exited while its child kept the socket) is `PEER_LOOKUP_FAILED`.
+    listener that exited while its child kept the socket) is `PEER_LOOKUP_FAILED`, and so is an
+    `fdinfo` with no `Pid:` line (TASK-0050).
 
     Every outcome is returned. The one raise, `OSError` for a `jail_namespace_fd` that is not
     open, comes from reading it, which is done last, so the refusals above it need no namespace.
     `so_peerpidfd` is a test's seam: an option number no kernel defines fails as a kernel
-    without `SO_PEERPIDFD` would (TASK-0001.27).
+    without `SO_PEERPIDFD` would (TASK-0001.27). `proc_root` is another, `/proc` except in a
+    test: where the peer's namespace and the pidfd's `fdinfo` are read (`<proc_root>/<pid>/ns/pid`
+    and `<proc_root>/self/fdinfo/<pidfd>`). The connect and the jail's namespace are read
+    through the real `/proc/self/fd` whatever it says.
     """
     try:
         target = os.open(name, os.O_PATH | os.O_NOFOLLOW, dir_fd=directory_fd)
@@ -266,7 +281,7 @@ def channel_ready(
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             verdict = _verify(
-                connection, f"/proc/self/fd/{target}", jail_namespace_fd, so_peerpidfd
+                connection, f"/proc/self/fd/{target}", jail_namespace_fd, so_peerpidfd, proc_root
             )
             if isinstance(verdict, _Verified):
                 connection.setblocking(True)
@@ -282,11 +297,16 @@ def channel_ready(
 
 
 def _verify(
-    connection: socket.socket, target: str, jail_namespace_fd: int, so_peerpidfd: int
+    connection: socket.socket,
+    target: str,
+    jail_namespace_fd: int,
+    so_peerpidfd: int,
+    proc_root: str,
 ) -> _Verified | ChannelNotReady | ChannelRefused:
     """`channel_ready`'s connect to `target` and check on `connection`, which it neither keeps
     nor closes. The connect is non-blocking: any `OSError` from it, `EAGAIN` from a full backlog
-    included, is `ChannelNotReady`. The one raise is `OSError` reading `jail_namespace_fd`."""
+    included, is `ChannelNotReady`. A pidfd `fdinfo` with no `Pid:` line is `PEER_LOOKUP_FAILED`.
+    The one raise is `OSError` reading `jail_namespace_fd`."""
     connection.setblocking(False)
     try:
         connection.connect(target)
@@ -310,10 +330,12 @@ def _verify(
             return ChannelRefused(KERNEL_UNSUPPORTED)
         return ChannelRefused(PEER_LOOKUP_FAILED)
     try:
-        peer_namespace = os.readlink(f"/proc/{peer_pid}/ns/pid")
+        peer_namespace = os.readlink(f"{proc_root}/{peer_pid}/ns/pid")
         # The pidfd names the very process the kernel recorded; a reused pid differs.
-        with open(f"/proc/self/fdinfo/{pidfd}") as handle:
-            pidfd_pid = next(int(line.split()[1]) for line in handle if line.startswith("Pid:"))
+        with open(f"{proc_root}/self/fdinfo/{pidfd}") as handle:
+            pidfd_pid = next(
+                (int(line.split()[1]) for line in handle if line.startswith("Pid:")), None
+            )
     except OSError:
         return ChannelRefused(PEER_LOOKUP_FAILED)
     finally:
