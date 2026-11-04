@@ -5,7 +5,7 @@ title: >-
   supervisor bridges it to a host-side proxy that allows granted hostnames and
   IP addresses per port
 date: '2026-11-03T19:26:00Z'
-status: proposed
+status: accepted
 ---
 ## Context
 
