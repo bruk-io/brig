@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0030
+id: TASK-0053
 title: >-
   test_an_interrupt_sent_as_soon_as_the_jail_exists_is_not_lost fails
   intermittently in the full tier
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-04T14:23:00Z'
 labels:
