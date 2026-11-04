@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-11-03T03:46:00Z'
-updated_date: '2026-11-04T12:40:00Z'
+updated_date: '2026-11-04T14:06:00Z'
 labels:
   - brig
   - fs-policy
@@ -36,4 +36,41 @@ Found reviewing TASK-0029 at 55336cd. FsPolicy(readable=(.venv, ~/.local/share/u
 
 <!-- SECTION:NOTES:BEGIN -->
 Lead, 2026-11-04: promoted from a draft review; criteria written right after promotion (finish-moved for that reason only).
+
+Repro at 99f0ddc2dba1, test files: tests/e2e/test_files_link_chain_dotdot.py; command: `uv run pytest tests/e2e/test_files_link_chain_dotdot.py -q` exited 1
+
+```text
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_dotdot_after_a_link_is_taken_from_where_the_link_leads __________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-770/test_dotdot_after_a_link_is_ta0')
+
+    def test_dotdot_after_a_link_is_taken_from_where_the_link_leads(tmp_path: Path) -> None:
+        """`a/link -> ../x/y`, and both `a/b` and `x/b` exist: the chain ends at `x/b`, the file the
+        kernel opens for `a/link/../b`."""
+        (tmp_path / "a").mkdir()
+        (tmp_path / "x" / "y").mkdir(parents=True)
+        (tmp_path / "a" / "b").write_text("the text's answer")
+        (tmp_path / "x" / "b").write_text("the kernel's answer")
+        (tmp_path / "a" / "link").symlink_to("../x/y")
+        path = f"{tmp_path}/a/link/../b"
+    
+        chain = files.link_chain(path)
+    
+>       assert os.stat(chain[-1]).st_ino == os.stat(path).st_ino
+E       AssertionError: assert 814155 == 814156
+E        +  where 814155 = os.stat_result(st_mode=33188, st_ino=814155, st_dev=65024, st_nlink=1, st_uid=0, st_gid=0, st_size=17, st_atime=1793801175, st_mtime=1793801175, st_ctime=1793801175).st_ino
+E        +    where os.stat_result(st_mode=33188, st_ino=814155, st_dev=65024, st_nlink=1, st_uid=0, st_gid=0, st_size=17, st_atime=1793801175, st_mtime=1793801175, st_ctime=1793801175) = <built-in function stat>('/tmp/pytest-of-root/pytest-770/test_dotdot_after_a_link_is_ta0/a/b')
+E        +      where <built-in function stat> = os.stat
+E        +  and   814156 = os.stat_result(st_mode=33188, st_ino=814156, st_dev=65024, st_nlink=1, st_uid=0, st_gid=0, st_size=19, st_atime=1793801175, st_mtime=1793801175, st_ctime=1793801175).st_ino
+E        +    where os.stat_result(st_mode=33188, st_ino=814156, st_dev=65024, st_nlink=1, st_uid=0, st_gid=0, st_size=19, st_atime=1793801175, st_mtime=1793801175, st_ctime=1793801175) = <built-in function stat>('/tmp/pytest-of-root/pytest-770/test_dotdot_after_a_link_is_ta0/a/link/../b')
+E        +      where <built-in function stat> = os.stat
+
+tests/e2e/test_files_link_chain_dotdot.py:29: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_files_link_chain_dotdot.py::test_dotdot_after_a_link_is_taken_from_where_the_link_leads
+1 failed in 0.23s
+```
 <!-- SECTION:NOTES:END -->
