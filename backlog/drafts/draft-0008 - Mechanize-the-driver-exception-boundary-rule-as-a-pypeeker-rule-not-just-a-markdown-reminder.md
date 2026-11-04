@@ -5,7 +5,8 @@ title: >-
   markdown reminder
 status: Draft
 assignee: []
-created_date: '2026-10-18 02:21'
+created_date: 2026-10-18 02:21
+updated_date: '2026-11-04T12:40:00Z'
 labels:
   - brig
   - tooling
@@ -29,3 +30,9 @@ A standing rule a reviewer has to remember to re-check by hand, three times over
 - [ ] False positives: does the rule need to understand that spawn's SpawnError is already a non-exception-raising... (infra never raises brig types, rule 9) -- i.e. what should the rule flag as 'unwrapped' once infra itself stops raising for a given call (as TASK-0001.08 just did for group_alive/signal_group), versus calls that still can raise (spawn)?
 - [ ] Is this pypeeker-rules/brig.py's job (same place brig-layers, brig-slices etc. live), or does it belong upstream in pypeeker itself as a reusable heuristic (a driver/adapter boundary pattern other projects would also want)?
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Review 2026-11-04: still the only enforcement is the markdown rule, and TASK-0046/0047 found two more bare OSErrors (five in all). Its scope is wider now: infra is imported by presentation/api.py, driver.py, jail.py and __init__.py as well as drivers/bwrap.py. Reshape as a spike whose criterion is 'decision recorded: the rule's shape and scope, or why pypeeker cannot express it'.
+<!-- SECTION:NOTES:END -->
