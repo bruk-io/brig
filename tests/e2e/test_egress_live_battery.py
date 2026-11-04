@@ -168,6 +168,16 @@ def _proxy_children() -> list[int]:
     return found
 
 
+def _the_proxy() -> list[int]:
+    """The egress proxies seen at this step, once at least one shows: a read of `/proc` can land
+    while the proxy is still being started or its cmdline is not yet readable (CI saw none at
+    one step, 2026-11-04), and what is asserted is that one proxy served every step."""
+    deadline = time.monotonic() + _STEP_TIMEOUT_S
+    while not (found := _proxy_children()) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return found
+
+
 @pytest.fixture(scope="module")
 def journey(server: int) -> Iterator[tuple[int, Jail, list[dict[str, object]], list[int]]]:
     """The whole journey, once for this module: the jail refused `late.test`, was granted it,
@@ -184,14 +194,14 @@ def journey(server: int) -> Iterator[tuple[int, Jail, list[dict[str, object]], l
             stdio=Stdio(stdout=str(out)),
         )
         try:
-            proxies = [*_proxy_children()]
+            proxies = [*_the_proxy()]
             steps = [_step(cues, out, 1)]
             allow_egress(jail, late)
             steps.append(_step(cues, out, 2))
-            proxies += _proxy_children()
+            proxies += _the_proxy()
             revoke_egress(jail, late)
             steps.append(_step(cues, out, 3))
-            proxies += _proxy_children()
+            proxies += _the_proxy()
             assert run_jail(jail, timeout_s=_STEP_TIMEOUT_S) == 0
         finally:
             destroy_jail(jail)
