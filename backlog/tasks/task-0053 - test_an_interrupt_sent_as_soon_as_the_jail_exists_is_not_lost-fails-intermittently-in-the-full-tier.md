@@ -181,4 +181,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+No repro: the defect was in the test, not brig. brig delivered every interrupt; the failure was CPython swallowing a SIGINT during its own startup, measured with no jail (1 of 580 exits 0) and in the old test under load (2 of 50 rounds). The fixed test uses /bin/sleep, which cannot swallow SIGINT, so there is no failing test of brig to record.
 <!-- SECTION:NOTES:END -->
