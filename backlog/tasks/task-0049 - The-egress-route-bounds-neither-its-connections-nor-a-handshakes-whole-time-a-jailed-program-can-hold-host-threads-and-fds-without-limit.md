@@ -25,7 +25,7 @@ Review of TASK-0001.36. infra/proxy/program.py starts one daemon thread per conn
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 A handshake that has not named its destination within a fixed total time is closed, proven by an e2e test with a slow client
-- [ ] #2 The proxy and the bridge each hold at most a stated number of connections at once; one more is refused and closed, proven by an e2e test that counts the proxy's threads and fds
+- [x] #2 The proxy and the bridge each hold at most a stated number of connections at once; one more is refused and closed, proven by an e2e test that counts the proxy's threads and fds
 - [ ] #3 The proxy and the supervisor's bridge each cap concurrent connections per jail at a named constant, and a connection past the cap is refused (403 or SOCKS 0x01 for the proxy, closed for the bridge); e2e
 - [ ] #4 A handshake has a total deadline, not a per-read one, a named constant; e2e: a client sending one header byte per second is closed past the total limit, with the limit lowered in the test so it runs in seconds
 - [ ] #5 The docstrings and spec state both limits; destroy_jail still ends everything (law 7)
