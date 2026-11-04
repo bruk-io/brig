@@ -27,6 +27,7 @@ from brig.domain.channels import Reservations
 from brig.domain.claims import Claim
 from brig.domain.grades import Grade
 from brig.domain.plan import Plan
+from brig.domain.policy.env import proxy_environment
 from brig.domain.policy.paths import FsPolicy, PathKind, within
 
 _VIRTUAL_FS_FLAGS: tuple[str, ...] = ("--proc", "/proc", "--dev", "/dev", "--tmpfs", "/sys")
@@ -56,10 +57,26 @@ _NAMESPACE_FLAGS: tuple[str, ...] = (
 """
 
 
-def compile_run(command: tuple[str, ...], env: Mapping[str, str] = frozendict()) -> Plan:
+EGRESS_BRIDGE_PORT = 3128
+"""Where the supervisor listens, on the jail's own loopback, for the connections it bridges to the
+egress proxy (decision-0009 item 1). Fixed: the jail's network namespace is its own, so nothing
+else holds a port there, and the supervisor binds it before the command starts. Above 1023,
+since the jail holds no capability to bind below (`--cap-drop ALL`)."""
+
+
+def compile_run(
+    command: tuple[str, ...],
+    env: Mapping[str, str] = frozendict(),
+    *,
+    egress_port: int | None = None,
+) -> Plan:
     """The plan for running `command`, with `env` as its candidate environment, as the
-    supervisor's child (decision-0002). A policy is refused before this, by `refusal`."""
-    return Plan(argv=command, env=frozendict(env))
+    supervisor's child (decision-0002). With `egress_port`, the jail's bridge to its egress
+    proxy, the proxy variables are set to it whatever the `EnvPolicy` allows
+    (`proxy_environment`). A policy is refused before this, by `refusal` and
+    `proxy_variable_refusal`."""
+    set_env = proxy_environment(egress_port) if egress_port is not None else frozendict()
+    return Plan(argv=command, env=frozendict(env), set_env=set_env)
 
 
 class MountKind(StrEnum):

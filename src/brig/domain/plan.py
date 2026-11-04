@@ -7,7 +7,10 @@ from dataclasses import dataclass
 class Plan:
     """The command a jail's supervisor runs as its child (decision-0002), and its candidate
     environment: not yet scrubbed, since `operations.create` applies the `EnvPolicy`. Empty by
-    default, so the command then runs with no environment, `PATH` included."""
+    default, so the command then runs with no environment, `PATH` included. `set_env` is what
+    the jail type sets whatever the policy says, laid over the scrubbed environment: the egress
+    proxy's variables (decision-0009 item 7), refused in an `EnvPolicy` before this is built."""
 
     argv: tuple[str, ...]
     env: frozendict[str, str] = frozendict()
+    set_env: frozendict[str, str] = frozendict()

@@ -15,6 +15,19 @@ model {
     library.supervisorLink -> supervisor 'starts as the jail\'s PID 1, and exchanges wire messages with,' {
       technology 'newline-delimited JSON over pipes on fds 3 and 4'
     }
+    // decision-0009 items 1 and 2: the jail's one route out. The supervisor
+    // listens on the jail's loopback and hands each connection to the proxy,
+    // which alone reaches the network.
+    library.proxyLink -> egressProxy 'starts with its program on stdin, sends the grants to, and ends,' {
+      technology 'a JSON line on a pipe on fd 3'
+    }
+    supervisor -> egressProxy 'hands each connection accepted on the jail\'s loopback to' {
+      technology 'one end of a socketpair per connection, sent with SCM_RIGHTS over a SOCK_SEQPACKET pair (fds 5 and 4), then relayed bytes'
+    }
+  }
+
+  brig.egressProxy -> network 'connects to the addresses the egress decision allowed on' {
+    technology 'TCP'
   }
 
   extend brig.library {
@@ -25,12 +38,15 @@ model {
     operations -> policy 'scrubs the environment with'
     teardown -> effects 'yields effect values from'
     bwrapJailType -> plan 'compiles a request into'
-    bwrapJailType -> policy 'compiles the FsPolicy of'
+    bwrapJailType -> policy 'compiles the FsPolicy, and sets the proxy variables, with'
     bwrapJailType -> channels 'binds the channel directory of'
     bwrapJailType -> grades 'states each claim\'s ceiling as'
 
     // infra, internal to the layer
     supervisorLink -> processes 'spawns the supervisor through'
+    supervisorLink -> proxyLink 'starts a jail\'s egress proxy before its supervisor, and ends it on close, through'
+    proxyLink -> processes 'spawns, kills and reaps the egress proxy through'
+    proxyLink -> supervisorLink 'shares the version guard of the supervisor\'s file with'
 
     // presentation, internal to the layer
     api -> driver 'runs start through'
@@ -40,6 +56,7 @@ model {
     bwrapDriver -> driver 'runs create through'
     bwrapDriver -> jail 'builds the Jail, cleans up a failed create with dismantle, and finds the real ports in,'
     bwrapDriver -> errors 'raises refusals and infra failures as'
+    bwrapDriver -> api 'refuses a malformed egress policy with'
     bwrapDriver -> ports 'calls infra through'
     driver -> errors 'raises a failed start as'
     driver -> ports 'performs each effect through'
@@ -53,7 +70,8 @@ model {
     api -> effects 'narrows exit and teardown outcomes using'
     bwrapDriver -> operations 'drives the create generator of'
     bwrapDriver -> bwrapJailType 'compiles the mounts, the supervisor launch and the ceilings with'
-    bwrapDriver -> policy 'refuses what cannot compile with'
+    bwrapDriver -> policy 'refuses what cannot compile, and an environment policy naming a proxy variable, with'
+    bwrapDriver -> proxyLink 'assembles the egress proxy from the decision\'s source, and describes its launch, with'
     bwrapDriver -> channels 'binds the reservations of'
     driver -> effects 'performs the effects defined in'
     jail -> operations 'drives the destroy generator of'

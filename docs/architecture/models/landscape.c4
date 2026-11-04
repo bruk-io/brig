@@ -12,5 +12,9 @@ model {
     description 'A program that links brig to run its own processes inside a jail.'
   }
 
+  network = externalSystem 'Network Destinations' {
+    description 'The hosts a jail with an egress policy may reach: only those its embedder granted, by hostname or IP address and port (decision-0009).'
+  }
+
   embedder -> brig 'creates, supervises, and tears down jails through'
 }

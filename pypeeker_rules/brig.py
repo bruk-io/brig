@@ -1567,3 +1567,39 @@ register_dsl_rule(
         ),
     )
 )
+
+
+# ---------------------------------------------------------------------------
+# decision-0001 rule 17 and decision-0009 item 2: brig-standalone-programs
+# ---------------------------------------------------------------------------
+
+
+def _standalone_imports(options: Mapping[str, Any]) -> Selection | None:
+    """Imports of anything of ``brig`` from a module brig ships as source to a program of its
+    own (the supervisor, the egress proxy), where no ``brig`` can be imported: the assembled file
+    runs under ``-I``, and an installed brig the interpreter could find would be code the jail's
+    host did not mean to run there. The modules are listed by dotted name in the rule's
+    ``modules`` option, each assembled whole into its program's file."""
+    modules = tuple(options.get("modules") or ())
+    if not modules:
+        return None
+    return imports().where(
+        all_of(
+            any_of(*(row.module.eq(module) for module in modules)),
+            row.imported_from.is_within(_dotted(_DEFAULT_ROOT)),
+        )
+    )
+
+
+register_dsl_rule(
+    DslRule(
+        rule_id="brig-standalone-programs",
+        build=_standalone_imports,
+        message=(
+            "'{module}' imports '{imported_from}': it is shipped as source into a program "
+            "of its own (decision-0001 rule 17, decision-0009 item 2), where brig cannot be "
+            "imported. Use the standard library only; a value the program needs from brig "
+            "is repeated, or its module is assembled in beside it"
+        ),
+    )
+)

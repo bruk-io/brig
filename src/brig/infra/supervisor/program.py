@@ -2,14 +2,18 @@
 
 Reads one `exec` request from fd 3, starts the command as its child, reaps everything
 reparented to it (nothing else in the namespace will), and writes `started`, `exited` and
-`done` to fd 4. Assembled with `wire.py` into one stdlib-only file (rule 17), where an import of
-`wire` cannot resolve, so it repeats `wire.py`'s numbers and message shapes.
+`done` to fd 4. With an egress proxy (decision-0009 item 1) it also listens on the jail's
+loopback and bridges each connection to the proxy over fd 5. Assembled with `wire.py` into one
+stdlib-only file (rule 17), where an import of `wire` cannot resolve, so it repeats `wire.py`'s
+numbers and message shapes.
 """
 
 import ctypes
 import json
 import os
 import signal
+import socket
+import threading
 from types import FrameType
 
 _REQUEST_FD = 3
@@ -17,6 +21,12 @@ _REQUEST_FD = 3
 
 _EVENTS_FD = 4
 """`wire.EVENTS_FD`, repeated."""
+
+_BRIDGE_FD = 5
+"""`wire.BRIDGE_FD`, repeated."""
+
+_RELAY_CHUNK = 65536
+"""How many bytes one bridged read takes at most."""
 
 
 _PR_SET_DUMPABLE = 4
@@ -57,7 +67,7 @@ def _make_undumpable() -> None:
         )
 
 
-def _read_exec_request() -> tuple[list[str], dict[str, str]]:
+def _read_exec_request() -> tuple[list[str], dict[str, str], int | None]:
     """Read and parse the one exec request on `_REQUEST_FD`.
 
     Leaves `_REQUEST_FD` open (`closefd=False`): `_start_child`'s `CLOSE` action names it, and
@@ -67,7 +77,7 @@ def _read_exec_request() -> tuple[list[str], dict[str, str]]:
     Raises:
         _NoCommandError: `_REQUEST_FD` closed (EOF) before a line arrived.
         ValueError: the line read is not well-formed JSON, is missing
-            `argv` or `env`, or names an empty `argv`.
+            `argv`, `env` or `bridge_port`, or names an empty `argv`.
     """
     with os.fdopen(_REQUEST_FD, "r", closefd=False) as request_pipe:
         line = request_pipe.readline()
@@ -78,7 +88,94 @@ def _read_exec_request() -> tuple[list[str], dict[str, str]]:
     if not argv:
         raise ValueError("exec request names an empty argv")
     env = {str(name): str(value) for name, value in raw["env"].items()}
-    return argv, env
+    port = raw["bridge_port"]
+    return argv, env, None if port is None else int(port)
+
+
+def _listen(port: int) -> list[socket.socket]:
+    """Listen on `127.0.0.1:<port>`, and on `[::1]:<port>` where the jail's namespace has IPv6
+    (decision-0009 item 1; where it has not, IPv4 alone, as the decision states). Called before
+    the command starts, so the port is the bridge's before any program of the jail's could take
+    it. Each socket is close-on-exec, as Python makes every socket, so the command inherits none.
+    An `OSError` binding `127.0.0.1:<port>` propagates.
+    """
+    listeners = [socket.create_server(("127.0.0.1", port), backlog=128)]
+    try:
+        listeners.append(
+            socket.create_server(
+                ("::1", port), family=socket.AF_INET6, backlog=128, dualstack_ipv6=False
+            )
+        )
+    except OSError:
+        pass
+    return listeners
+
+
+def _copy(source: socket.socket, sink: socket.socket) -> None:
+    """Copy bytes from `source` to `sink` until `source` ends, then end `sink`'s writing half.
+    An error on either ends both whole, so the copy the other way stops too. Bytes only: the
+    supervisor reads nothing the command sends."""
+    try:
+        while chunk := source.recv(_RELAY_CHUNK):
+            sink.sendall(chunk)
+    except OSError:
+        for either in (source, sink):
+            try:
+                either.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        return
+    try:
+        sink.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+
+
+def _relay(accepted: socket.socket, kept: socket.socket) -> None:
+    """Relay `accepted` (the command's connection) and `kept` (this side of its socketpair to
+    the proxy) both ways until each has ended, then close both."""
+    back = threading.Thread(target=_copy, args=(kept, accepted), daemon=True)
+    back.start()
+    _copy(accepted, kept)
+    back.join()
+    accepted.close()
+    kept.close()
+
+
+def _bridge_one(proxy: socket.socket, accepted: socket.socket) -> None:
+    """Hand one accepted connection to the proxy: a socketpair, one end sent over `proxy` with
+    `SCM_RIGHTS` and closed here, the other relayed with `accepted`. A proxy that cannot take it
+    (gone, or its end full and closed) closes `accepted`: the connection fails, never routes
+    elsewhere."""
+    handed, kept = socket.socketpair()
+    try:
+        socket.send_fds(proxy, [b"c"], [handed.fileno()])
+    except OSError:
+        accepted.close()
+        kept.close()
+        return
+    finally:
+        handed.close()
+    threading.Thread(target=_relay, args=(accepted, kept), daemon=True).start()
+
+
+def _accept(listener: socket.socket, proxy: socket.socket) -> None:
+    """Accept on `listener` for the supervisor's life, bridging each connection to `proxy`."""
+    while True:
+        try:
+            accepted, _ = listener.accept()
+        except OSError:
+            continue
+        _bridge_one(proxy, accepted)
+
+
+def _start_bridge(listeners: list[socket.socket]) -> None:
+    """Accept on each of `listeners` on a daemon thread of its own, bridging to the proxy over
+    `_BRIDGE_FD`. Started only once the command exists, so `posix_spawnp` ran with one thread;
+    daemon, so the supervisor's exit after `done` ends them, and every socket with it."""
+    proxy = socket.socket(fileno=_BRIDGE_FD)
+    for listener in listeners:
+        threading.Thread(target=_accept, args=(listener, proxy), daemon=True).start()
 
 
 def _emit(message: dict[str, object]) -> None:
@@ -87,7 +184,7 @@ def _emit(message: dict[str, object]) -> None:
     os.write(_EVENTS_FD, (json.dumps(message) + "\n").encode())
 
 
-def _start_child(argv: list[str], env: dict[str, str]) -> int:
+def _start_child(argv: list[str], env: dict[str, str], bridged: bool = False) -> int:
     """Start `argv` in `env` as this process's child, with `posix_spawnp` (no Python after a
     fork), and return its pid.
 
@@ -97,16 +194,15 @@ def _start_child(argv: list[str], env: dict[str, str]) -> int:
     `test_supervisor_link_gateway.py` plants it). Both must still be open here, since a `CLOSE`
     on a closed fd fails the spawn with `EBADF`. The closes are not enough alone: the command
     could reopen them through `/proc/1/fd` while this process is dumpable, which
-    `_make_undumpable` prevents (TASK-0022).
+    `_make_undumpable` prevents (TASK-0022). With `bridged`, `_BRIDGE_FD` is closed in it the
+    same way: the command reaches the proxy only through the bridge's port.
     """
+    closed = (_REQUEST_FD, _EVENTS_FD, _BRIDGE_FD) if bridged else (_REQUEST_FD, _EVENTS_FD)
     return os.posix_spawnp(
         argv[0],
         argv,
         env,
-        file_actions=[
-            (os.POSIX_SPAWN_CLOSE, _REQUEST_FD),
-            (os.POSIX_SPAWN_CLOSE, _EVENTS_FD),
-        ],
+        file_actions=[(os.POSIX_SPAWN_CLOSE, fd) for fd in closed],
     )
 
 
@@ -152,6 +248,10 @@ def _main() -> None:
     for, blocked or not (TASK-0030): a `SIGINT` sent before the command existed was lost while
     the host was told it had been delivered. One that arrives before the command exists is held
     and forwarded as soon as it does.
+
+    With a bridge port, the loopback listeners are bound before the command starts and accept
+    once it has (`_listen`, `_start_bridge`); a port that cannot be bound ends the supervisor
+    before the command exists, so nothing runs with a route the host did not see made.
     """
     _make_undumpable()
     started: list[int] = []
@@ -165,13 +265,16 @@ def _main() -> None:
 
     for forwarded in (signal.SIGTERM, signal.SIGINT):
         signal.signal(forwarded, forward)
-    argv, env = _read_exec_request()
-    child_pid = _start_child(argv, env)
+    argv, env, bridge_port = _read_exec_request()
+    listeners = _listen(bridge_port) if bridge_port is not None else []
+    child_pid = _start_child(argv, env, bridged=bridge_port is not None)
     started.append(child_pid)
     for sig in held:
         _forward_signal(child_pid, sig, None)
     # Only now: `_start_child`'s CLOSE action needed it open (`_read_exec_request`).
     os.close(_REQUEST_FD)
+    if listeners:
+        _start_bridge(listeners)
     _emit({"kind": "started", "pid": child_pid})
     exit_code = _reap_until_gone(child_pid)
     _emit({"kind": "done", "exit_code": exit_code})

@@ -1,6 +1,8 @@
 """The bwrap jail type's presentation (decision-0001 rule 3, decision-0007 item 5): writing the
 supervisor script, refusing and compiling the policy, starting the jail through the shared driver,
-and holding the jail's PID namespace for channel readiness."""
+and holding the jail's PID namespace for channel readiness. With an egress policy, the jail's one
+route out: the supervisor's loopback bridge to a per-jail proxy on the host (decision-0009 items
+1, 2 and 7)."""
 
 import os
 import sys
@@ -16,7 +18,14 @@ from brig.domain.channels import (
 )
 from brig.domain.effects import GroupState, Process
 from brig.domain.jail_types import bwrap
-from brig.domain.policy.env import DENY_ALL, EnvPolicy
+from brig.domain.policy import egress as _egress
+from brig.domain.policy.egress import EgressPolicy
+from brig.domain.policy.env import (
+    DENY_ALL,
+    EnvPolicy,
+    ProxyVariableNamed,
+    proxy_variable_refusal,
+)
 from brig.domain.policy.paths import (
     WHOLE_HOST_READ_ONLY,
     CwdOutsideRoots,
@@ -41,15 +50,20 @@ from brig.domain.policy.stdio import INHERIT, Stdio
 from brig.infra import files as _files
 from brig.infra import sockets as _sockets
 from brig.infra import state_dir as _state_dir_mod
+from brig.infra.proxy import assemble as _proxy_assemble
+from brig.infra.proxy import launch as _proxy_launch
 from brig.infra.supervisor import assemble, link
+from brig.presentation.api import check_egress_policy
 from brig.presentation.driver import run
 from brig.presentation.errors import (
     ChannelDirectoryCreateFailed,
     ChannelNamespaceNotFound,
+    EgressProxySourceUnreadable,
     JailSpawnFailed,
     JailTeardownFailed,
     PlaceholdersFailed,
     PolicyCwdOutsideRoots,
+    PolicyEnvNamesProxyVariable,
     PolicyInterpreterUnreachable,
     PolicyMaskHides,
     PolicyPathNotAbsolute,
@@ -121,6 +135,35 @@ def _supervisor_path(state_dir: str) -> tuple[str, ...]:
     return (sys.executable, "-I", handle.name)
 
 
+def _bridge(egress: EgressPolicy, hosts: Mapping[str, tuple[str, ...]] | None) -> link.Bridge:
+    """The jail's egress route: the supervisor's port on the jail's loopback, and the proxy that
+    decides with `egress`, its program assembled with the decision's own source inlined
+    (`infra.proxy.assemble`), run from its stdin under `-I` by this interpreter. `hosts`, when
+    given, is the table the proxy resolves names from instead of the host's resolver.
+
+    Raises:
+        EgressProxySourceUnreadable: brig's own proxy or decision source could not be read;
+            nothing was written or started.
+    """
+    try:
+        decision_source = Path(_egress.__file__).read_text(encoding="utf-8")
+        source = _proxy_assemble.assembled_source(decision_source)
+    except OSError as error:
+        raise EgressProxySourceUnreadable() from error
+    table = (
+        None
+        if hosts is None
+        else frozendict({name: tuple(addresses) for name, addresses in hosts.items()})
+    )
+    launch = _proxy_launch.ProxyLaunch(
+        argv=(sys.executable, "-I", "-"),
+        source=source,
+        allow=tuple((destination.host, destination.port) for destination in egress.allow),
+        hosts=table,
+    )
+    return link.Bridge(port=bwrap.EGRESS_BRIDGE_PORT, proxy=launch)
+
+
 def _facts(paths: tuple[str, ...]) -> dict[str, tuple[str, str]]:
     """`infra.files.facts` of each of `paths`, one at a time so a refusal names its own path.
 
@@ -156,10 +199,12 @@ def _supervisors_for(
     channels: Reservations | None,
     cwd: str | None = None,
     stdio: Stdio = INHERIT,
+    bridge: link.Bridge | None = None,
 ) -> tuple[SupervisorPort, Path, tuple[bwrap.Mount, ...], tuple[str, ...]]:
     """Refuse or compile `policy` for one jail, and return its `SupervisorPort` (a fresh
     `LiveSupervisor`), the supervisor script written for it, its mounts, and the absent paths
-    it holds placeholders for. Nothing is written before every refusal has passed. Beside what is
+    it holds placeholders for; with `bridge`, the supervisor bridges the jail to its egress proxy.
+    Nothing is written before every refusal has passed. Beside what is
     listed below, `PolicyPathUninspectable` from `_facts` and `_link_chain` (the host refused to
     say what is at a policy path, a stdio path or the interpreter, or where a link on the way to
     one leads) and `SupervisorSourceUnreadable` from `_supervisor_path` (brig's own supervisor
@@ -264,7 +309,7 @@ def _supervisors_for(
         channels=channels,
     )
     supervisor_argv = bwrap.compile_supervisor_launch(supervisor_path, mounts, cwd)
-    port = real_supervisor_port(link.LiveSupervisor(supervisor_argv, streams))
+    port = real_supervisor_port(link.LiveSupervisor(supervisor_argv, streams, bridge))
     held = (*policy.write_denies, *policy.masks)
     placeholders = tuple(
         dict.fromkeys(
@@ -285,6 +330,8 @@ def create_bwrap_jail(
     channels: Reservations | None = None,
     cwd: str | None = None,
     stdio: Stdio = INHERIT,
+    egress: EgressPolicy | None = None,
+    egress_hosts: Mapping[str, tuple[str, ...]] | None = None,
     processes: ProcessPort = PROCESSES,
     supervisors: SupervisorPort | None = None,
     directories: ChannelDirectoryPort = CHANNEL_DIRECTORIES,
@@ -310,9 +357,21 @@ def create_bwrap_jail(
         stdio: Where the command's fd 0, 1 and 2 are pumped from and to; the embedder's own by
             default. The command gets pipes, never these (TASK-0042); `destroy_jail` ends the
             pumps.
+        egress: What the command may reach off the jail (decision-0009). `None`, the default,
+            starts nothing and changes nothing: the jail has loopback only. Given one (an empty
+            `allow` included), the jail's supervisor listens on `127.0.0.1:3128` in the jail
+            and bridges each connection to a proxy on the host that allows only what `egress`
+            grants; the command's `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` (`socks5h://`) and
+            their lower-case forms point there and `NO_PROXY`/`no_proxy` are empty, whatever
+            `env_policy` says. `destroy_jail` ends the proxy.
+        egress_hosts: With `egress`, a table the proxy resolves names from instead of the
+            host's resolver (a name it lacks resolves to nothing): host data given as data,
+            for a test or an embedder that pins its names. Every address is still judged
+            (decision-0009 item 4). Unused without `egress`.
         processes: The `ProcessPort` (a fake in a test).
         supervisors: A `SupervisorPort` to use as given (a fake in a test); `policy` is then not
-            compiled and no supervisor script is written.
+            compiled, no supervisor script is written and no egress proxy started (`egress` is
+            still refused if malformed, and still sets the proxy variables).
         directories: The `ChannelDirectoryPort`.
         placeholders: The `PlaceholderPort` that holds the directories the jail mounts over at
             absent paths (a fake in a test).
@@ -330,15 +389,18 @@ def create_bwrap_jail(
     `StateDirectoryWriteFailed` (the host refused to make brig's state directory or its empty
     directory, or to write the supervisor script, before anything started; TASK-0046),
     `PolicyPathUninspectable` (the host refused to say what is at a path the policy or stdio
-    names, or at the interpreter; TASK-0047), `SupervisorSourceUnreadable` (brig's own install
-    is broken; TASK-0047), and
+    names, or at the interpreter; TASK-0047), `SupervisorSourceUnreadable` and
+    `EgressProxySourceUnreadable` (brig's own install is broken; TASK-0047), the egress policy
+    refusals of `check_egress_policy`, before anything else is looked at, and
     `ChannelNamespaceNotFound` from `_namespace_fd_for` propagate. A jail whose command finished
     before its namespace was found has no namespace fd (TASK-0001.30).
 
     Raises:
-        JailSpawnFailed: the driver could not start the supervisor (an unopenable stdio path
-            included, TASK-0028); a supervisor it spawned before the start failed was torn
-            down first (TASK-0046).
+        PolicyEnvNamesProxyVariable: with `egress`, `env_policy` allows a proxy variable the
+            jail sets itself (decision-0009 item 7); nothing was looked at or started.
+        JailSpawnFailed: the driver could not start the supervisor, or its egress proxy (an
+            unopenable stdio path included, TASK-0028); a supervisor it spawned before the
+            start failed was torn down first (TASK-0046), and a proxy ended.
         ChannelDirectoryCreateFailed: the host refused to create the channel
             directory, or to open it once made.
         PlaceholdersFailed: the host refused a directory for an absent write deny or mask, or
@@ -347,14 +409,24 @@ def create_bwrap_jail(
             teardown that followed still found its group alive, or itself raised so the group
             was never verified gone; the step's own exception is the `__cause__`.
     """
+    if egress is not None:
+        check_egress_policy(egress)
+        match proxy_variable_refusal(env_policy):
+            case ProxyVariableNamed(name=name):
+                raise PolicyEnvNamesProxyVariable(name)
+            case None:
+                pass
+            case _ as unreachable:
+                assert_never(unreachable)
     if supervisors is not None:
         resolved_supervisors: SupervisorPort = supervisors
         supervisor_script: Path | None = None
         mounts: tuple[bwrap.Mount, ...] = ()
         absent: tuple[str, ...] = ()
     else:
+        bridge = None if egress is None else _bridge(egress, egress_hosts)
         resolved_supervisors, supervisor_script, mounts, absent = _supervisors_for(
-            policy, channels, cwd, stdio
+            policy, channels, cwd, stdio, bridge
         )
     channel_directory = (
         Path(channels.directory.host_path)
@@ -381,7 +453,11 @@ def create_bwrap_jail(
                 directory_fd = _sockets.open_directory(str(channel_directory))
             except OSError as error:
                 raise ChannelDirectoryCreateFailed(str(channel_directory)) from error
-        plan = bwrap.compile_run(command, env=env)
+        plan = bwrap.compile_run(
+            command,
+            env=env,
+            egress_port=None if egress is None else bwrap.EGRESS_BRIDGE_PORT,
+        )
         try:
             process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
         except JailSpawnFailed as error:

@@ -13,7 +13,7 @@ views {
       include effects, operations, teardown, plan, policy, channels, grades, bwrapJailType
     }
     group 'infra' {
-      include processes, sockets, files, placeholders, stateDir, supervisorLink
+      include processes, sockets, files, placeholders, stateDir, supervisorLink, proxyLink
     }
     group 'presentation' {
       include api, jail, driver, bwrapDriver, ports, errors, report

@@ -2,7 +2,15 @@
 filter, tested with plain data, nothing mocked.
 """
 
-from brig.domain.policy.env import DENY_ALL, EnvPolicy, scrub_env
+from brig.domain.policy.env import (
+    DENY_ALL,
+    PROXY_VARIABLES,
+    EnvPolicy,
+    ProxyVariableNamed,
+    proxy_environment,
+    proxy_variable_refusal,
+    scrub_env,
+)
 
 
 def test_scrub_env_keeps_only_the_allowed_names() -> None:
@@ -58,3 +66,21 @@ def test_scrub_env_does_not_mutate_either_argument() -> None:
 
     assert host_env == {"PATH": "/usr/bin", "SECRET": "shh"}
     assert policy == EnvPolicy(allowed=("PATH",))
+
+
+def test_proxy_variable_refusal_names_the_first_proxy_variable_allowed() -> None:
+    """decision-0009 item 7: an allow-list naming a variable the egress jail sets itself is
+    refused, naming the first such entry in the list's order, either case."""
+    policy = EnvPolicy(allowed=("PATH", "no_proxy", "HTTPS_PROXY"))
+
+    assert proxy_variable_refusal(policy) == ProxyVariableNamed("no_proxy")
+
+
+def test_proxy_variable_refusal_lets_an_allow_list_without_them_through() -> None:
+    assert proxy_variable_refusal(EnvPolicy(allowed=("PATH", "HOME", "PROXY"))) is None
+    assert proxy_variable_refusal(DENY_ALL) is None
+
+
+def test_proxy_environment_covers_every_proxy_variable() -> None:
+    """Every name `PROXY_VARIABLES` lists is set, and nothing else."""
+    assert tuple(proxy_environment(3128)) == PROXY_VARIABLES

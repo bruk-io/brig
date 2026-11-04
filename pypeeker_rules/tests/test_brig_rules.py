@@ -742,3 +742,56 @@ def test_brig_frozen_data_accepts_tuples_frozendicts_and_non_fields(tmp_path: Pa
         rule_config='[tool.pypeeker.brig-frozen-data]\nroot = "src/brig/domain"\n',
     )
     assert_rule_clean(project, "brig-frozen-data", src=("src",))
+
+
+_STANDALONE_CONFIG = (
+    "[tool.pypeeker.brig-standalone-programs]\n"
+    'modules = ["brig.infra.proxy.program", "brig.domain.policy.egress"]\n'
+)
+
+
+def test_brig_standalone_programs_fires_on_a_listed_module_importing_brig(
+    tmp_path: Path,
+) -> None:
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-standalone-programs",
+        src=("src",),
+        files={
+            "src/brig/infra/proxy/program.py": "from brig.infra import helper\n",
+            "src/brig/infra/helper.py": "X = 1\n",
+        },
+        rule_config=_STANDALONE_CONFIG,
+    )
+    assert_rule_fires(project, "brig-standalone-programs", src=("src",))
+
+
+def test_brig_standalone_programs_fires_on_a_plain_import_of_brig(tmp_path: Path) -> None:
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-standalone-programs",
+        src=("src",),
+        files={
+            "src/brig/domain/policy/egress.py": "import brig.domain.claims\n",
+            "src/brig/domain/claims.py": "X = 1\n",
+        },
+        rule_config=_STANDALONE_CONFIG,
+    )
+    assert_rule_fires(project, "brig-standalone-programs", src=("src",))
+
+
+def test_brig_standalone_programs_is_clean_for_the_stdlib_and_unlisted_modules(
+    tmp_path: Path,
+) -> None:
+    project = build_fixture(
+        tmp_path,
+        rule_id="brig-standalone-programs",
+        src=("src",),
+        files={
+            "src/brig/infra/proxy/program.py": "import socket\nimport threading\n",
+            "src/brig/infra/proxy/launch.py": "from brig.infra import helper\n",
+            "src/brig/infra/helper.py": "X = 1\n",
+        },
+        rule_config=_STANDALONE_CONFIG,
+    )
+    assert_rule_clean(project, "brig-standalone-programs", src=("src",))

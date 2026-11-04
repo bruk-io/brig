@@ -1,0 +1,14 @@
+// Component: infra/proxy/launch.py and infra/proxy/assemble.py (with
+// infra/proxy/__init__.py) -- the host's end of the egress proxy
+// (decision-0009 item 2). assemble.py builds the proxy's one file from the
+// decision's source, which it is handed as text (infra imports no domain),
+// and program.py's; launch.py starts that file from its stdin and ends it.
+// program.py itself is the egress proxy container, never here.
+model {
+  extend brig.library {
+    proxyLink = component 'Proxy Link' {
+      technology 'Python 3.15, stdlib only'
+      description 'The host\'s end of a jail\'s egress proxy: assembles the proxy file from the egress decision\'s source and program.py behind the supervisor\'s version guard, starts it as this process\'s child with its program on stdin, a fixed environment, its grants as one JSON line on a pipe held for the jail\'s life and its end of the supervisor\'s socketpair, and ends it by closing that pipe, killing its group and reaping it. Plain data in and out.'
+    }
+  }
+}

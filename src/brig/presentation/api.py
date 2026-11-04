@@ -74,7 +74,7 @@ _CHANNEL_READY_POLL_INTERVAL_S = 0.05
 def check_egress_policy(policy: EgressPolicy) -> None:
     """Refuse `policy` if any `Destination` in it cannot be granted, naming the first that
     cannot (`domain/policy/egress.py`'s `egress_refusal`, decision-0009 item 3). A jail's create
-    refuses a policy the same way, before anything starts; an embedder that builds a
+    refuses a policy by calling this, before anything starts; an embedder that builds a
     `Destination` from what its person typed can check it here first.
 
     Raises:

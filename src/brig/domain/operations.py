@@ -41,12 +41,13 @@ def _await_supervisor_done(
 
 
 def create(plan: Plan, policy: EnvPolicy = DENY_ALL) -> Generator[Effect, Any, Process]:
-    """Start the jail's supervisor running `plan.argv`, in what of `plan.env` `policy` allows,
-    and return the supervisor's `Process`.
+    """Start the jail's supervisor running `plan.argv`, in what of `plan.env` `policy` allows
+    with `plan.set_env` laid over it, and return the supervisor's `Process`.
 
     The environment is scrubbed here, before the effect is built, so nothing that performs it
-    reads `os.environ`. `policy` defaults to `DENY_ALL`: no environment at all."""
-    return (yield from _start_supervised(plan.argv, scrub_env(plan.env, policy)))
+    reads `os.environ`. `policy` defaults to `DENY_ALL`: no environment at all, beside
+    `plan.set_env`."""
+    return (yield from _start_supervised(plan.argv, scrub_env(plan.env, policy) | plan.set_env))
 
 
 def start(process: Process, *, deadline: Deadline) -> Generator[Effect, Any, ExitOutcome]:

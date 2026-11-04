@@ -1,5 +1,7 @@
-// Containers -- Brig: the library linked into the embedder's process, and
-// the supervisor it starts as each jail's PID 1 (decision-0002).
+// Containers -- Brig: the library linked into the embedder's process, the
+// supervisor it starts as each jail's PID 1 (decision-0002), and the egress
+// proxy it starts on the host for a jail with an egress policy
+// (decision-0009).
 views {
   view brigContainers of brig {
     title 'Containers -- Brig'

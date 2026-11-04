@@ -1,6 +1,7 @@
 """Which destinations a jail may reach through its egress proxy: what the embedder grants, and the
 pure decision over one request (decision-0009 items 3 and 4). Plain data and the pure checks over
-it (rule 2); the proxy that asks is TASK-0001.36's.
+it (rule 2). The egress proxy (`infra/proxy/program.py`) runs this module's source as its own
+decision, so it stays standard library only (the `brig-standalone-programs` gate).
 
 A grant is a `Destination`: a host and a port, the port always required. The host is one of three
 forms: an exact hostname (`example.com`), `*.suffix` (any name under the suffix, never the suffix

@@ -195,3 +195,40 @@ def test_bwrap_create_scrubs_plan_env_through_the_given_policy() -> None:
         pass
     else:
         pytest.fail("Generator did not return")
+
+
+def test_bwrap_compile_run_with_no_egress_sets_nothing() -> None:
+    """Without an egress port the plan sets no variable of its own: behaviour unchanged."""
+    assert bwrap.compile_run(("true",)).set_env == frozendict()
+
+
+def test_bwrap_create_lays_the_proxy_variables_over_the_scrubbed_env() -> None:
+    """decision-0009 item 7: with the bridge's port, every proxy variable points at
+    `127.0.0.1:<port>` whatever the policy allows, `ALL_PROXY` as `socks5h`, and `NO_PROXY` and
+    `no_proxy` are set empty; what the policy allows is still scrubbed as before."""
+    plan = bwrap.compile_run(
+        ("true",),
+        env={"PATH": "/usr/bin", "SECRET": "shh"},
+        egress_port=bwrap.EGRESS_BRIDGE_PORT,
+    )
+
+    effect = next(create(plan, EnvPolicy(allowed=("PATH",))))
+
+    http = f"http://127.0.0.1:{bwrap.EGRESS_BRIDGE_PORT}"
+    socks = f"socks5h://127.0.0.1:{bwrap.EGRESS_BRIDGE_PORT}"
+    assert effect == StartSupervisedCommand(
+        ("true",),
+        frozendict(
+            {
+                "PATH": "/usr/bin",
+                "HTTP_PROXY": http,
+                "HTTPS_PROXY": http,
+                "ALL_PROXY": socks,
+                "NO_PROXY": "",
+                "http_proxy": http,
+                "https_proxy": http,
+                "all_proxy": socks,
+                "no_proxy": "",
+            }
+        ),
+    )

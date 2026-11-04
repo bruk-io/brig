@@ -24,7 +24,8 @@ future contribution; a change that violates one is a SPEC change first, code sec
    anything starts, never met partly: a policy it cannot compile, a stdio path a jail could
    redirect, an interpreter the policy does not mount. There is no fallback the caller did not
    write. *Held by* `tests/integration/test_policy_refusal.py`,
-   `tests/integration/test_egress_policy_refusal.py`, the refusal cases in
+   `tests/integration/test_egress_policy_refusal.py`,
+   `tests/integration/test_egress_create_refusal.py`, the refusal cases in
    `tests/e2e/test_fs_policy_battery.py` and `tests/e2e/test_cwd_stdio_battery.py`.
 3. **The policy is constant; only delivery varies.** An `FsPolicy` states intent (roots, denies,
    masks), and each jail type compiles the same value its own way (decision-0007); what varies per
@@ -53,7 +54,11 @@ future contribution; a change that violates one is a SPEC change first, code sec
    that raises before it can verify the group gone, is `JailTeardownFailed`; the cleanup never
    replaces the error of the step that failed, and adds its own to it as a note (TASK-0046). The pumps that carry the jail's stdio end with it: `destroy_jail` drains and closes
    them, so a command that never reads its stdin, or floods its stdout, cannot hold the host past
-   teardown (TASK-0042). *Held by* `tests/e2e/test_interrupt_battery.py`,
+   teardown (TASK-0042). A jail's egress proxy ends with it too: closing the supervisor (when
+   `run_jail` sees `done`, in `destroy_jail`, and in a failed create's cleanup) tells the proxy
+   to leave, kills its group if it has not, and reaps it, and a start that fails part way ends
+   the proxy it began (TASK-0001.36). *Held by* `tests/e2e/test_interrupt_battery.py`,
+   `tests/e2e/test_egress_route_battery.py`,
    `tests/e2e/test_supervisor_reaps_orphans.py`, `tests/e2e/test_stdio_pumps_battery.py`, the
    teardown integration tests and, for a failed create, `tests/integration/test_create_failure_*`
    and `tests/integration/test_create_error_edges*`; a battery that plants survivors from the host is not yet
@@ -101,7 +106,13 @@ not absolute, a mask hiding a root or a path brig needs, a root absent on the ho
 reached through a symbolic link inside a writable root), `cwd_refusal` (a working directory in
 no root), `stdio_refusal` (a stdio path inside a writable root, through a link, or with another
 name) and `interpreter_refusal` (a policy that does not mount the supervisor's interpreter).
-`env.py`'s `EnvPolicy` is the environment's allow-list and `scrub_env` its filter; `stdio.py`'s
+`env.py`'s `EnvPolicy` is the environment's allow-list and `scrub_env` its filter; with an
+egress policy, `proxy_environment(port)` is what the jail sets itself over it (`HTTP_PROXY`,
+`HTTPS_PROXY` and `ALL_PROXY=socks5h://...` at the bridge on `127.0.0.1:<port>`, their
+lower-case forms, and `NO_PROXY`/`no_proxy` empty; decision-0009 item 7), and
+`proxy_variable_refusal` refuses an `EnvPolicy` naming any of `PROXY_VARIABLES` rather than
+override it silently. A `Plan` carries those as `set_env`, laid over the scrubbed environment by
+`operations.create`. `stdio.py`'s
 `Stdio` says where the command's fd 0, 1 and 2 are pumped from and to; the command itself always
 gets pipes. Mappings are `frozendict`, sequences
 tuples (decision-0001 rule 8).
@@ -135,7 +146,8 @@ refused rather than reached. The proxy connects to `Allowed.addresses` and resol
 again, so a name cannot rebind between the check and the connect. The old brig's filter allowed
 by name alone (old SPEC decisions 133 and 134); the private-address rule is decision-0009's.
 
-`jail_types/bwrap.py` is bwrap's slice: `compile_run` makes the plan, `compile_mounts` turns the
+`jail_types/bwrap.py` is bwrap's slice: `compile_run` makes the plan (with `egress_port`, the
+proxy variables pointing at `EGRESS_BRIDGE_PORT`, 3128, on the jail's own loopback), `compile_mounts` turns the
 policy into one ordered tuple of mounts, from which `compile_supervisor_launch`'s argv,
 `writable_shared_paths` and `ceilings` are all read. A deny or a mask is a mount on the entry it
 names, and a mount moves with its parent, so among the mounts are the pins (TASK-0001.31, old SPEC
@@ -206,6 +218,39 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   `O_PATH | O_NOFOLLOW`, a symbolic link there is refused before any connect, anything else but
   a socket is not ready, and the socket is dialled through `/proc/self/fd/N` without blocking,
   so a full backlog is not ready at once.
+- `supervisor/` and `proxy/`, the jail's one route out (decision-0009 items 1 and 2,
+  TASK-0001.36). With an egress policy, the supervisor's exec request names a bridge port: before
+  the command starts it listens on `127.0.0.1:<port>` in the jail's own network namespace (and
+  `[::1]` where the namespace has IPv6), and once the command runs it accepts on daemon threads.
+  For each connection it makes a socketpair, sends one end to the egress proxy with
+  `SCM_RIGHTS` over `wire.BRIDGE_FD` (5, its end of a `SOCK_SEQPACKET` pair it inherited), and
+  copies bytes between the other end and the connection, reading nothing of them. fd 5 is closed
+  in the command like 3 and 4, and the supervisor stays non-dumpable, so the command reaches the
+  proxy only through the port. No path is involved, so nothing in the jail's view names the
+  proxy, and a program that ignores the proxy settings reaches nothing: the jail has no other
+  interface and no resolver. `proxy/program.py` is the proxy, a host-side process per jail,
+  standard library only and importing nothing of brig (the `brig-standalone-programs` gate,
+  which holds the supervisor's two sources too). `proxy/assemble.py` builds its one file: the
+  supervisor's version guard, then `domain/policy/egress.py`'s source, handed in as text by
+  presentation and run as a module of its own, then the program, which takes that module as a
+  value and reads it at one seam. So the proxy decides with exactly the domain's decision,
+  without importing it. `proxy/launch.py` starts it from its stdin (`python -I -`, so no file
+  names it), with a fixed environment, `/dev/null` as its output, its config as one JSON line
+  on fd 3 (the grants and an optional resolver table; the write end is held for the jail's
+  life, and closing it ends the proxy), and its end of the control pair on fd 4. The link
+  starts it before the supervisor, and ends it when the supervisor is closed (`RunningProxy.end`:
+  close the config pipe, wait briefly, kill its group, reap). The proxy sniffs each connection's
+  first byte: SOCKS5 `CONNECT` (no authentication; IPv4, IPv6 or a name, `socks5h`), or HTTP
+  `CONNECT host:port` and absolute-form `http://` (the request line rewritten to origin-form,
+  the proxy and connection headers dropped, `Connection: close`). It asks `decide_egress` with
+  no addresses first, resolves a name itself only on `Resolve` (through the host's resolver, or
+  the embedder's table), asks again with the addresses and the host's own (`/proc/net/if_inet6`
+  and the local table of `/proc/net/fib_trie`, read per decision), and connects only to
+  `Allowed.addresses`. A refusal is `403` with the body `brig: egress denied by policy:
+  host:port`, or SOCKS reply `0x02`. A name that resolved to nothing is `502` or `0x04`, a
+  failed connect `502` or `0x05`, and an unreadable request `400` or `0x01`. The SOCKS reply's
+  bound address is always `0.0.0.0:0`, so the jail learns nothing of the host's. Decisions are
+  not yet reported or logged (TASK-0001.37).
 - `supervisor/`: the jail's PID 1 (decision-0002). `wire.py` and `program.py` assemble
   (`assemble.py`) into one stdlib-only file that refuses an interpreter older than 3.15;
   `link.py` is the host's end, starting it and reading its events; a start that fails after
@@ -222,7 +267,7 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   neither reopen the supervisor's fds through `/proc/1` nor ptrace it, so the exit code the host
   reports is the one `waitpid(2)` gave (decision-0006).
 
-Not yet built: `tether.py`, `sandbox_exec.py`, `log.py` and the `proxy/` package.
+Not yet built: `tether.py`, `sandbox_exec.py` and `log.py`.
 
 ## Presentation
 
@@ -235,7 +280,14 @@ for every jail type.
 
 Each jail type's own presentation is its slice (decision-0007 item 5): `drivers/bwrap.py`
 refuses and compiles the policy, writes the supervisor script, starts the jail through the
-driver, holds its PID namespace for readiness, and exports `create_bwrap_jail`. What every jail
+driver, holds its PID namespace for readiness, and exports `create_bwrap_jail`. With
+`egress=EgressPolicy(...)` it first refuses a malformed policy through `check_egress_policy`,
+whose errors it raises, and an `EnvPolicy` naming a proxy variable
+(`PolicyEnvNamesProxyVariable`), before anything is looked at. Then it reads the decision's
+source and assembles the proxy (`EgressProxySourceUnreadable` for a broken install), and builds
+the supervisor with the bridge. `egress_hosts` is the proxy's resolver seam: a table of names to
+addresses, given as data, that the proxy resolves from instead of the host's resolver; every
+address is still judged. With no `egress`, nothing new runs and nothing changes. What every jail
 type shares is beside it: `jail.py` (the `Jail`, brig's state directory, the real ports'
 wiring, and `dismantle`: the verified kill ladder for a process that exists, then removing the
 script, the channel directory and the fds, and releasing the placeholders only on a group read
@@ -271,4 +323,5 @@ reported as the state directory (TASK-0047). *Held by*
 `tests/integration/test_create_inspection_errors.py`. `src/brig/__init__.py` re-exports exactly this layer's surface and the
 domain's plain data, nothing from infra.
 
-Not yet built: `drivers/seatbelt.py` and `proxy_main.py`.
+Not yet built: `drivers/seatbelt.py`. (decision-0001's layout had a `proxy_main.py` entry point
+here; the proxy is instead one assembled file run from its stdin, so it never imports brig.)

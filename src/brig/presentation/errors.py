@@ -339,6 +339,37 @@ class SupervisorSourceUnreadable(Exception):
         )
 
 
+class EgressProxySourceUnreadable(Exception):
+    """Raised when brig could not read its own egress proxy's source, which it assembles into
+    each egress proxy (decision-0009 item 2): brig's install is incomplete or unreadable. The
+    host's `OSError` is the `__cause__` and names the file; nothing was written or started."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "could not read brig's own egress proxy source (brig.infra.proxy's program.py and "
+            "brig.domain.policy's egress.py) -- brig's install is incomplete or unreadable by "
+            "this process's user; reinstall brig"
+        )
+
+
+class PolicyEnvNamesProxyVariable(Exception):
+    """Raised when a jail is created with an `EgressPolicy` and an `EnvPolicy` that allows one
+    of the proxy variables the jail sets itself (decision-0009 item 7): refused rather than
+    silently overridden.
+
+    Args:
+        name: The proxy variable the environment policy allows.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"environment policy allows {name!r}, which a jail with an egress policy sets "
+            "itself to its own proxy -- remove it from the EnvPolicy; the command reaches the "
+            "network only through brig's proxy, whatever proxy the embedder's environment names"
+        )
+        self.name = name
+
+
 class JailSpawnFailed(Exception):
     """Raised when a jail's supervisor could not be started (an unopenable stdio path
     included). A `SupervisorPort` raises it itself, with `process` set, when the supervisor

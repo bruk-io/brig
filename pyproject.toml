@@ -92,6 +92,19 @@ rules = [
     "brig-vocabulary",
     "brig-one-writer",
     "brig-frozen-data",
+    "brig-standalone-programs",
+]
+
+# decision-0001 rule 17 and decision-0009 item 2: every module brig ships as source into a
+# program of its own, where brig cannot be imported. The supervisor's two are assembled into the
+# file bwrap runs as PID 1; the egress proxy's program is assembled with egress.py, its decision,
+# inlined, so that pure module must stay standard library only too.
+[tool.pypeeker.brig-standalone-programs]
+modules = [
+    "brig.infra.supervisor.wire",
+    "brig.infra.supervisor.program",
+    "brig.infra.proxy.program",
+    "brig.domain.policy.egress",
 ]
 
 [tool.pypeeker.brig-layers]
@@ -140,7 +153,13 @@ banned-name = "agent"
 # unconditionally. Allowed rather than restructured away: the guard is exactly
 # the shape a stdlib-only dropped script needs to have one real entry point.
 [tool.pypeeker.import-time-side-effects]
-allow = ["e2e.test_spawn_close_action_race", "brig.infra.supervisor.program"]
+#
+# TASK-0001.36: infra/proxy/program.py, the egress proxy, has the same guard for the same reason.
+allow = [
+    "e2e.test_spawn_close_action_race",
+    "brig.infra.supervisor.program",
+    "brig.infra.proxy.program",
+]
 
 # over-exposed-module-symbol asks "is this public symbol used outside its own
 # module", which is the wrong question for tests/: pytest collects a test function

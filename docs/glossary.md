@@ -15,8 +15,14 @@
 **effect**
 : A value yielded by an operation or teardown generator for a driver to perform and report back from (examples: `StartSupervisedCommand`, `AwaitSupervisorDone`, `Verify`, `SignalGroup`, `Release`; decision-0001 rule 10).
 
+**egress bridge**
+: The supervisor's listener on `127.0.0.1:3128` inside a jail with an egress policy, the jail's one route out: each connection it accepts is handed to the egress proxy as one end of a socketpair, sent with `SCM_RIGHTS`, and relayed (`infra/supervisor/program.py`, decision-0009 item 1).
+
 **egress policy**
 : The destinations a jail's command may reach, `EgressPolicy(allow)`; the empty one, the default, is loopback and nothing else. A name it grants reaches only public addresses unless an IP-literal grant names the private one (`domain/policy/egress.py`, decision-0009 items 3 and 4).
+
+**egress proxy**
+: The host-side process, one per jail with an egress policy, that reads what each bridged connection asks for (HTTP `CONNECT`, absolute-form HTTP, SOCKS5 `CONNECT`), decides it with the egress decision, resolves granted names itself, and connects only where the decision allowed; it ends with the jail (`infra/proxy/`, decision-0009 item 2).
 
 **embedder**
 : A program that embeds brig as a library to create, run, and tear down jails (decision-0001 rule 1).

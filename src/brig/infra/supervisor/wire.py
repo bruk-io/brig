@@ -19,6 +19,11 @@ REQUEST_FD = 3
 EVENTS_FD = 4
 """The supervisor's fd for its events."""
 
+BRIDGE_FD = 5
+"""The supervisor's fd for the egress proxy, when the jail has one (decision-0009 item 1): its
+end of a `SOCK_SEQPACKET` socketpair, over which it sends one end of a socketpair per connection
+it accepts on the jail's loopback, with `SCM_RIGHTS`."""
+
 
 class _MessageKind(StrEnum):
     """Every shape this module defines, named once, matching its own `kind` field."""
@@ -31,12 +36,15 @@ class _MessageKind(StrEnum):
 
 class _ExecRequest(TypedDict, closed=True):
     """The one incoming message: the real command to run as the supervisor's
-    own child, and the environment to run it in.
+    own child, and the environment to run it in. `bridge_port`, when not `None`, is the port
+    the supervisor listens on in the jail's loopback and bridges to the egress proxy over
+    `BRIDGE_FD`, bound before the command starts (decision-0009 item 1).
     """
 
     kind: _MessageKind
     argv: list[str]
     env: dict[str, str]
+    bridge_port: int | None
 
 
 class _StartedEvent(TypedDict, closed=True):
@@ -81,9 +89,17 @@ class WireError(Exception):
         self.line = line
 
 
-def encode_exec_request(argv: tuple[str, ...], env: Mapping[str, str]) -> str:
-    """Encode an `exec` request as one newline-delimited JSON line."""
-    message: _ExecRequest = {"kind": _MessageKind.EXEC, "argv": list(argv), "env": dict(env)}
+def encode_exec_request(
+    argv: tuple[str, ...], env: Mapping[str, str], bridge_port: int | None = None
+) -> str:
+    """Encode an `exec` request as one newline-delimited JSON line; `bridge_port` is the egress
+    bridge's port, or `None` for a jail with none."""
+    message: _ExecRequest = {
+        "kind": _MessageKind.EXEC,
+        "argv": list(argv),
+        "env": dict(env),
+        "bridge_port": bridge_port,
+    }
     return json.dumps(message) + "\n"
 
 
@@ -97,12 +113,14 @@ def _decode_exec_request(line: str) -> _ExecRequest:
         raw = json.loads(line)
         if raw["kind"] != _MessageKind.EXEC.value:
             raise WireError(line)
+        port = raw["bridge_port"]
         return {
             "kind": _MessageKind.EXEC,
             "argv": [str(arg) for arg in raw["argv"]],
             "env": {str(name): str(value) for name, value in raw["env"].items()},
+            "bridge_port": None if port is None else int(port),
         }
-    except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as exc:
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError) as exc:
         raise WireError(line) from exc
 
 

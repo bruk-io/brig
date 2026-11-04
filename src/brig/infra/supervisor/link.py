@@ -7,6 +7,11 @@ The supervisor process gets `_SUPERVISOR_ENV`, never the command's environment a
 process's own: an allowed `PYTHONPATH` ran code inside the supervisor and an `LD_PRELOAD`
 reached bwrap on the host, and the command can read its parent's `/proc/<pid>/environ`
 (TASK-0001.15/.17 review).
+
+A jail with an egress route (`Bridge`, decision-0009 item 1) gets its proxy started first
+(`infra.proxy.launch`), the supervisor its end of their socketpair as `wire.BRIDGE_FD`, and the
+proxy ends when the supervisor is closed. The proxy is this process's own child, not one of the
+jail's group, so every path here that fails after its start ends it here.
 """
 
 import os
@@ -17,6 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from brig.infra import processes
+from brig.infra.proxy import launch
 from brig.infra.supervisor import wire
 from brig.infra.supervisor.pumps import Flow, Pumps
 
@@ -64,20 +70,37 @@ class ReadTimedOut:
     buffered."""
 
 
+@dataclass(frozen=True)
+class Bridge:
+    """A jail's one route out (decision-0009 item 1): the supervisor listens on `port` in the
+    jail's loopback and hands each connection to the egress proxy `proxy` describes."""
+
+    port: int
+    proxy: launch.ProxyLaunch
+
+
 class Supervisor:
-    """A started supervisor: its pid and pgid, the read end of its events pipe, and the pumps
-    that carry its command's stdio (TASK-0042).
+    """A started supervisor: its pid and pgid, the read end of its events pipe, the pumps
+    that carry its command's stdio (TASK-0042), and its egress proxy, if the jail has one.
 
     Invariant (rule 7): `_pending` holds the bytes read from `events_fd` that do not yet end in
     a newline, since one `os.read` may return part of a line or more than one. `events_fd`
-    stays open, and `pumps` pumping, until `close`.
+    stays open, `pumps` pumping and `proxy` running, until `close`.
     """
 
-    def __init__(self, pid: int, pgid: int, events_fd: int, pumps: Pumps | None = None) -> None:
+    def __init__(
+        self,
+        pid: int,
+        pgid: int,
+        events_fd: int,
+        pumps: Pumps | None = None,
+        proxy: launch.RunningProxy | None = None,
+    ) -> None:
         self.pid = pid
         self.pgid = pgid
         self.events_fd = events_fd
         self.pumps = pumps
+        self.proxy = proxy
         self._pending = b""
 
     def read_event(self, deadline: float) -> wire.Event | None | ReadTimedOut:
@@ -106,9 +129,10 @@ class Supervisor:
         return wire.decode_event(line.decode())
 
     def close(self) -> None:
-        """Close `events_fd`, once, after the last `read_event`, and finish the pumps: what the
-        command wrote is pumped on until its pipes reach end of file, for at most `_DRAIN_S`,
-        and its stdin is fed no more. An `OSError` is swallowed, since teardown calls this
+        """Close `events_fd`, once, after the last `read_event`, finish the pumps, and end the
+        egress proxy: what the command wrote is pumped on until its pipes reach end of file, for
+        at most `_DRAIN_S`, and its stdin is fed no more; the proxy is told to leave, killed if
+        it does not, and reaped (law 7). An `OSError` is swallowed, since teardown calls this
         unconditionally."""
         try:
             os.close(self.events_fd)
@@ -116,6 +140,8 @@ class Supervisor:
             pass
         if self.pumps is not None:
             self.pumps.finish(time.monotonic() + _DRAIN_S)
+        if self.proxy is not None:
+            self.proxy.end()
 
 
 type Stdio = tuple[str | None, str | None, str | None]
@@ -209,10 +235,13 @@ def _start(
     command_argv: tuple[str, ...],
     command_env: Mapping[str, str],
     stdio: Stdio = _NO_STDIO,
+    bridge: Bridge | None = None,
 ) -> Supervisor:
     """Start `supervisor_argv` as this process's child, give it a pipe as each of fd 0, 1 and 2,
     pumped to and from where `stdio` says (`_plumb`), and write it the one exec request for
-    `command_argv` in `command_env`.
+    `command_argv` in `command_env`. With `bridge`, its egress proxy is started first, the
+    supervisor gets its end of their socketpair as `wire.BRIDGE_FD`, and the request names the
+    bridge's port.
 
     The request pipe's read end and the events pipe's write end become the child's
     `wire.REQUEST_FD` and `wire.EVENTS_FD`; this process closes its copies of both, and of the
@@ -226,17 +255,39 @@ def _start(
             not be written to it (it died, or otherwise closed its own `wire.REQUEST_FD`).
             Then `spawned` is its `(pid, pgid)`: it is neither signalled nor reaped here, since
             only the caller's verified teardown can say its group is gone (TASK-0046), and
-            every fd this start opened is closed.
+            every fd this start opened is closed. Either way an egress proxy this start began
+            has been ended, and `spawned` is `None` when it was the proxy that could not start.
+        OSError: `_plumb` could not open a stdio path or make a pipe; nothing of the jail was
+            spawned, and an egress proxy this start began has been ended.
     """
-    jail_ends, flows = _plumb(stdio)
+    proxy: launch.RunningProxy | None = None
+    bridge_fd: int | None = None
+    if bridge is not None:
+        try:
+            proxy, bridge_fd = launch.start(bridge.proxy)
+        except launch.ProxySpawnError as exc:
+            raise SupervisorSpawnError(supervisor_argv) from exc
+    try:
+        jail_ends, flows = _plumb(stdio)
+    except OSError:
+        if proxy is not None and bridge_fd is not None:
+            proxy.end()
+            os.close(bridge_fd)
+        raise
     request_read_fd, request_write_fd = os.pipe()
     events_read_fd, events_write_fd = os.pipe()
+    bridged = {} if bridge_fd is None else {wire.BRIDGE_FD: bridge_fd}
     try:
         spawned = processes.spawn(
             supervisor_argv,
             (),
             env=_SUPERVISOR_ENV,
-            fds={**jail_ends, wire.REQUEST_FD: request_read_fd, wire.EVENTS_FD: events_write_fd},
+            fds={
+                **jail_ends,
+                wire.REQUEST_FD: request_read_fd,
+                wire.EVENTS_FD: events_write_fd,
+                **bridged,
+            },
         )
     except (processes.SpawnError, OSError) as exc:
         for fd in (request_read_fd, request_write_fd, events_read_fd, events_write_fd):
@@ -244,17 +295,20 @@ def _start(
         for flow in flows:
             os.close(flow.source)
             os.close(flow.sink)
+        if proxy is not None:
+            proxy.end()
         raise SupervisorSpawnError(supervisor_argv) from exc
     finally:
-        for fd in jail_ends.values():
+        for fd in (*jail_ends.values(), *bridged.values()):
             os.close(fd)
     os.close(request_read_fd)
     os.close(events_write_fd)
     pumps: Pumps | None = None
+    port = None if bridge is None else bridge.port
     try:
         pumps = Pumps(flows)
         with os.fdopen(request_write_fd, "w") as request_pipe:
-            request_pipe.write(wire.encode_exec_request(command_argv, command_env))
+            request_pipe.write(wire.encode_exec_request(command_argv, command_env, port))
     except (OSError, RuntimeError) as exc:
         # Spawned, then failed: a thread that could not start (`RuntimeError`), or a request
         # that hit a pipe its reader closed. Left for the caller's verified teardown.
@@ -266,8 +320,12 @@ def _start(
                 os.close(flow.sink)
         else:
             pumps.finish(time.monotonic())
+        if proxy is not None:
+            proxy.end()
         raise SupervisorSpawnError(supervisor_argv, (spawned.pid, spawned.pgid)) from exc
-    return Supervisor(pid=spawned.pid, pgid=spawned.pgid, events_fd=events_read_fd, pumps=pumps)
+    return Supervisor(
+        pid=spawned.pid, pgid=spawned.pgid, events_fd=events_read_fd, pumps=pumps, proxy=proxy
+    )
 
 
 def _await_one_done(supervisor: Supervisor, deadline: float) -> int | None | SupervisorDoneUnknown:
@@ -301,18 +359,25 @@ class LiveSupervisor:
     than its own reads as one already closed.
     """
 
-    def __init__(self, supervisor_argv: tuple[str, ...], stdio: Stdio = _NO_STDIO) -> None:
+    def __init__(
+        self,
+        supervisor_argv: tuple[str, ...],
+        stdio: Stdio = _NO_STDIO,
+        bridge: Bridge | None = None,
+    ) -> None:
         """`supervisor_argv` is the jail type's launch line for the supervisor's file; `stdio`
-        where its (and so its command's) fd 0, 1 and 2 come from."""
+        where its (and so its command's) fd 0, 1 and 2 come from; `bridge` the jail's egress
+        route, or `None` for a jail with none."""
         self._supervisor_argv = supervisor_argv
         self._stdio = stdio
+        self._bridge = bridge
         self._supervisor: Supervisor | None = None
 
     def start(self, argv: tuple[str, ...], env: Mapping[str, str]) -> Supervisor:
         """Start the supervisor with `argv` in `env` as its one command; `_start` raises
         `SupervisorSpawnError` if it cannot, with the supervisor it spawned, if any, for the
         caller to tear down."""
-        supervisor = _start(self._supervisor_argv, argv, env, self._stdio)
+        supervisor = _start(self._supervisor_argv, argv, env, self._stdio, self._bridge)
         self._supervisor = supervisor
         return supervisor
 

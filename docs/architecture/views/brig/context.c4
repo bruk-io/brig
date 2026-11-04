@@ -2,6 +2,6 @@
 views {
   view brigContext of brig {
     title 'System Context — Brig'
-    include brig, embedder
+    include brig, embedder, network
   }
 }
