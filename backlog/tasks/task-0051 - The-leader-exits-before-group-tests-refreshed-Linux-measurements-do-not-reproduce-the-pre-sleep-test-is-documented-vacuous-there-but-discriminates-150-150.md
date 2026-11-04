@@ -4,7 +4,7 @@ title: >-
   The leader-exits-before-group tests' refreshed Linux measurements do not
   reproduce -- the pre-sleep test is documented vacuous there but discriminates
   150/150
-status: To Do
+status: In Progress
 assignee: []
 created_date: 2026-10-18 22:30
 updated_date: '2026-11-04T14:02:00Z'
@@ -116,4 +116,18 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Worker, 2026-11-04 (branch claude/small-bugs): change 1f2d75d, docstrings only.
+
+Remeasured on this host: an x86_64 Firecracker microVM under KVM (hardware virtualisation, no CPU emulation), 4 vCPUs (Intel Xeon 2.10GHz), kernel 6.18.44-fc-v233, Ubuntu 24.04.5 userland in a container, Python 3.15.0b4, pytest 9.1.1, shared with other sessions' work (load average 3.8 to 5). brig-probe-amd64:latest could not be run here (no Docker daemon). Method: each test unmodified, one pytest run per figure, with a measurement-only pytest plugin outside the repository setting `brig.destroy_jail.__kwdefaults__["kill_grace_s"] = 0.0` at configure time; the count read from the test's own assertion message.
+
+- kill_grace_s forced to 0.0: pre-sleep test 0, 2 and 4 of 150 (three runs); no-pre-sleep test 38, 40, 40 and 40 of 40 (four runs).
+- real default: pre-sleep 0 of 150 and no-pre-sleep 0 of 40, three runs each.
+
+These agree with the lead's figures (pre-sleep 0, 1, 3 of 150; no-pre-sleep 40 of 40), so on native Linux the no-pre-sleep test is the discriminator and the pre-sleep test is weak; the reviewer's 150/150 under emulation and the macOS figures show its power depends on the host.
+
+- AC#1/#3: every figure in both docstrings now names its host, kernel (or that it was not recorded), emulation and method, and who measured it. Provenance taken from the board: 145/150, 0/150 (image, pre-sleep) and 200/200 from TASK-0017's description (TASK-0013's review); 150/150, 39/40 and 2/40 from TASK-0017's reviewer; 2% to 34% from TASK-0017's implementer as reported. The old 149/150 has no run on the board; it is kept and labelled so. The lead's figures carry no method beyond kill_grace_s=0.0, so they are not labelled "forced".
+- AC#2/#4: each docstring says the no-pre-sleep test discriminates on native Linux (40 of 40 here) and the pre-sleep test's power depends on the host (0 to 4 in 150 here, 0 to 3 in the lead's runs). `_LEADER_EXITS_BEFORE_GROUP_NO_PRE_SLEEP_ITERATIONS`'s docstring, which repeated the 200/200 figure, now points at the test's docstring for host and method.
+- AC#5: the module's AST with docstrings stripped is identical to f4605ae's.
+- `uv run just done`: all steps passed (recorded above). Criteria left for the reviewer.
 <!-- SECTION:NOTES:END -->
