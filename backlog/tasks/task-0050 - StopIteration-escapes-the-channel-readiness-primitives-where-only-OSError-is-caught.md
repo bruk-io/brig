@@ -3,7 +3,7 @@ id: TASK-0050
 title: >-
   StopIteration escapes the channel-readiness primitives where only OSError is
   caught
-status: In Progress
+status: Done
 assignee: []
 created_date: 2026-10-25 16:57
 updated_date: '2026-11-04T14:23:00Z'
@@ -293,4 +293,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Reviewer, 2026-11-04: closed. Every criterion met. Repro 627b070 failed on StopIteration out of _nspid; fix 867970c: _nspid returns None and the scan skips it, an empty NSpid line is skipped (IndexError, a third escape), _verify's fdinfo read is next(..., None) and None is PEER_LOOKUP_FAILED; tests/e2e/test_sockets_missing_proc_lines.py pins each site with a positive control. The proc_root seam is on infra's channel_ready only: not exported, not on presentation's ChannelReadinessPort, which passes nothing, so it is not the embedder-signature seam DRAFT-0027 is about. Not filed: int(line.split()[1]) on a Pid: line with no number would raise ValueError; the kernel always writes one, so there is no realistic path. Full tier: five runs of one tree (branch claude/small-bugs, all four tasks), three green; two failed only test_interrupt_battery.py::test_an_interrupt_sent_as_soon_as_the_jail_exists_is_not_lost, a path this branch does not touch (signal_jail_pid1/_pid1_under); passes alone 3/3 and 8/8 in parallel. Filed as DRAFT-0030. No files changed by the check.
 <!-- SECTION:NOTES:END -->
