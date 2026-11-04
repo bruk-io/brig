@@ -3,7 +3,7 @@ id: TASK-0049
 title: >-
   The egress route bounds neither its connections nor a handshake's whole time:
   a jailed program can hold host threads and fds without limit
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-04T02:59:00Z'
 updated_date: '2026-11-04T13:29:00Z'
@@ -213,4 +213,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Reviewer, 2026-11-04: closed. Full check (record-check --tier full) exited 0 with no files changed; the repro and tests/e2e/test_egress_connection_caps.py pass in real bwrap within it. All five criteria met on the evidence above. Judged: (1) the over-cap queue is bounded: _Capped holds at most config.connections fds, no threads, each for at most handshake_s, then 403/SOCKS 0x01 or closed; worst-case proxy fds ~2x256 served + 256 held stays under select's FD_SETSIZE 1024, so select cannot fail on it. (2) Bridge relays kept after the proxy closes cost the jail's PID 1 two threads each, bounded by the bridge cap and harming only the jail's own route; acceptable. It is in the worker's notes but the spec says only 'a relayed connection has no deadline, the caps bound those'; minor, not filed: a sentence for the next spec pass on the egress section. (3) EgressLimits is lower-only and safe for an embedder to use, so it is a legitimate knob, though its docstring frames it as a test seam; it belongs in DRAFT-0027's public-API review (not edited here: the reviewer touched only this task). (4) c63cd3d only moved the per-read timeout value onto the config line (default unchanged at 30 s); with 2 s per read and a client sending a byte a second the per-read timeout never fires, so the repro failed for the real reason. No drafts filed.
 <!-- SECTION:NOTES:END -->
