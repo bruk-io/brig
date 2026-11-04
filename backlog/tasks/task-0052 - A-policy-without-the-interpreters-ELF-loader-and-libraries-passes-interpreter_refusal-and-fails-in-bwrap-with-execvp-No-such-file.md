@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0020
+id: TASK-0052
 title: >-
   A policy without the interpreter's ELF loader and libraries passes
   interpreter_refusal and fails in bwrap with execvp No such file
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-03T03:46:00Z'
 labels: []
