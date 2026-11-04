@@ -6,6 +6,7 @@ waited 10 s and none came. A finished jail answers `False`, never a raise.
 """
 
 import shutil
+import signal
 import sys
 import tempfile
 import time
@@ -71,16 +72,28 @@ def test_interrupting_a_finished_jail_answers_false() -> None:
         destroy_jail(jail)
 
 
+_SLEEPS_UNLESS_INTERRUPTED = ("/bin/sleep", "3")
+"""A command that never handles `SIGINT`: one that reaches it at any point after its spawn kills
+it, so its exit code is `-SIGINT` exactly when the interrupt arrived (TASK-0053). A Python
+command cannot say this: an interrupt that lands during the interpreter's own startup can raise
+`KeyboardInterrupt` inside one of importlib's weakref callbacks, which the interpreter reports as
+ignored and carries on, so it sleeps on and exits 0 although the signal arrived (measured with no
+jail at all: 1 of 580 interrupts sent 2 to 16 ms after the spawn, on a loaded host)."""
+
+
 def test_an_interrupt_sent_as_soon_as_the_jail_exists_is_not_lost() -> None:
     """The supervisor holds SIGINT back from the moment it starts until it can forward it, so
     an interrupt sent right after `create_bwrap_jail` returns still reaches the command: it dies
     of it instead of sleeping on and exiting 0. Twenty times, since the lost case is a window."""
     for _ in range(20):
-        jail = create_bwrap_jail((sys.executable, "-I", "-c", "import time; time.sleep(3)"))
+        jail = create_bwrap_jail(_SLEEPS_UNLESS_INTERRUPTED)
         try:
             delivered = interrupt_jail(jail)
             exit_code = run_jail(jail, timeout_s=15)
         finally:
             destroy_jail(jail)
-        assert not (delivered and exit_code == 0), "interrupt_jail said True and nothing arrived"
         assert delivered, "the jail's command was running, yet nothing was signalled"
+        assert exit_code == -signal.SIGINT, (
+            f"interrupt_jail said True, yet the command did not die of SIGINT: "
+            f"it exited {exit_code}"
+        )
