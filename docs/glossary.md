@@ -18,11 +18,20 @@
 **egress bridge**
 : The supervisor's listener on `127.0.0.1:3128` inside a jail with an egress policy, the jail's one route out: each connection it accepts is handed to the egress proxy as one end of a socketpair, sent with `SCM_RIGHTS`, and relayed (`infra/supervisor/program.py`, decision-0009 item 1).
 
+**egress change**
+: One `allow_egress` or `revoke_egress` a running jail's egress proxy was sent: a kind, a destination, and when; it applies to the next connection the proxy takes, never to one already open, and the jail is not restarted (`EgressChange`, `domain/policy/egress_record.py`, decision-0009 item 5).
+
+**egress decision**
+: What a jail's egress proxy did with one request that named a destination: allowed or refused, the destination, the reason, the time and the proxy's count, handed back to the embedder as data by `egress_decisions` with the envelope line the proxy wrote (`EgressDecision`, decision-0009 item 6).
+
 **egress policy**
 : The destinations a jail's command may reach, `EgressPolicy(allow)`; the empty one, the default, is loopback and nothing else. A name it grants reaches only public addresses unless an IP-literal grant names the private one (`domain/policy/egress.py`, decision-0009 items 3 and 4).
 
 **egress proxy**
 : The host-side process, one per jail with an egress policy, that reads what each bridged connection asks for (HTTP `CONNECT`, absolute-form HTTP, SOCKS5 `CONNECT`), decides it with the egress decision, resolves granted names itself, and connects only where the decision allowed; it ends with the jail (`infra/proxy/`, decision-0009 item 2).
+
+**egress record**
+: A jail's egress grants as created and every egress change since, in order, which the report states (`EgressRecord`, `egress_record(jail)`, decision-0009 item 5).
 
 **embedder**
 : A program that embeds brig as a library to create, run, and tear down jails (decision-0001 rule 1).
@@ -38,6 +47,9 @@
 
 **jail type**
 : A slice containing `domain/jail_types/<type>.py` and `presentation/drivers/<type>.py` (examples: bwrap, seatbelt); adding a type touches no other (decision-0001 rule 3).
+
+**log envelope**
+: The one shape of every line brig's own processes write: one JSON object, `time`, `level`, `source` and `event` first and in that order, then the event's own fields, made only by `infra/log.py`'s `encode` (decision-0001 rule 14, TASK-0001 criterion 15). The library itself writes no line.
 
 **plan**
 : What a jail type's compile produces: the command its supervisor runs and its candidate environment (`domain/plan.py`, decision-0001 rule 9).

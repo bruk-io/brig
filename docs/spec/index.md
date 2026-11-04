@@ -25,7 +25,8 @@ future contribution; a change that violates one is a SPEC change first, code sec
    redirect, an interpreter the policy does not mount. There is no fallback the caller did not
    write. *Held by* `tests/integration/test_policy_refusal.py`,
    `tests/integration/test_egress_policy_refusal.py`,
-   `tests/integration/test_egress_create_refusal.py`, the refusal cases in
+   `tests/integration/test_egress_create_refusal.py`, `tests/integration/test_egress_live_grants.py`
+   (a grant to a running jail is checked as a created policy is), the refusal cases in
    `tests/e2e/test_fs_policy_battery.py` and `tests/e2e/test_cwd_stdio_battery.py`.
 3. **The policy is constant; only delivery varies.** An `FsPolicy` states intent (roots, denies,
    masks), and each jail type compiles the same value its own way (decision-0007); what varies per
@@ -146,7 +147,23 @@ refused rather than reached. The proxy connects to `Allowed.addresses` and resol
 again, so a name cannot rebind between the check and the connect. The old brig's filter allowed
 by name alone (old SPEC decisions 133 and 134); the private-address rule is decision-0009's.
 
-`jail_types/bwrap.py` is bwrap's slice: `compile_run` makes the plan (with `egress_port`, the
+A running jail's grants change (decision-0009 item 5, TASK-0001.37): `egress_after(policy, kind,
+destination)` is the one definition of an `EgressChangeKind.ALLOW` (append the destination
+unless it is granted already, so which grant allows a request is kept) and a `REVOKE` (remove
+every grant equal to it; a name under a `*.suffix` grant revokes nothing). The host's record and
+the proxy's grants both apply it, so the two cannot disagree. `egress_reason` names the
+`EgressReason` of a settled decision (`granted` for an allowed one, else the refusal:
+`not-granted`, `unresolved`, `address-unparseable`, `private-address`,
+`authority-unparseable`), and `egress_verdict` makes that `allowed` or `refused`, so the
+proxy's decision lines and the embedder's values read one set of words. `egress_record.py` holds
+what an embedder reads back: `EgressRecord(created, changes)`, each `EgressChange` a kind, a
+destination and the time it was sent, with `granted_now` the grants its changes leave; and
+`EgressDecision(seq, verdict, destination, reason, time, line)`, one per decision the proxy
+made. Times are aware UTC `datetime`s that enter as data.
+
+`jail_types/bwrap.py` is bwrap's slice (its `ceilings` state `NETWORK_EGRESS_CLAIM` in place of
+`NETWORK_CLAIM` for a jail with an egress policy, decision-0009 item 8, under the same socket
+cap): `compile_run` makes the plan (with `egress_port`, the
 proxy variables pointing at `EGRESS_BRIDGE_PORT`, 3128, on the jail's own loopback), `compile_mounts` turns the
 policy into one ordered tuple of mounts, from which `compile_supervisor_launch`'s argv,
 `writable_shared_paths` and `ceilings` are all read. A deny or a mask is a mount on the entry it
@@ -249,8 +266,38 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   `Allowed.addresses`. A refusal is `403` with the body `brig: egress denied by policy:
   host:port`, or SOCKS reply `0x02`. A name that resolved to nothing is `502` or `0x04`, a
   failed connect `502` or `0x05`, and an unreadable request `400` or `0x01`. The SOCKS reply's
-  bound address is always `0.0.0.0:0`, so the jail learns nothing of the host's. Decisions are
-  not yet reported or logged (TASK-0001.37).
+  bound address is always `0.0.0.0:0`, so the jail learns nothing of the host's.
+
+  Grants change while the jail runs, and decisions come back (decision-0009 items 5 and 6,
+  TASK-0001.37). Each line on the config pipe after the first is one change, `{kind, host,
+  port}`, written whole (far shorter than `PIPE_BUF`) by `RunningProxy.change`, which records it
+  with its time under the same lock. Each turn of the proxy's loop applies every whole change
+  line before it takes the next connection, and a connection is decided against the grants in
+  force when its fd arrived. So a connection the supervisor hands over after a change was
+  written is decided against the new grants, and a connection already relaying is never judged
+  again: revoking a grant leaves an open tunnel open. The proxy writes each settled decision as
+  one envelope line (`source` `egress-proxy`, `event` `egress-decision`, then `seq`, `verdict`,
+  `host`, `port`, `reason`; `info` when allowed, `warning` when refused) to its fd 5, the
+  decisions pipe, and nothing else is written there: its fds 1 and 2 stay `/dev/null`. A
+  request whose destination could not be read is answered `400` and makes no decision, since it
+  names none. A thread `RunningProxy.watch` starts drains that pipe for as long as the proxy
+  runs, so a proxy whose embedder reads nothing never blocks on it, and keeps at most
+  `KEPT_LINES` (1024) lines of at most `LINE_LIMIT` (4096 bytes) for the embedder to take,
+  dropping the oldest past that, and a longer line whole: at most 4 MiB per jail. The proxy's
+  `seq` shows a gap where lines were dropped. `RunningProxy.end` joins the thread once the proxy
+  is reaped, and what was read stays to be taken. The link keeps its proxy once the supervisor
+  is closed, so the record and the last decisions stay readable.
+- `log.py`: brig's one log envelope and its encoder (decision-0001 rule 14, TASK-0001
+  criterion 15, TASK-0001.37). A line is one JSON object, ASCII only: `time` (RFC 3339, UTC, to
+  the microsecond, `Z`), `level` (`debug`, `info`, `warning`, `error`), `source` (which of
+  brig's programs wrote it) and `event`, first and in that order, then the event's own fields,
+  each a JSON scalar. `encode` is the one place a line is made, and refuses a field named like
+  the head and a naive time; `decode` reads one back, refusing what `encode` would not write;
+  `write` is the one raw write of a line to an fd (the `brig-one-writer` allow list names it
+  beside the supervisor's wire). It is standard library only and imports nothing of brig (the
+  `brig-standalone-programs` gate), and the proxy's file carries it as a module of its own, so
+  the proxy writes exactly the envelope the library reads. The supervisor's wire is its own
+  protocol, not a log, and writes no envelope line yet.
 - `supervisor/`: the jail's PID 1 (decision-0002). `wire.py` and `program.py` assemble
   (`assemble.py`) into one stdlib-only file that refuses an interpreter older than 3.15;
   `link.py` is the host's end, starting it and reading its events; a start that fails after
@@ -267,7 +314,7 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   neither reopen the supervisor's fds through `/proc/1` nor ptrace it, so the exit code the host
   reports is the one `waitpid(2)` gave (decision-0006).
 
-Not yet built: `tether.py`, `sandbox_exec.py` and `log.py`.
+Not yet built: `tether.py` and `sandbox_exec.py`.
 
 ## Presentation
 
@@ -285,7 +332,9 @@ driver, holds its PID namespace for readiness, and exports `create_bwrap_jail`. 
 whose errors it raises, and an `EnvPolicy` naming a proxy variable
 (`PolicyEnvNamesProxyVariable`), before anything is looked at. Then it reads the decision's
 source and assembles the proxy (`EgressProxySourceUnreadable` for a broken install), and builds
-the supervisor with the bridge. `egress_hosts` is the proxy's resolver seam: a table of names to
+the supervisor with the bridge, and holds the `EgressPort` to its proxy on the `Jail`
+(`jail.py`'s `real_egress_port`, which translates the link's plain data into the domain's values
+and its `ProxyEnded` into `JailEgressEnded`). `egress_hosts` is the proxy's resolver seam: a table of names to
 addresses, given as data, that the proxy resolves from instead of the host's resolver; every
 address is still judged. With no `egress`, nothing new runs and nothing changes. What every jail
 type shares is beside it: `jail.py` (the `Jail`, brig's state directory, the real ports'
@@ -293,8 +342,34 @@ wiring, and `dismantle`: the verified kill ladder for a process that exists, the
 script, the channel directory and the fds, and releasing the placeholders only on a group read
 gone, the one cleanup `destroy_jail` and a failed create both run; it raises nothing, and hands
 back what its ladder or the supervisor's close raised, a raising ladder reading as a group not
-verified gone, for its caller to attach to what it raises, TASK-0046), `api.py` (checking an egress policy, reserving channels, readiness, waiting,
-interrupting the command with `SIGINT` through its supervisor, teardown) and `report.py` (a report as text).
+verified gone, for its caller to attach to what it raises, TASK-0046), `api.py` (checking an egress policy, changing a running jail's grants and reading what its proxy
+decided, reserving channels, readiness, waiting, interrupting the command with `SIGINT` through
+its supervisor, teardown) and `report.py` (a report as text).
+
+A running jail's egress is the embedder's to change and to read (decision-0009 items 5, 6 and 8,
+TASK-0001.37). `allow_egress(jail, destination)` and `revoke_egress(jail, destination)` refuse a
+jail with no egress proxy with `JailHasNoEgress` (one created without an `EgressPolicy`, or with
+a caller's own `supervisors`), then a malformed destination exactly as `check_egress_policy`
+refuses one, before anything is sent, then send the change; the jail is not restarted, and the
+next connection is decided against the new grants. Once the proxy has ended (`run_jail` saw the
+command done, or `destroy_jail` ran) a change is `JailEgressEnded`, sent and recorded nowhere.
+`egress_decisions(jail)` returns, without blocking, an iterator over the decisions that arrived
+since the last call, each handed back once, so an embedder can poll it between its own events
+and ask its person about a refusal; a cursor over every decision was not chosen, since it would
+keep history for a reader that may never come, which is the memory this bounds. Each value
+carries the envelope line verbatim, for an embedder that keeps a log of its own: the library
+writes the line nowhere. `egress_record(jail)` is the policy as created and every change since,
+and `render(jail.report, egress_record(jail))` states both after the claims, one line per
+change with its time, and what is granted now. With an egress policy the report's `network`
+claim is `NETWORK_EGRESS_CLAIM`: the command reaches only the destinations the policy grants,
+and only through the proxy, capped like `network` by the socket half of TASK-0043, and naming
+the two gaps the proxy leaves (an HTTP `CONNECT`'s authority is judged, never the TLS SNI inside
+it, so a granted CDN can front for another name; the bytes inside a granted connection are not
+inspected). *Held by* `tests/e2e/test_egress_live_battery.py` (refused, allowed and reached
+with no restart, revoked and refused while an open tunnel stays, each decision and its line),
+`tests/e2e/test_report_battery.py` (the egress claim held to what it measures, and the rendered
+record), `tests/e2e/test_log_envelope.py`, `tests/integration/test_egress_live_grants.py` and
+the unit tests of `egress_after`, `egress_reason` and the ceilings.
 
 An embedder talks to a channel only over the connection readiness verified. `await_channel_ready`
 returns `ChannelReady(connection)`, the verified socket still open, and the embedder owns it and

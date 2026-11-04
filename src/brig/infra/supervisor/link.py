@@ -356,7 +356,9 @@ class LiveSupervisor:
 
     Invariant (rule 7): `_supervisor` is the supervisor `start` began, with its events pipe
     open, until `await_done` sees a terminal outcome or `close` runs; then `None`. A pid other
-    than its own reads as one already closed.
+    than its own reads as one already closed. `_proxy` is the egress proxy that start began, if
+    the jail has a bridge, and is kept once the supervisor is closed (and the proxy ended), so
+    what it was sent and what it decided can still be read.
     """
 
     def __init__(
@@ -372,6 +374,13 @@ class LiveSupervisor:
         self._stdio = stdio
         self._bridge = bridge
         self._supervisor: Supervisor | None = None
+        self._proxy: launch.RunningProxy | None = None
+
+    @property
+    def proxy(self) -> launch.RunningProxy | None:
+        """The egress proxy `start` began, ended or not; `None` before a start, or with no
+        bridge."""
+        return self._proxy
 
     def start(self, argv: tuple[str, ...], env: Mapping[str, str]) -> Supervisor:
         """Start the supervisor with `argv` in `env` as its one command; `_start` raises
@@ -379,6 +388,7 @@ class LiveSupervisor:
         caller to tear down."""
         supervisor = _start(self._supervisor_argv, argv, env, self._stdio, self._bridge)
         self._supervisor = supervisor
+        self._proxy = supervisor.proxy
         return supervisor
 
     def _held(self, pid: int) -> Supervisor | None:

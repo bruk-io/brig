@@ -35,7 +35,10 @@ library (its Supervisor Link component), on the host side of the boundary. The
 domain's egress decision inlined as source, never imported, and starts it from its
 stdin (its Proxy Link component); the supervisor hands it each connection accepted
 on the jail's loopback, the jail's one route out, and it reaches only what the
-decision allows. It ends with the jail.
+decision allows. The embedder changes its grants while the jail runs, over the
+pipe the Proxy Link holds, and each decision it makes comes back on a second
+pipe as one line in brig's log envelope (the Log Envelope component), which the
+library hands the embedder as data. It ends with the jail.
 
 ```likec4-view
 brigContainers

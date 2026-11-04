@@ -11,6 +11,8 @@ from enum import Enum
 from typing import Protocol
 
 from brig.domain.effects import ExitCodeUnknown, ExitOutcome
+from brig.domain.policy.egress import Destination, EgressChangeKind
+from brig.domain.policy.egress_record import EgressDecision, EgressRecord
 
 
 class _ProcessIdentity(Protocol):
@@ -187,4 +189,30 @@ class ChannelDirectoryPort(Protocol):
     def remove(self, path: str) -> None:
         """Remove `path` and everything in it; an `OSError` (`FileNotFoundError` once it is
         gone) propagates for the caller to judge."""
+        ...
+
+
+class EgressPort(Protocol):
+    """What the API needs from infra to change a running jail's egress grants and to read back
+    what its proxy did (decision-0009 items 5 and 6). A jail with an egress policy holds one;
+    a test passes a fake of the same shape on a `Jail` it builds."""
+
+    def change(self, kind: EgressChangeKind, destination: Destination) -> None:
+        """Send the proxy one change to its grants, and record it. It applies to the next
+        connection the proxy takes; one already open is left alone.
+
+        Raises:
+            JailEgressEnded: the proxy has ended (the command finished, or the jail was
+                destroyed), or died; nothing was recorded.
+        """
+        ...
+
+    def record(self) -> EgressRecord:
+        """The grants as created and every change sent since, in order."""
+        ...
+
+    def decisions(self) -> tuple[EgressDecision, ...]:
+        """The decisions the proxy made since the last call, oldest first, each returned once;
+        at most a bounded number are kept between calls, and `EgressDecision.seq` shows a gap
+        where some were dropped. Never blocks."""
         ...

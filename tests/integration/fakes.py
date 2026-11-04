@@ -10,12 +10,20 @@ import signal
 import socket
 import tempfile
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from brig import (
     ChannelNotReady,
     ChannelReady,
     ChannelRefused,
+    Destination,
+    EgressChange,
+    EgressChangeKind,
+    EgressDecision,
+    EgressPolicy,
+    EgressRecord,
     ExitCodeUnknown,
+    JailEgressEnded,
     JailSpawnFailed,
     Process,
 )
@@ -302,3 +310,37 @@ def plant_fake_proc(
             )
         with open(os.path.join(entry, "ns", "pid"), "w") as handle:
             handle.write("")
+
+
+@dataclass
+class FakeEgress:
+    """A fake `EgressPort`: a running jail's egress proxy that records what it is sent and starts
+    nothing.
+
+    `change` records each change with `now` as its time, then refuses as ended while `ended`
+    (recording nothing). `record` is `created` with every change recorded. `decisions` hands
+    back `pending` and empties it, as the real port hands each decision back once.
+    """
+
+    created: EgressPolicy = field(default_factory=EgressPolicy)
+    ended: bool = False
+    now: datetime = datetime(2026, 11, 4, 5, 6, 7, tzinfo=UTC)
+    changes: list[EgressChange] = field(default_factory=list)
+    pending: list[EgressDecision] = field(default_factory=list)
+
+    def change(self, kind: EgressChangeKind, destination: Destination) -> None:
+        """Record `kind` of `destination`, or refuse while `ended`.
+
+        Raises:
+            JailEgressEnded: `ended` is set; nothing was recorded.
+        """
+        if self.ended:
+            raise JailEgressEnded(destination)
+        self.changes.append(EgressChange(kind, destination, self.now))
+
+    def record(self) -> EgressRecord:
+        return EgressRecord(self.created, tuple(self.changes))
+
+    def decisions(self) -> tuple[EgressDecision, ...]:
+        taken, self.pending = tuple(self.pending), []
+        return taken

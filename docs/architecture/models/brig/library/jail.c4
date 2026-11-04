@@ -3,7 +3,7 @@ model {
   extend brig.library {
     jail = component 'Jail' {
       technology 'Python 3.15'
-      description 'What every jail type\'s presentation shares: the Jail value an embedder holds (its supervisor, mounts, placeholders and report), brig\'s resolved state directory, the real ports\' wiring onto infra, translating infra\'s values so none crosses a port, and dismantle, the one cleanup destroy_jail and a failed create both run.'
+      description 'What every jail type\'s presentation shares: the Jail value an embedder holds (its supervisor, mounts, placeholders, report and egress port), brig\'s resolved state directory, the real ports\' wiring onto infra, translating infra\'s values so none crosses a port, and dismantle, the one cleanup destroy_jail and a failed create both run.'
     }
   }
 }

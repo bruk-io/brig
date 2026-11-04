@@ -83,11 +83,13 @@ from brig.presentation.jail import (
     PROCESSES,
     Jail,
     dismantle,
+    real_egress_port,
     real_supervisor_port,
     resolved_state_dir,
 )
 from brig.presentation.ports import (
     ChannelDirectoryPort,
+    EgressPort,
     PlaceholderPort,
     ProcessPort,
     SupervisorPort,
@@ -200,10 +202,11 @@ def _supervisors_for(
     cwd: str | None = None,
     stdio: Stdio = INHERIT,
     bridge: link.Bridge | None = None,
-) -> tuple[SupervisorPort, Path, tuple[bwrap.Mount, ...], tuple[str, ...]]:
+) -> tuple[SupervisorPort, EgressPort | None, Path, tuple[bwrap.Mount, ...], tuple[str, ...]]:
     """Refuse or compile `policy` for one jail, and return its `SupervisorPort` (a fresh
     `LiveSupervisor`), the supervisor script written for it, its mounts, and the absent paths
-    it holds placeholders for; with `bridge`, the supervisor bridges the jail to its egress proxy.
+    it holds placeholders for; with `bridge`, the supervisor bridges the jail to its egress proxy,
+    and the `EgressPort` to that proxy comes second (`None` without).
     Nothing is written before every refusal has passed. Beside what is
     listed below, `PolicyPathUninspectable` from `_facts` and `_link_chain` (the host refused to
     say what is at a policy path, a stdio path or the interpreter, or where a link on the way to
@@ -309,7 +312,9 @@ def _supervisors_for(
         channels=channels,
     )
     supervisor_argv = bwrap.compile_supervisor_launch(supervisor_path, mounts, cwd)
-    port = real_supervisor_port(link.LiveSupervisor(supervisor_argv, streams, bridge))
+    live = link.LiveSupervisor(supervisor_argv, streams, bridge)
+    port = real_supervisor_port(live)
+    egress_port = None if bridge is None else real_egress_port(live)
     held = (*policy.write_denies, *policy.masks)
     placeholders = tuple(
         dict.fromkeys(
@@ -318,7 +323,7 @@ def _supervisors_for(
             if mount.kind is bwrap.MountKind.READ_ONLY and mount.target in held
         )
     )
-    return port, Path(supervisor_path[-1]), mounts, placeholders
+    return port, egress_port, Path(supervisor_path[-1]), mounts, placeholders
 
 
 def create_bwrap_jail(
@@ -363,7 +368,10 @@ def create_bwrap_jail(
             and bridges each connection to a proxy on the host that allows only what `egress`
             grants; the command's `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` (`socks5h://`) and
             their lower-case forms point there and `NO_PROXY`/`no_proxy` are empty, whatever
-            `env_policy` says. `destroy_jail` ends the proxy.
+            `env_policy` says. `destroy_jail` ends the proxy. While the command runs,
+            `allow_egress` and `revoke_egress` change what the proxy grants, and
+            `egress_decisions` reads what it decided; the report's `network` claim is then
+            `NETWORK_EGRESS_CLAIM`.
         egress_hosts: With `egress`, a table the proxy resolves names from instead of the
             host's resolver (a name it lacks resolves to nothing): host data given as data,
             for a test or an embedder that pins its names. Every address is still judged
@@ -371,7 +379,8 @@ def create_bwrap_jail(
         processes: The `ProcessPort` (a fake in a test).
         supervisors: A `SupervisorPort` to use as given (a fake in a test); `policy` is then not
             compiled, no supervisor script is written and no egress proxy started (`egress` is
-            still refused if malformed, and still sets the proxy variables).
+            still refused if malformed, and still sets the proxy variables), so the `Jail` has
+            no egress port.
         directories: The `ChannelDirectoryPort`.
         placeholders: The `PlaceholderPort` that holds the directories the jail mounts over at
             absent paths (a fake in a test).
@@ -420,12 +429,13 @@ def create_bwrap_jail(
                 assert_never(unreachable)
     if supervisors is not None:
         resolved_supervisors: SupervisorPort = supervisors
+        egress_port: EgressPort | None = None
         supervisor_script: Path | None = None
         mounts: tuple[bwrap.Mount, ...] = ()
         absent: tuple[str, ...] = ()
     else:
         bridge = None if egress is None else _bridge(egress, egress_hosts)
-        resolved_supervisors, supervisor_script, mounts, absent = _supervisors_for(
+        resolved_supervisors, egress_port, supervisor_script, mounts, absent = _supervisors_for(
             policy, channels, cwd, stdio, bridge
         )
     channel_directory = (
@@ -500,10 +510,13 @@ def create_bwrap_jail(
         mounts=mounts,
         placeholders=record,
         report=(
-            bwrap.ceilings(policy, mounts, channels, _socket_directories())
+            bwrap.ceilings(
+                policy, mounts, channels, _socket_directories(), egress=egress is not None
+            )
             if mounts
             else frozendict()
         ),
+        egress=egress_port,
     )
 
 

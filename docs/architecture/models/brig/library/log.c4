@@ -1,0 +1,13 @@
+// Component: infra/log.py -- brig's one log envelope and its encoder
+// (decision-0001 rule 14, TASK-0001 criterion 15). Standard library only and
+// importing nothing of brig: the egress proxy's file carries it as a module of
+// its own (the brig-standalone-programs gate), and presentation decodes the
+// proxy's lines with it.
+model {
+  extend brig.library {
+    logEnvelope = component 'Log Envelope' {
+      technology 'Python 3.15, stdlib only'
+      description 'The one shape of every line brig\'s own processes write: one JSON object, time, level, source and event first and in that order, then the event\'s own fields. The one encoder, the one decoder, and the one raw write of a line to an fd. The library itself writes no line.'
+    }
+  }
+}

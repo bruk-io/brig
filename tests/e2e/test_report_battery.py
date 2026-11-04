@@ -5,11 +5,13 @@ with `grade` from the evidence, and the jail's own report is held to that (`at_m
 regression in a mechanism grades the claim lower here and fails the report's ceiling.
 """
 
+import json
 import os
 import shutil
 import socket
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -19,17 +21,25 @@ from brig import (
     FS_READ_CLAIM,
     FS_WRITE_CLAIM,
     NETWORK_CLAIM,
+    NETWORK_EGRESS_CLAIM,
     WHOLE_HOST_READ_ONLY,
     Claim,
+    Destination,
+    EgressPolicy,
     EnvPolicy,
     Evidence,
     FsPolicy,
     Grade,
     Jail,
+    Stdio,
+    allow_egress,
     at_most,
     create_bwrap_jail,
     destroy_jail,
+    egress_record,
     grade,
+    render,
+    revoke_egress,
     run_jail,
 )
 
@@ -264,3 +274,88 @@ def test_fs_write_a_write_at_a_deny_is_refused_and_a_host_rename_undoes_it() -> 
         blocked = code == 7 and not (hooks / "pre-commit").exists()
     _held_to(jail, FS_WRITE_CLAIM, control, blocked)
     assert jail.report[FS_WRITE_CLAIM] is Grade.BEST_EFFORT
+
+
+_EGRESS_PROBE = r"""
+import json, os, socket, sys, time
+
+port, cue = int(sys.argv[1]), sys.argv[2]
+
+
+def through_the_proxy(name):
+    try:
+        sock = socket.create_connection(("127.0.0.1", 3128), timeout=10)
+        sock.sendall(f"CONNECT {name}:{port} HTTP/1.1\r\n\r\n".encode())
+        return sock.recv(64).decode().split("\r\n")[0]
+    except OSError as error:
+        return type(error).__name__
+
+
+def direct():
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=3)
+    except OSError:
+        return "refused"
+    return "reached"
+
+
+seen = {
+    "granted": through_the_proxy("granted.test"),
+    "ungranted": through_the_proxy("elsewhere.test"),
+    "direct": direct(),
+}
+print(json.dumps(seen), flush=True)
+while not os.path.exists(cue):
+    time.sleep(0.02)
+"""
+"""The egress claim's probe: a granted name through the proxy (the positive control), an
+ungranted one through it and the host's listener dialled directly (the violations), then wait
+for the host's cue while it changes the grants."""
+
+
+def test_network_with_an_egress_policy_reaches_only_what_it_grants_and_the_report_says_so() -> None:
+    """decision-0009 item 8: with an `EgressPolicy`, `network` is `NETWORK_EGRESS_CLAIM`, held to
+    what this measures, and its text names the CONNECT/SNI and payload gaps. Item 5: the
+    rendered report states the policy as created and every change made while the jail ran."""
+    with socket.socket() as listener, tempfile.TemporaryDirectory(dir="/tmp") as scratch:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(8)
+        port = listener.getsockname()[1]
+        out, cue = Path(scratch) / "out", Path(scratch) / "go"
+        created = EgressPolicy((Destination("granted.test", port), Destination("127.0.0.1", port)))
+        later = Destination("later.test", port)
+        jail = create_bwrap_jail(
+            (sys.executable, "-I", "-c", _EGRESS_PROBE, str(port), str(cue)),
+            egress=created,
+            egress_hosts={"granted.test": ("127.0.0.1",), "elsewhere.test": ("127.0.0.1",)},
+            stdio=Stdio(stdout=str(out)),
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while not (out.exists() and out.read_text().endswith("\n")):
+                assert time.monotonic() < deadline, "the probe printed nothing"
+                time.sleep(0.02)
+            seen = json.loads(out.read_text())
+            allow_egress(jail, later)
+            revoke_egress(jail, later)
+            cue.write_text("")
+            assert run_jail(jail, timeout_s=30) == 0
+        finally:
+            destroy_jail(jail)
+
+    control = seen["granted"] == "HTTP/1.1 200 Connection established"
+    blocked = seen["ungranted"] == "HTTP/1.1 403 Forbidden" and seen["direct"] == "refused"
+    assert NETWORK_CLAIM not in jail.report
+    _held_to(jail, NETWORK_EGRESS_CLAIM, control, blocked)
+    text = render(jail.report, egress_record(jail))
+    lines = text.splitlines()
+    assert (
+        f"network: {jail.report[NETWORK_EGRESS_CLAIM]} -- {NETWORK_EGRESS_CLAIM.description}"
+        in (lines)
+    )
+    assert "reaches only the destinations the policy grants, and only through the proxy" in text
+    assert "SNI" in text and "not inspected" in text
+    assert lines[-4] == f"egress as created: granted.test:{port}, 127.0.0.1:{port}"
+    assert lines[-3].startswith(f"egress allow later.test:{port} at ")
+    assert lines[-2].startswith(f"egress revoke later.test:{port} at ")
+    assert lines[-1] == f"egress now: granted.test:{port}, 127.0.0.1:{port}"

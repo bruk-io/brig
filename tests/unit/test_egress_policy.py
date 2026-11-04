@@ -1,8 +1,11 @@
 """Unit tests for the egress policy and its decision (decision-0009 items 3 and 4,
 `domain/policy/egress.py`): `egress_refusal` over an `EgressPolicy`, `parse_authority` over what
-a request names, and `decide_egress`, the whole of what the proxy allows. Plain data in and out,
+a request names, and `decide_egress`, the whole of what the proxy allows; and a running jail's
+grants (decision-0009 items 5 and 6): `egress_after`, `granted_now`, and the reason and verdict
+each settled decision names. Plain data in and out,
 nothing mocked; Hypothesis where the property holds for every input of a kind."""
 
+from datetime import UTC, datetime
 from ipaddress import ip_address
 
 import pytest
@@ -18,7 +21,10 @@ from brig.domain.policy.egress import (
     AuthorityUnparseable,
     CidrNotation,
     Destination,
+    EgressChangeKind,
     EgressPolicy,
+    EgressReason,
+    EgressVerdict,
     EmptyHost,
     InvalidHostname,
     MisplacedWildcard,
@@ -27,11 +33,16 @@ from brig.domain.policy.egress import (
     PortOutOfRange,
     PrivateAddress,
     Resolve,
+    SettledEgress,
     Unresolved,
     decide_egress,
+    egress_after,
+    egress_reason,
     egress_refusal,
+    egress_verdict,
     parse_authority,
 )
+from brig.domain.policy.egress_record import EgressChange, EgressRecord, granted_now
 
 _PUBLIC = "93.184.215.14"
 _PUBLIC_V6 = "2606:2800:21f:cb07:6820:80da:af6b:8b2c"
@@ -694,3 +705,87 @@ def test_the_decision_is_deterministic_and_leaves_its_arguments_alone() -> None:
     assert decide_egress(policy, request, resolved) == first
     assert policy == _allow(("example.com", 443), ("10.0.0.1", 443))
     assert first == Allowed(Destination("example.com", 443), ("10.0.0.1", _PUBLIC))
+
+
+_A = Destination("a.example", 443)
+_B = Destination("b.example", 443)
+
+
+def test_allowing_appends_a_destination_once() -> None:
+    policy = EgressPolicy((_A,))
+
+    assert egress_after(policy, EgressChangeKind.ALLOW, _B) == EgressPolicy((_A, _B))
+    assert egress_after(policy, EgressChangeKind.ALLOW, _A) is policy
+
+
+def test_revoking_removes_every_equal_grant_and_nothing_else() -> None:
+    policy = EgressPolicy((_A, _B, _A))
+
+    assert egress_after(policy, EgressChangeKind.REVOKE, _A) == EgressPolicy((_B,))
+    assert egress_after(policy, EgressChangeKind.REVOKE, Destination("c.example", 443)) == policy
+
+
+def test_revoking_a_name_under_a_wildcard_grant_revokes_nothing() -> None:
+    """A change names a grant as written: `*.example` stays, and still matches `a.example`."""
+    wildcard = EgressPolicy((Destination("*.example", 443),))
+
+    after = egress_after(wildcard, EgressChangeKind.REVOKE, _A)
+
+    assert after == wildcard
+    assert isinstance(decide_egress(after, Authority("a.example", 443)), Resolve)
+
+
+def test_a_destination_allowed_then_revoked_is_decided_against_each_policy_in_turn() -> None:
+    created = EgressPolicy()
+    allowed = egress_after(created, EgressChangeKind.ALLOW, Destination(_PUBLIC, 443))
+    revoked = egress_after(allowed, EgressChangeKind.REVOKE, Destination(_PUBLIC, 443))
+    request = Authority(_PUBLIC, 443)
+
+    assert isinstance(decide_egress(created, request), NotGranted)
+    assert isinstance(decide_egress(allowed, request), Allowed)
+    assert isinstance(decide_egress(revoked, request), NotGranted)
+
+
+def test_the_record_applies_its_changes_in_order_to_the_policy_as_created() -> None:
+    when = datetime(2026, 11, 4, tzinfo=UTC)
+    record = EgressRecord(
+        created=EgressPolicy((_A,)),
+        changes=(
+            EgressChange(EgressChangeKind.ALLOW, _B, when),
+            EgressChange(EgressChangeKind.REVOKE, _A, when),
+            EgressChange(EgressChangeKind.ALLOW, _A, when),
+        ),
+    )
+
+    assert granted_now(record) == EgressPolicy((_B, _A))
+    assert granted_now(EgressRecord(EgressPolicy((_A,)))) == EgressPolicy((_A,))
+
+
+_REQUEST = Authority("a.example", 443)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "reason"),
+    [
+        (Allowed(_A, (_PUBLIC,)), EgressReason.GRANTED),
+        (NotGranted(_REQUEST), EgressReason.NOT_GRANTED),
+        (Unresolved(_REQUEST), EgressReason.UNRESOLVED),
+        (AddressUnparseable(_REQUEST, "nope"), EgressReason.ADDRESS_UNPARSEABLE),
+        (PrivateAddress(_REQUEST, "10.0.0.1"), EgressReason.PRIVATE_ADDRESS),
+        (AuthorityUnparseable("x", AuthorityProblem.BAD_HOST), EgressReason.AUTHORITY_UNPARSEABLE),
+    ],
+)
+def test_each_settled_outcome_names_its_reason_and_only_a_grant_allows(
+    outcome: SettledEgress, reason: EgressReason
+) -> None:
+    assert egress_reason(outcome) is reason
+    assert egress_verdict(reason) is (
+        EgressVerdict.ALLOWED if reason is EgressReason.GRANTED else EgressVerdict.REFUSED
+    )
+
+
+def test_every_reason_and_change_kind_crosses_the_wire_as_its_own_word() -> None:
+    """The proxy writes these values and the library reads them back: each distinct."""
+    assert len({reason.value for reason in EgressReason}) == len(EgressReason)
+    assert {kind.value for kind in EgressChangeKind} == {"allow", "revoke"}
+    assert {verdict.value for verdict in EgressVerdict} == {"allowed", "refused"}

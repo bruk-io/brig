@@ -16,6 +16,11 @@ what it got back. A name is then allowed only if every address it resolved to is
 exactly, with the same port, by an IP-literal grant: a name that resolves into the host's own
 networks reaches nothing a literal grant did not open (the old brig's filter allowed by name alone,
 old SPEC decisions 133 and 134; this is decision-0009 item 4's tightening).
+
+A jail's grants can change while it runs (decision-0009 item 5): `egress_after` is the one
+definition of what an `EgressChange` does to a policy, which the host's record and the proxy's
+list both apply. What a settled decision was, as a verdict and a reason, is `egress_reason`'s, so
+the proxy's decision lines and the embedder's values read one set of words.
 """
 
 from dataclasses import dataclass
@@ -468,3 +473,80 @@ def decide_egress(
         if not _public(address, own) and address not in opened:
             return PrivateAddress(request, text)
     return Allowed(granted, tuple(str(address) for _, address in judged))
+
+
+class EgressChangeKind(StrEnum):
+    """What an embedder did to a running jail's grants (decision-0009 item 5)."""
+
+    ALLOW = "allow"
+    """`allow_egress`: the destination is added, unless it is granted already."""
+
+    REVOKE = "revoke"
+    """`revoke_egress`: every grant equal to the destination is removed."""
+
+
+def egress_after(
+    policy: EgressPolicy, kind: EgressChangeKind, destination: Destination
+) -> EgressPolicy:
+    """`policy` with one change made: `ALLOW` appends `destination` unless an equal grant is
+    there already (so the order of the grants, and which one allows a request, is kept);
+    `REVOKE` removes every grant equal to it, and changes nothing when there is none. A
+    `*.suffix` grant is a grant like any other: revoking a name under it revokes nothing."""
+    match kind:
+        case EgressChangeKind.ALLOW:
+            if destination in policy.allow:
+                return policy
+            return EgressPolicy((*policy.allow, destination))
+        case EgressChangeKind.REVOKE:
+            return EgressPolicy(tuple(grant for grant in policy.allow if grant != destination))
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+class EgressVerdict(StrEnum):
+    """What the proxy did with one request."""
+
+    ALLOWED = "allowed"
+    REFUSED = "refused"
+
+
+class EgressReason(StrEnum):
+    """Why a settled decision went the way it did: `GRANTED` is the one reason a request is
+    allowed, and each other names the refusal `decide_egress` answered."""
+
+    GRANTED = "granted"
+    NOT_GRANTED = "not-granted"
+    UNRESOLVED = "unresolved"
+    ADDRESS_UNPARSEABLE = "address-unparseable"
+    PRIVATE_ADDRESS = "private-address"
+    AUTHORITY_UNPARSEABLE = "authority-unparseable"
+
+
+type SettledEgress = (
+    Allowed | NotGranted | Unresolved | AddressUnparseable | PrivateAddress | AuthorityUnparseable
+)
+"""What `decide_egress` answers once nothing is left to resolve."""
+
+
+def egress_reason(outcome: SettledEgress) -> EgressReason:
+    """The reason a settled `outcome` names."""
+    match outcome:
+        case Allowed():
+            return EgressReason.GRANTED
+        case NotGranted():
+            return EgressReason.NOT_GRANTED
+        case Unresolved():
+            return EgressReason.UNRESOLVED
+        case AddressUnparseable():
+            return EgressReason.ADDRESS_UNPARSEABLE
+        case PrivateAddress():
+            return EgressReason.PRIVATE_ADDRESS
+        case AuthorityUnparseable():
+            return EgressReason.AUTHORITY_UNPARSEABLE
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def egress_verdict(reason: EgressReason) -> EgressVerdict:
+    """`ALLOWED` for `GRANTED`, `REFUSED` for every other reason."""
+    return EgressVerdict.ALLOWED if reason is EgressReason.GRANTED else EgressVerdict.REFUSED

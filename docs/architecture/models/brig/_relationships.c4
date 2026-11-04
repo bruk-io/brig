@@ -18,8 +18,12 @@ model {
     // decision-0009 items 1 and 2: the jail's one route out. The supervisor
     // listens on the jail's loopback and hands each connection to the proxy,
     // which alone reaches the network.
-    library.proxyLink -> egressProxy 'starts with its program on stdin, sends the grants to, and ends,' {
-      technology 'a JSON line on a pipe on fd 3'
+    library.proxyLink -> egressProxy 'starts with its program on stdin, sends the grants and each change to them to, and ends,' {
+      technology 'JSON lines on a pipe on fd 3'
+    }
+    // decision-0009 item 6: each decision comes back as data.
+    egressProxy -> library.proxyLink 'writes each decision as one log envelope line to' {
+      technology 'newline-delimited JSON in brig\'s log envelope on a pipe on fd 5'
     }
     supervisor -> egressProxy 'hands each connection accepted on the jail\'s loopback to' {
       technology 'one end of a socketpair per connection, sent with SCM_RIGHTS over a SOCK_SEQPACKET pair (fds 5 and 4), then relayed bytes'
@@ -47,6 +51,7 @@ model {
     supervisorLink -> proxyLink 'starts a jail\'s egress proxy before its supervisor, and ends it on close, through'
     proxyLink -> processes 'spawns, kills and reaps the egress proxy through'
     proxyLink -> supervisorLink 'shares the version guard of the supervisor\'s file with'
+    proxyLink -> logEnvelope 'assembles the envelope\'s encoder into the proxy\'s file from'
 
     // presentation, internal to the layer
     api -> driver 'runs start through'
@@ -81,6 +86,10 @@ model {
     errors -> effects 'names the failed process using'
     ports -> effects 'states exit outcomes with'
     report -> grades 'renders the claims and grades of'
+    report -> policy 'renders the egress record with'
+    jail -> policy 'translates the egress record and decisions into'
+    ports -> policy 'states the egress port with'
+    api -> policy 'checks each egress change\'s destination, and names its kind, with'
 
     // presentation -> infra (rule 1: presentation knows infra)
     api -> sockets 'interrupts the jail\'s PID 1 through'
@@ -94,5 +103,7 @@ model {
     jail -> sockets 'wires the channel ports onto'
     jail -> stateDir 'resolves brig\'s state directory through'
     jail -> supervisorLink 'wires the supervisor port onto'
+    jail -> proxyLink 'wires the egress port onto'
+    jail -> logEnvelope 'decodes each decision line with'
   }
 }

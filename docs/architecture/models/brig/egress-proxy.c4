@@ -1,6 +1,6 @@
 // Container: the egress proxy (decision-0009 item 2, TASK-0001.36) --
 // infra/proxy/program.py, assembled by infra/proxy/assemble.py with
-// domain/policy/egress.py's source inlined as a module of its own, into the
+// domain/policy/egress.py's and infra/log.py's sources inlined as modules of their own, into the
 // one stdlib-only file a jail with an egress policy runs on the host, one
 // process per jail, from its stdin. infra/proxy/launch.py, the host's end that
 // starts and ends it, stays in the library container (component `proxyLink`).
@@ -13,7 +13,7 @@ model {
   extend brig {
     egressProxy = container 'Egress Proxy' {
       technology 'Python 3.15, stdlib only'
-      description 'One host-side process per jail with an egress policy: takes each connection the supervisor bridges out of the jail, reads what it asks for (HTTP CONNECT, absolute-form HTTP, SOCKS5 CONNECT), decides it with the egress decision, resolves a granted name itself, connects only to the addresses the decision allowed, and refuses everything else with 403 or SOCKS 0x02. Ends with the jail.'
+      description 'One host-side process per jail with an egress policy: takes each connection the supervisor bridges out of the jail, reads what it asks for (HTTP CONNECT, absolute-form HTTP, SOCKS5 CONNECT), decides it with the egress decision, resolves a granted name itself, connects only to the addresses the decision allowed, and refuses everything else with 403 or SOCKS 0x02. Applies each change to its grants to the next connection it takes, and writes each decision as one line in brig\'s log envelope back to the host. Ends with the jail.'
     }
   }
 }

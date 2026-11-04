@@ -8,7 +8,7 @@ model {
   extend brig.library {
     proxyLink = component 'Proxy Link' {
       technology 'Python 3.15, stdlib only'
-      description 'The host\'s end of a jail\'s egress proxy: assembles the proxy file from the egress decision\'s source and program.py behind the supervisor\'s version guard, starts it as this process\'s child with its program on stdin, a fixed environment, its grants as one JSON line on a pipe held for the jail\'s life and its end of the supervisor\'s socketpair, and ends it by closing that pipe, killing its group and reaping it. Plain data in and out.'
+      description 'The host\'s end of a jail\'s egress proxy: assembles the proxy file from the egress decision\'s source, the log envelope\'s and program.py behind the supervisor\'s version guard, starts it as this process\'s child with its program on stdin, a fixed environment, its grants as one JSON line on a pipe held for the jail\'s life, then each change to them as one more, and its end of the supervisor\'s socketpair; drains its decision lines into a bounded buffer the embedder takes them from; and ends it by closing that pipe, killing its group and reaping it. Plain data in and out.'
     }
   }
 }

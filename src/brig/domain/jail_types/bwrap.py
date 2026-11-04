@@ -311,6 +311,22 @@ NETWORK_CLAIM = Claim(
         "alone carries files, not a route out, and does not lower it"
     ),
 )
+NETWORK_EGRESS_CLAIM = Claim(
+    name="network",
+    description=(
+        "the command reaches only the destinations the policy grants, and only through the "
+        "proxy: its own network namespace has loopback alone, where the supervisor bridges each "
+        "connection to a proxy on the host that decides it, and resolves a granted name itself. "
+        "A host socket the jail can dial can carry the network past the proxy, so this is "
+        "violated where the jail sees a place where hosts keep sockets (/run, /tmp and the "
+        "like), and at best best-effort while it sees any host root a socket could sit in. Not "
+        "covered: the proxy judges an HTTP CONNECT's authority, never the TLS SNI inside it, so "
+        "a granted name served by a CDN can front for another; and the bytes inside a granted "
+        "connection are not inspected"
+    ),
+)
+"""What the compile claims about the network of a jail with an egress policy (decision-0009 item
+8): `network`'s name, in its place in the report."""
 ENV_CLAIM = Claim(
     name="env",
     description="the command's environment is exactly what the environment policy allows",
@@ -383,6 +399,8 @@ def ceilings(
     mounts: tuple[Mount, ...],
     channels: Reservations | None,
     socket_directories: tuple[str, ...] = SOCKET_DIRECTORIES,
+    *,
+    egress: bool = False,
 ) -> frozendict[Claim, Grade]:
     """The strongest grade each claim can have for a jail compiled to `mounts` (decision-0008):
     what this compile states, before any jail runs. An e2e battery holds every one of these to
@@ -410,7 +428,9 @@ def ceilings(
       the jail's own network namespace has no interface, but a host socket it can dial can carry
       the network, so it is `VIOLATED` where one of `socket_directories` is visible and
       `BEST_EFFORT` while any root is. A writable shared root alone carries files, not a route
-      out, and does not lower it.
+      out, and does not lower it. With `egress` (the jail has an egress policy), the claim is
+      `NETWORK_EGRESS_CLAIM` instead, under the same cap (decision-0009 item 8): the proxy route
+      is enforced, so the host-socket gap is the residual, and nothing more.
     """
     masks = any(
         mount.target in policy.masks for mount in mounts if mount.kind is MountKind.READ_ONLY
@@ -422,7 +442,7 @@ def ceilings(
         {
             FS_WRITE_CLAIM: Grade.BEST_EFFORT if _beneath_writable(mounts) else Grade.ENFORCED,
             FS_READ_CLAIM: Grade.BEST_EFFORT if masks else Grade.ENFORCED,
-            NETWORK_CLAIM: reach,
+            NETWORK_EGRESS_CLAIM if egress else NETWORK_CLAIM: reach,
             ENV_CLAIM: Grade.ENFORCED,
             CHANNEL_EXCLUSIVITY_CLAIM: exclusivity,
         }

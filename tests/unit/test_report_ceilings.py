@@ -8,6 +8,7 @@ from brig.domain.jail_types.bwrap import (
     FS_READ_CLAIM,
     FS_WRITE_CLAIM,
     NETWORK_CLAIM,
+    NETWORK_EGRESS_CLAIM,
     ceilings,
     compile_mounts,
 )
@@ -156,3 +157,33 @@ def test_at_most_orders_the_grades_strongest_first() -> None:
     for i, stated in enumerate(order):
         for j, measured in enumerate(order):
             assert at_most(stated, measured) == (i >= j), (stated, measured)
+
+
+def test_a_jail_with_an_egress_policy_states_the_egress_network_claim_under_the_same_cap() -> None:
+    """decision-0009 item 8: with an egress policy, `network` is the egress claim, capped by the
+    socket half of `channel_exclusivity` exactly as without one (TASK-0043)."""
+    for policy in (WHOLE_HOST_READ_ONLY, FsPolicy(readable=("/usr", "/etc")), FsPolicy()):
+        mounts = compile_mounts(
+            policy, {}, state_dir="/s", supervisor_script="/s/x.py", empty_dir="/s/empty"
+        )
+        plain = ceilings(policy, mounts, None)
+        egress = ceilings(policy, mounts, None, egress=True)
+
+        assert NETWORK_CLAIM not in egress
+        assert NETWORK_EGRESS_CLAIM not in plain
+        assert egress[NETWORK_EGRESS_CLAIM] is plain[NETWORK_CLAIM]
+        assert list(egress) == [
+            NETWORK_EGRESS_CLAIM if claim is NETWORK_CLAIM else claim for claim in plain
+        ]
+
+
+def test_the_egress_network_claim_says_what_decision_0009_item_8_says() -> None:
+    text = NETWORK_EGRESS_CLAIM.description
+
+    assert NETWORK_EGRESS_CLAIM.name == NETWORK_CLAIM.name
+    assert text.startswith(
+        "the command reaches only the destinations the policy grants, and only through the proxy"
+    )
+    assert "host socket" in text
+    assert "SNI" in text and "CONNECT" in text
+    assert "bytes inside a granted connection are not inspected" in text

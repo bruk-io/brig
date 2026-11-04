@@ -18,6 +18,15 @@ from brig.domain.claims import Claim
 from brig.domain.effects import ExitCodeUnknown, ExitOutcome, GroupState, Process
 from brig.domain.grades import Grade
 from brig.domain.jail_types import bwrap
+from brig.domain.policy.egress import (
+    Destination,
+    EgressChangeKind,
+    EgressPolicy,
+    EgressReason,
+    EgressVerdict,
+)
+from brig.domain.policy.egress_record import EgressChange, EgressDecision, EgressRecord
+from brig.infra import log as _log
 from brig.infra import placeholders as _placeholders
 from brig.infra import sockets as _sockets
 from brig.infra import state_dir as _state_dir_mod
@@ -27,9 +36,12 @@ from brig.infra.processes import group_alive_deadline as _group_alive_deadline
 from brig.infra.processes import peek as _infra_peek
 from brig.infra.processes import release as _release
 from brig.infra.processes import signal_group as _signal_group
+from brig.infra.proxy import launch as _launch
+from brig.infra.proxy import program as _proxy_program
 from brig.infra.supervisor import link
 from brig.presentation.driver import run
 from brig.presentation.errors import (
+    JailEgressEnded,
     StateDirectoryInvalid,
     StateDirectoryWriteFailed,
 )
@@ -40,6 +52,7 @@ from brig.presentation.ports import (
     ChannelReadinessRefusal,
     ChannelReady,
     ChannelRefused,
+    EgressPort,
     PlaceholderPort,
     ProcessPort,
     SupervisorPort,
@@ -106,6 +119,86 @@ def real_supervisor_port(live: link.LiveSupervisor) -> SupervisorPort:
         return ExitCodeUnknown() if isinstance(outcome, link.SupervisorDoneUnknown) else outcome
 
     return _RealSupervisor(start=live.start, await_done=await_done, close=live.close)
+
+
+def _decision(line: str) -> EgressDecision | None:
+    """One decision line the proxy wrote, as an `EgressDecision`; `None` for a line that is not
+    one (unreadable, another event, or a field of the wrong kind), which is dropped like a line
+    the link could not keep, and shows as a gap in `seq`."""
+    try:
+        read = _log.decode(line)
+    except _log.LineUnreadable:
+        return None
+    if read.source != _proxy_program.SOURCE or read.event != _proxy_program.DECISION_EVENT:
+        return None
+    seq, verdict, host, port, reason = (
+        read.fields.get(name) for name in ("seq", "verdict", "host", "port", "reason")
+    )
+    if not (
+        isinstance(seq, int)
+        and isinstance(port, int)
+        and isinstance(host, str)
+        and isinstance(verdict, str)
+        and isinstance(reason, str)
+    ):
+        return None
+    try:
+        return EgressDecision(
+            seq=seq,
+            verdict=EgressVerdict(verdict),
+            destination=Destination(host, port),
+            reason=EgressReason(reason),
+            time=read.time,
+            line=line,
+        )
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class _RealEgress:
+    """A `LiveSupervisor`'s egress proxy as an `EgressPort`."""
+
+    change: Callable[[EgressChangeKind, Destination], None]
+    record: Callable[[], EgressRecord]
+    decisions: Callable[[], tuple[EgressDecision, ...]]
+
+
+def real_egress_port(live: link.LiveSupervisor) -> EgressPort:
+    """The egress proxy `live` starts as an `EgressPort`, its plain data translated into the
+    domain's values and its `ProxyEnded` into `JailEgressEnded`. Read through `live.proxy` at
+    each call, since the proxy starts with the supervisor; before that, the record is empty and
+    a change is refused as ended."""
+
+    def change(kind: EgressChangeKind, destination: Destination) -> None:
+        proxy = live.proxy
+        if proxy is None:
+            raise JailEgressEnded(destination)
+        try:
+            proxy.change(kind.value, destination.host, destination.port)
+        except _launch.ProxyEnded as error:
+            raise JailEgressEnded(destination) from error
+
+    def record() -> EgressRecord:
+        proxy = live.proxy
+        if proxy is None:
+            return EgressRecord(EgressPolicy())
+        return EgressRecord(
+            created=EgressPolicy(tuple(Destination(host, port) for host, port in proxy.allow)),
+            changes=tuple(
+                EgressChange(EgressChangeKind(kind), Destination(host, port), when)
+                for kind, host, port, when in proxy.changes
+            ),
+        )
+
+    def decisions() -> tuple[EgressDecision, ...]:
+        proxy = live.proxy
+        if proxy is None:
+            return ()
+        read = (_decision(line) for line in proxy.take_lines())
+        return tuple(decision for decision in read if decision is not None)
+
+    return _RealEgress(change=change, record=record, decisions=decisions)
 
 
 def _allocate_channel_directory() -> str:
@@ -202,7 +295,8 @@ class Jail:
     was found. `channel_directory_fd` is an fd on the channel directory, opened right after it
     was made and held for the jail's lifetime, beneath which readiness opens each channel's name
     (TASK-0045); `None` with no channel. `mounts` is what the jail was compiled with and
-    `report` its ceiling per claim (decision-0008).
+    `report` its ceiling per claim (decision-0008). `egress` is the port to the jail's egress
+    proxy (decision-0009 items 5 and 6), `None` for a jail with none.
     """
 
     process: Process
@@ -214,6 +308,7 @@ class Jail:
     mounts: tuple[bwrap.Mount, ...] = ()
     placeholders: str | None = None
     report: frozendict[Claim, Grade] = frozendict()
+    egress: EgressPort | None = None
 
 
 def _close_fd(fd: int) -> None:

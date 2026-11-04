@@ -464,3 +464,34 @@ class ChannelNameRefused(Exception):
             f"directory -- name each channel with one distinct path component"
         )
         self.name = name
+
+
+class JailHasNoEgress(Exception):
+    """Raised by `allow_egress`, `revoke_egress`, `egress_decisions` and `egress_record` for a jail
+    with no egress proxy: one created without an `EgressPolicy`, which has loopback and nothing
+    else, or built with a caller's own `supervisors`, which starts none (decision-0009 item 5)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "this jail has no egress proxy to grant to or read from: it was created without an "
+            "EgressPolicy -- create it with create_bwrap_jail(..., egress=EgressPolicy(...)), an "
+            "empty one if it should start with nothing granted"
+        )
+
+
+class JailEgressEnded(Exception):
+    """Raised by `allow_egress` and `revoke_egress` when the jail's egress proxy has ended: its
+    command finished (`run_jail` saw it), `destroy_jail` ran, or the proxy died. Nothing was
+    sent or recorded.
+
+    Args:
+        destination: The destination the call named.
+    """
+
+    def __init__(self, destination: Destination) -> None:
+        super().__init__(
+            f"the jail's egress proxy has ended, so {destination.host}:{destination.port} "
+            "cannot be granted or revoked -- a grant reaches a jail only while its command runs; "
+            "put the destination in the EgressPolicy of the next jail instead"
+        )
+        self.destination = destination

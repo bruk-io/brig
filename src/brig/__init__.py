@@ -1,7 +1,7 @@
 """brig: a standalone sandbox library. The whole public surface: presentation's API and errors,
 and the domain's plain data an embedder writes or reads (the policies, egress destinations,
-channels, claims and grades). An e2e battery may import this and `brig.infra` only
-(decision-0001 rule 4)."""
+the egress record and decisions, channels, claims and grades). An e2e battery may import this
+and `brig.infra` only (decision-0001 rule 4)."""
 
 from brig.domain.channels import Channel, ChannelDirectory, Reservation, Reservations
 from brig.domain.claims import Claim
@@ -13,19 +13,36 @@ from brig.domain.jail_types.bwrap import (
     FS_READ_CLAIM,
     FS_WRITE_CLAIM,
     NETWORK_CLAIM,
+    NETWORK_EGRESS_CLAIM,
     declared_channel_paths,
     writable_shared_paths,
 )
-from brig.domain.policy.egress import Destination, EgressPolicy
+from brig.domain.policy.egress import (
+    Destination,
+    EgressChangeKind,
+    EgressPolicy,
+    EgressReason,
+    EgressVerdict,
+)
+from brig.domain.policy.egress_record import (
+    EgressChange,
+    EgressDecision,
+    EgressRecord,
+    granted_now,
+)
 from brig.domain.policy.env import DENY_ALL, EnvPolicy
 from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, FsPolicy
 from brig.domain.policy.stdio import Stdio
 from brig.presentation.api import (
+    allow_egress,
     await_channel_ready,
     check_egress_policy,
     destroy_jail,
+    egress_decisions,
+    egress_record,
     interrupt_jail,
     reserve_channels,
+    revoke_egress,
     run_jail,
 )
 from brig.presentation.drivers.bwrap import create_bwrap_jail
@@ -34,7 +51,9 @@ from brig.presentation.errors import (
     ChannelNameRefused,
     ChannelNamespaceNotFound,
     EgressProxySourceUnreadable,
+    JailEgressEnded,
     JailExitUnknown,
+    JailHasNoEgress,
     JailSpawnFailed,
     JailTeardownFailed,
     JailWaitTimedOut,
@@ -70,6 +89,7 @@ from brig.presentation.ports import (
     ChannelReadinessRefusal,
     ChannelReady,
     ChannelRefused,
+    EgressPort,
 )
 from brig.presentation.report import render
 
@@ -79,6 +99,7 @@ __all__ = [
     "FS_READ_CLAIM",
     "FS_WRITE_CLAIM",
     "NETWORK_CLAIM",
+    "NETWORK_EGRESS_CLAIM",
     "Channel",
     "ChannelDirectory",
     "ChannelDirectoryPort",
@@ -94,15 +115,24 @@ __all__ = [
     "Claim",
     "DENY_ALL",
     "Destination",
+    "EgressChange",
+    "EgressChangeKind",
+    "EgressDecision",
     "EgressPolicy",
+    "EgressPort",
     "EgressProxySourceUnreadable",
+    "EgressReason",
+    "EgressRecord",
+    "EgressVerdict",
     "EnvPolicy",
     "Evidence",
     "ExitCodeUnknown",
     "FsPolicy",
     "Grade",
     "Jail",
+    "JailEgressEnded",
     "JailExitUnknown",
+    "JailHasNoEgress",
     "JailSpawnFailed",
     "JailTeardownFailed",
     "JailWaitTimedOut",
@@ -133,16 +163,21 @@ __all__ = [
     "Stdio",
     "SupervisorSourceUnreadable",
     "WHOLE_HOST_READ_ONLY",
+    "allow_egress",
     "at_most",
     "await_channel_ready",
     "check_egress_policy",
     "create_bwrap_jail",
     "declared_channel_paths",
     "destroy_jail",
+    "egress_decisions",
+    "egress_record",
     "grade",
+    "granted_now",
     "interrupt_jail",
     "render",
     "reserve_channels",
+    "revoke_egress",
     "run_jail",
     "writable_shared_paths",
 ]

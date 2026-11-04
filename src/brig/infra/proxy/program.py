@@ -8,13 +8,24 @@ addresses the decision allowed, and relays. A refusal answers `403` with the des
 or SOCKS reply `0x02`.
 
 Standard library only, and it imports nothing of brig (the `brig-standalone-programs` gate). The
-decision is `domain/policy/egress.py`, assembled in beside this file as its own module
-(`infra/proxy/assemble.py`) and handed to `_main` as a value: this module reads it through one
-seam, `_judge`, which turns what it answers into this module's own `_Verdict`.
+decision is `domain/policy/egress.py`, and the log envelope `infra/log.py`, each assembled in
+beside this file as its own module (`infra/proxy/assemble.py`) and handed to `_main` as a value:
+this module reads the decision through one seam, `_judge`, which turns what it answers into this
+module's own `_Verdict`, and the envelope through another, `_Decisions.record`.
 
-Its fds: 3, the config pipe (one JSON line: the grants and an optional resolver table), whose
-end of file says the host let go of the jail; 4, the control socket from the supervisor, whose
-end of file says the jail is gone. Either ends this program.
+Its fds:
+- 3, the config pipe: one JSON line (the grants and an optional resolver table), then one line
+  per change to the grants (decision-0009 item 5); its end of file says the host let go of the
+  jail.
+- 4, the control socket from the supervisor, whose end of file says the jail is gone. Either
+  end of file ends this program.
+- 5, the decisions pipe: one envelope line per decision, read by the host's link
+  (decision-0009 item 6). Nothing else is written there, and fds 1 and 2 are `/dev/null`.
+
+A change applies to the next connection: each turn of `_main` reads the config pipe before the
+control socket, and a connection is decided against the grants in force when its fd arrived, so
+one the supervisor hands over after a change was written is decided against the new grants. A
+connection already relaying is never judged again: revoking a grant leaves it open.
 """
 
 import ipaddress
@@ -25,8 +36,9 @@ import socket
 import sys
 import threading
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import ModuleType
-from typing import assert_never
+from typing import TypedDict, assert_never
 
 DECISION_MODULE = "brig_egress_decision"
 """The module name the assembled file gives `egress.py`'s source, registered in `sys.modules`
@@ -38,6 +50,18 @@ CONFIG_FD = 3
 CONTROL_FD = 4
 """This program's end of the supervisor's `SOCK_SEQPACKET` socketpair (`wire.BRIDGE_FD` on the
 supervisor's side)."""
+
+DECISIONS_FD = 5
+"""The decisions pipe: one envelope line per decision, to the host."""
+
+LOG_MODULE = "brig_log"
+"""The module name the assembled file gives `infra/log.py`'s source, the envelope's encoder."""
+
+SOURCE = "egress-proxy"
+"""This program's name in the envelope's `source`."""
+
+DECISION_EVENT = "egress-decision"
+"""The envelope's `event` for one decision."""
 
 _HEAD_LIMIT = 65536
 """The longest HTTP request head read before the request is refused as unreadable."""
@@ -94,6 +118,57 @@ type _Verdict = _Go | _Denied | _Unresolved | _Unreadable
 """What `_judge` answers, in this module's own values."""
 
 
+class _DecisionFields(TypedDict, closed=True):
+    """The event's own fields of one decision line, after the envelope's head."""
+
+    seq: int
+    verdict: str
+    host: str
+    port: int
+    reason: str
+
+
+class _Change(TypedDict, closed=True):
+    """One change to the grants, a line on `CONFIG_FD` after the first."""
+
+    kind: str
+    host: str
+    port: int
+
+
+class _Decisions:
+    """The decisions pipe's one writer: numbers each decision and writes it as one envelope line.
+
+    Invariant (rule 7): `_seq` is the number of the last decision written, and only one thread at
+    a time writes, under `_lock`, so lines are whole and numbered in the order written.
+    """
+
+    def __init__(self, log: ModuleType, fd: int) -> None:
+        self._log = log
+        self._fd = fd
+        self._lock = threading.Lock()
+        self._seq = 0
+
+    def record(self, verdict: str, reason: str, host: str, port: int) -> None:
+        """Write one decision line. An `OSError` from the pipe is swallowed: the host stopped
+        reading, and the decision stands without its line."""
+        level = self._log.Level.INFO if verdict == "allowed" else self._log.Level.WARNING
+        with self._lock:
+            self._seq += 1
+            fields: _DecisionFields = {
+                "seq": self._seq,
+                "verdict": verdict,
+                "host": host,
+                "port": port,
+                "reason": reason,
+            }
+            line = str(self._log.encode(datetime.now(UTC), level, SOURCE, DECISION_EVENT, fields))
+            try:
+                self._log.write(self._fd, line)
+            except OSError:
+                pass
+
+
 def local_addresses(if_inet6: str, fib_trie: str) -> tuple[str, ...]:
     """The host's own addresses, from the text of `/proc/net/if_inet6` (every IPv6 address on an
     interface) and `/proc/net/fib_trie` (each IPv4 address the local table marks `/32 host
@@ -147,16 +222,32 @@ def _resolve(
     return tuple(dict.fromkeys(str(entry[4][0]) for entry in found))
 
 
-def _judge(decision: ModuleType, policy: object, config: _Config, host: str, port: int) -> _Verdict:
-    """Whether `host:port` may be reached, by `decision.decide_egress` over `policy`: once with
-    no addresses, and, when it answers `Resolve`, again with what the name resolved to and the
-    host's own addresses. A name no grant matches is never looked up. The one place this module
-    reads the decision's values."""
+@dataclass(frozen=True)
+class _Context:
+    """What serving one connection takes beside it: the decision module, the grants in force
+    when the connection arrived, the config, and the decisions pipe's writer."""
+
+    decision: ModuleType
+    policy: object
+    config: _Config
+    decisions: _Decisions
+
+
+def _judge(context: _Context, host: str, port: int) -> _Verdict:
+    """Whether `host:port` may be reached, by `decision.decide_egress` over the context's grants:
+    once with no addresses, and, when it answers `Resolve`, again with what the name resolved to
+    and the host's own addresses. A name no grant matches is never looked up. The settled
+    outcome is written as one decision line. The one place this module reads the decision's
+    values."""
+    decision, policy = context.decision, context.policy
     request = decision.Authority(host, port)
     outcome = decision.decide_egress(policy, request)
     if isinstance(outcome, decision.Resolve):
-        resolved = _resolve(str(outcome.name), port, config.hosts)
+        resolved = _resolve(str(outcome.name), port, context.config.hosts)
         outcome = decision.decide_egress(policy, request, resolved, _host_addresses())
+    reason = decision.egress_reason(outcome)
+    verdict = decision.egress_verdict(reason)
+    context.decisions.record(str(verdict.value), str(reason.value), host, port)
     if isinstance(outcome, decision.Allowed):
         return _Go(tuple(str(address) for address in outcome.addresses))
     if isinstance(outcome, decision.Unresolved):
@@ -234,7 +325,7 @@ def _origin_head(method: str, origin: str, version: str, headers: list[bytes]) -
 
 
 def _http(
-    decision: ModuleType, policy: object, config: _Config, client: socket.socket, first: bytes
+    context: _Context, client: socket.socket, first: bytes
 ) -> tuple[socket.socket, bytes] | None:
     """Read an HTTP request on `client`, decide it, and answer: the connection to relay and the
     bytes to send it first, or `None` once a refusal or failure is answered."""
@@ -256,12 +347,13 @@ def _http(
         return None
     method, _, version = parts
     authority_text, default_port, origin = target
+    decision = context.decision
     parsed = decision.parse_authority(authority_text, default_port)
     if isinstance(parsed, decision.AuthorityUnparseable):
         _http_reply(client, "400 Bad Request", "brig: egress proxy could not read the request")
         return None
     host, port = str(parsed.host), int(parsed.port)
-    verdict = _judge(decision, policy, config, host, port)
+    verdict = _judge(context, host, port)
     match verdict:
         case _Denied():
             _http_reply(
@@ -311,9 +403,7 @@ def _socks_host(client: socket.socket, kind: int) -> str | None:
             return None
 
 
-def _socks(
-    decision: ModuleType, policy: object, config: _Config, client: socket.socket
-) -> tuple[socket.socket, bytes] | None:
+def _socks(context: _Context, client: socket.socket) -> tuple[socket.socket, bytes] | None:
     """Speak SOCKS5 on `client` (its version byte already read): no authentication, `CONNECT`
     only, to an IPv4 or IPv6 literal or a name the proxy resolves (`socks5h`). The connection to
     relay, or `None` once a refusal or failure is answered (reply `0x02` for a refusal by the
@@ -334,7 +424,7 @@ def _socks(
         _socks_reply(client, 0x08)
         return None
     port = int.from_bytes(_exactly(client, 2), "big")
-    match _judge(decision, policy, config, host, port):
+    match _judge(context, host, port):
         case _Denied():
             _socks_reply(client, 0x02)
             return None
@@ -384,7 +474,7 @@ def _relay(client: socket.socket, upstream: socket.socket) -> None:
     upstream.close()
 
 
-def _serve(decision: ModuleType, policy: object, config: _Config, client: socket.socket) -> None:
+def _serve(context: _Context, client: socket.socket) -> None:
     """One connection from the jail: SOCKS5 when its first byte is `0x05`, HTTP otherwise;
     decided, answered, and relayed when allowed. Closes `client` whatever happened."""
     try:
@@ -393,9 +483,9 @@ def _serve(decision: ModuleType, policy: object, config: _Config, client: socket
         if not first:
             return
         if first == b"\x05":
-            route = _socks(decision, policy, config, client)
+            route = _socks(context, client)
         else:
-            route = _http(decision, policy, config, client, first)
+            route = _http(context, client, first)
         if route is None:
             return
         upstream, pending = route
@@ -441,19 +531,40 @@ def _read_config() -> _Config:
     return _Config(allow=allow, hosts=hosts)
 
 
-def _main(decision: ModuleType) -> None:
+def _changed(decision: ModuleType, policy: object, line: bytes) -> object:
+    """`policy` with the change `line` names made, by the decision's own `egress_after`.
+
+    A line that is not a change's JSON shape raises out of `json` or the conversion, ending the
+    program: the host writes these, so a bad one is brig's bug, and ending fails closed.
+    """
+    raw: _Change = json.loads(line)
+    kind = decision.EgressChangeKind(str(raw["kind"]))
+    destination = decision.Destination(str(raw["host"]), int(raw["port"]))
+    return decision.egress_after(policy, kind, destination)
+
+
+def _main(decision: ModuleType, log: ModuleType) -> None:
     """Read the config, then serve every connection the supervisor sends, each on a daemon
     thread, until `CONFIG_FD` or `CONTROL_FD` reaches end of file: the host let go, or the jail
-    is gone. Returning ends the program, and every connection with it."""
+    is gone. Each turn applies every whole change line on `CONFIG_FD` before it takes the next
+    connection, which is decided against the grants in force then. Returning ends the program,
+    and every connection with it."""
     config = _read_config()
-    policy = decision.EgressPolicy(
+    policy: object = decision.EgressPolicy(
         tuple(decision.Destination(host, port) for host, port in config.allow)
     )
+    decisions = _Decisions(log, DECISIONS_FD)
     control = socket.socket(fileno=CONTROL_FD)
+    pending = b""
     while True:
         ready, _, _ = select.select([CONFIG_FD, CONTROL_FD], [], [])
-        if CONFIG_FD in ready and not os.read(CONFIG_FD, 4096):
-            return
+        if CONFIG_FD in ready:
+            chunk = os.read(CONFIG_FD, 4096)
+            if not chunk:
+                return
+            *lines, pending = (pending + chunk).split(b"\n")
+            for line in lines:
+                policy = _changed(decision, policy, line)
         if CONTROL_FD in ready:
             try:
                 message, fds, _, _ = socket.recv_fds(control, 16, 4)
@@ -463,10 +574,9 @@ def _main(decision: ModuleType) -> None:
                 return
             for fd in fds:
                 client = socket.socket(fileno=fd)
-                threading.Thread(
-                    target=_serve, args=(decision, policy, config, client), daemon=True
-                ).start()
+                context = _Context(decision, policy, config, decisions)
+                threading.Thread(target=_serve, args=(context, client), daemon=True).start()
 
 
 if __name__ == "__main__":
-    _main(sys.modules[DECISION_MODULE])
+    _main(sys.modules[DECISION_MODULE], sys.modules[LOG_MODULE])

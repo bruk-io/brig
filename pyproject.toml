@@ -98,13 +98,15 @@ rules = [
 # decision-0001 rule 17 and decision-0009 item 2: every module brig ships as source into a
 # program of its own, where brig cannot be imported. The supervisor's two are assembled into the
 # file bwrap runs as PID 1; the egress proxy's program is assembled with egress.py, its decision,
-# inlined, so that pure module must stay standard library only too.
+# inlined, so that pure module must stay standard library only too, and so is infra/log.py, the
+# envelope's one encoder, so the proxy writes exactly the envelope the library reads.
 [tool.pypeeker.brig-standalone-programs]
 modules = [
     "brig.infra.supervisor.wire",
     "brig.infra.supervisor.program",
     "brig.infra.proxy.program",
     "brig.domain.policy.egress",
+    "brig.infra.log",
 ]
 
 [tool.pypeeker.brig-layers]
@@ -176,5 +178,8 @@ allow = ["unit.*", "integration.*", "e2e.*"]
 # besides infra/log.py: infra/supervisor/program.py emits its started/exited/done
 # events straight to stdout, by design (TASK-0001.15 step 2) -- this is that wire,
 # not a module that slipped past rule 14's intent.
+#
+# infra/log.py is the other module rule 14 names: `write` is the one raw write of an envelope
+# line (TASK-0001.37), which the egress proxy calls for each decision.
 [tool.pypeeker.brig-one-writer]
-allow = ["brig.infra.supervisor.program"]
+allow = ["brig.infra.supervisor.program", "brig.infra.log"]

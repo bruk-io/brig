@@ -1,9 +1,11 @@
-"""What an embedder calls for any jail type: check an egress policy, reserve channels, wait for one
-to be ready, wait for the command's exit, interrupt it, tear the jail down. Creating a jail is
-each jail type's own (`presentation/drivers/<type>.py`)."""
+"""What an embedder calls for any jail type: check an egress policy, change a running jail's grants
+and read what its proxy decided, reserve channels, wait for one to be ready, wait for the
+command's exit, interrupt it, tear the jail down. Creating a jail is each jail type's own
+(`presentation/drivers/<type>.py`)."""
 
 import signal
 import time
+from collections.abc import Iterator
 from typing import assert_never
 
 from brig.domain import channels as _channels
@@ -18,6 +20,8 @@ from brig.domain.channels import (
 from brig.domain.effects import ExitCodeUnknown, GroupState
 from brig.domain.policy.egress import (
     CidrNotation,
+    Destination,
+    EgressChangeKind,
     EgressPolicy,
     EmptyHost,
     InvalidHostname,
@@ -26,11 +30,13 @@ from brig.domain.policy.egress import (
     PortOutOfRange,
     egress_refusal,
 )
+from brig.domain.policy.egress_record import EgressDecision, EgressRecord
 from brig.infra import sockets as _sockets
 from brig.presentation.driver import run
 from brig.presentation.errors import (
     ChannelNameRefused,
     JailExitUnknown,
+    JailHasNoEgress,
     JailTeardownFailed,
     JailWaitTimedOut,
     PolicyEgressCidr,
@@ -102,6 +108,77 @@ def check_egress_policy(policy: EgressPolicy) -> None:
             pass
         case _ as unreachable:
             assert_never(unreachable)
+
+
+def allow_egress(jail: Jail, destination: Destination) -> None:
+    """Grant `destination` to `jail` while it runs (decision-0009 item 5): its egress proxy adds
+    it to its grants, unless it is there already, and the jail is not restarted, since nothing
+    inside it changes. The next connection the proxy takes is decided against the new grants;
+    one already open is left as it is. The change is in `egress_record(jail)` from now on.
+
+    Beside what is listed below, `check_egress_policy`'s refusal of a malformed `destination`
+    propagates (`PolicyEgressHostEmpty`, `PolicyEgressNeedlessBrackets`, `PolicyEgressCidr`,
+    `PolicyEgressWildcardMisplaced`, `PolicyEgressHostInvalid`, `PolicyEgressPortOutOfRange`),
+    before anything is sent, and so does `JailEgressEnded` once the proxy has ended (the command
+    finished, or `destroy_jail` ran), with nothing sent or recorded.
+
+    Raises:
+        JailHasNoEgress: `jail` was created without an `EgressPolicy`; nothing was looked at.
+    """
+    if jail.egress is None:
+        raise JailHasNoEgress()
+    check_egress_policy(EgressPolicy((destination,)))
+    jail.egress.change(EgressChangeKind.ALLOW, destination)
+
+
+def revoke_egress(jail: Jail, destination: Destination) -> None:
+    """Take `destination` back from `jail` while it runs (decision-0009 item 5): its egress proxy
+    removes every grant equal to it (none is no error), and refuses the next connection that
+    asks for it. A connection already open through it is left open: the proxy judges each
+    connection once, when it names its destination, and relays a granted one as opaque bytes.
+    A grant `*.suffix` is revoked only by naming it as written. The change is in
+    `egress_record(jail)` from now on.
+
+    Beside what is listed below, `check_egress_policy`'s refusal of a malformed `destination`
+    propagates, before anything is sent, and so does `JailEgressEnded` once the proxy has ended,
+    as for `allow_egress`.
+
+    Raises:
+        JailHasNoEgress: `jail` was created without an `EgressPolicy`; nothing was looked at.
+    """
+    if jail.egress is None:
+        raise JailHasNoEgress()
+    check_egress_policy(EgressPolicy((destination,)))
+    jail.egress.change(EgressChangeKind.REVOKE, destination)
+
+
+def egress_decisions(jail: Jail) -> Iterator[EgressDecision]:
+    """The decisions `jail`'s egress proxy made since the last call, oldest first (decision-0009
+    item 6): allowed or refused, the destination, the reason, the time, and the envelope line
+    the proxy wrote. Never blocks: it returns what has arrived, and each decision is returned by
+    one call only. Between calls at most 1024 are kept, the oldest dropped first, so a chatty
+    jail holds at most 4 MiB of the embedder's memory; `EgressDecision.seq` counts from 1 and
+    shows a gap where any were dropped. What the proxy decided before it ended stays to be
+    taken.
+
+    Raises:
+        JailHasNoEgress: `jail` was created without an `EgressPolicy`.
+    """
+    if jail.egress is None:
+        raise JailHasNoEgress()
+    return iter(jail.egress.decisions())
+
+
+def egress_record(jail: Jail) -> EgressRecord:
+    """`jail`'s egress grants: the policy it was created with, and every change sent since, in
+    order (decision-0009 item 5). `render(jail.report, egress_record(jail))` states both.
+
+    Raises:
+        JailHasNoEgress: `jail` was created without an `EgressPolicy`.
+    """
+    if jail.egress is None:
+        raise JailHasNoEgress()
+    return jail.egress.record()
 
 
 def reserve_channels(
