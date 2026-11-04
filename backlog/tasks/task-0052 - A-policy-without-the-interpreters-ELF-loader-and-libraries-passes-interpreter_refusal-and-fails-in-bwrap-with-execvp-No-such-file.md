@@ -3,7 +3,7 @@ id: TASK-0052
 title: >-
   A policy without the interpreter's ELF loader and libraries passes
   interpreter_refusal and fails in bwrap with execvp No such file
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-03T03:46:00Z'
 updated_date: '2026-11-04T14:23:00Z'
@@ -246,4 +246,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 done: 1 step(s) failed: e2e tests
 error: recipe `done` failed on line 71 with exit code 1
 ```
+
+Reviewer, 2026-11-04: closed. Every criterion met. #1: link_chain walks component by component; a .. after a link is taken from the link's target (repro 99f0ddc failed, now passes; tests/e2e/test_files_link_chain_kernel.py checks against realpath/stat). #2: a chain path that is a root ends the walk after the inside and mask checks (repro 69e2edf; the e2e battery starts the supervisor). #3: DRAFT-0029 exists. Lexical within() on a chain entry with .. is harmless because every later entry is checked too. Side effect: a venv-link root without pyvenv.cfg now passes and fails in the jail with JailExitUnknown. Acceptable until DRAFT-0029: the policy it used to refuse was refused for the wrong reason, and the failure is the same one the ELF case already has. But no place an embedder reads states it (not the SPEC, not interpreter_refusal's docstring, not DRAFT-0029), so it is filed as DRAFT-0031. Full tier: five runs of one tree (branch claude/small-bugs, all four tasks), three green; two failed only test_interrupt_battery.py::test_an_interrupt_sent_as_soon_as_the_jail_exists_is_not_lost, a path this branch does not touch (signal_jail_pid1/_pid1_under); passes alone 3/3 and 8/8 in parallel. Filed as DRAFT-0030. No files changed by the check. This task's own recorded run is one of the two red ones.
 <!-- SECTION:NOTES:END -->
