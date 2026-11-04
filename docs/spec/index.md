@@ -165,8 +165,9 @@ the proxy's grants both apply it, so the two cannot disagree. `egress_reason` na
 proxy's decision lines and the embedder's values read one set of words. `egress_record.py` holds
 what an embedder reads back: `EgressRecord(created, changes)`, each `EgressChange` a kind, a
 destination and the time it was sent, with `granted_now` the grants its changes leave; and
-`EgressDecision(seq, verdict, destination, reason, time, line)`, one per decision the proxy
-made. Times are aware UTC `datetime`s that enter as data.
+`EgressDecision(seq, verdict, destination, reason, address, time, line)`, one per decision the
+proxy made, `address` the private address a name resolved to when that refused it ('' otherwise),
+so an embedder can offer the IP-literal grant that would open it. Times are aware UTC `datetime`s that enter as data.
 
 `jail_types/bwrap.py` is bwrap's slice (its `ceilings` state `NETWORK_EGRESS_CLAIM` in place of
 `NETWORK_CLAIM` for a jail with an egress policy, decision-0009 item 8, under the same socket

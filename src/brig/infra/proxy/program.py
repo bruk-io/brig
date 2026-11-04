@@ -146,6 +146,7 @@ class _DecisionFields(TypedDict, closed=True):
     host: str
     port: int
     reason: str
+    address: str
 
 
 class _Change(TypedDict, closed=True):
@@ -169,8 +170,9 @@ class _Decisions:
         self._lock = threading.Lock()
         self._seq = 0
 
-    def record(self, verdict: str, reason: str, host: str, port: int) -> None:
-        """Write one decision line. An `OSError` from the pipe is swallowed: the host stopped
+    def record(self, verdict: str, reason: str, host: str, port: int, address: str) -> None:
+        """Write one decision line (`address`: what a private-address refusal resolved to, else
+        ''). An `OSError` from the pipe is swallowed: the host stopped
         reading, and the decision stands without its line."""
         level = self._log.Level.INFO if verdict == "allowed" else self._log.Level.WARNING
         with self._lock:
@@ -181,6 +183,7 @@ class _Decisions:
                 "host": host,
                 "port": port,
                 "reason": reason,
+                "address": address,
             }
             line = str(self._log.encode(datetime.now(UTC), level, SOURCE, DECISION_EVENT, fields))
             try:
@@ -271,7 +274,8 @@ def _judge(context: _Context, host: str, port: int) -> _Verdict:
         outcome = decision.decide_egress(policy, request, resolved, _host_addresses())
     reason = decision.egress_reason(outcome)
     verdict = decision.egress_verdict(reason)
-    context.decisions.record(str(verdict.value), str(reason.value), host, port)
+    address = str(outcome.address) if isinstance(outcome, decision.PrivateAddress) else ""
+    context.decisions.record(str(verdict.value), str(reason.value), host, port, address)
     if isinstance(outcome, decision.Allowed):
         return _Go(tuple(str(address) for address in outcome.addresses))
     if isinstance(outcome, decision.Unresolved):

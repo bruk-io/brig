@@ -129,6 +129,7 @@ def test_each_decision_is_handed_back_once() -> None:
         verdict=EgressVerdict.REFUSED,
         destination=_GOOD,
         reason=EgressReason.NOT_GRANTED,
+        address="",
         time=datetime(2026, 11, 4, tzinfo=UTC),
         line="{}",
     )

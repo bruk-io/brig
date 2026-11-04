@@ -50,7 +50,9 @@ class EgressDecision:
     `seq` is the proxy's own count, from 1, so a gap says decisions were dropped before the
     embedder took them (the link keeps a bounded number). `verdict` is what the proxy did,
     `destination` the host and port the request named, `reason` why, and `time` when the proxy
-    decided, an aware UTC time. `line` is the decision exactly as the proxy wrote it: one JSON
+    decided, an aware UTC time. `address` is the address the name resolved to when `reason` is
+    `PRIVATE_ADDRESS` (only an IP-literal grant of it, with the port, opens it), '' for every other
+    reason. `line` is the decision exactly as the proxy wrote it: one JSON
     line in brig's envelope (`infra/log.py`), for an embedder that keeps a log of its own to
     write as it is. The library writes it nowhere."""
 
@@ -58,5 +60,6 @@ class EgressDecision:
     verdict: EgressVerdict
     destination: Destination
     reason: EgressReason
+    address: str
     time: datetime
     line: str

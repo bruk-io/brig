@@ -131,8 +131,8 @@ def _decision(line: str) -> EgressDecision | None:
         return None
     if read.source != _proxy_program.SOURCE or read.event != _proxy_program.DECISION_EVENT:
         return None
-    seq, verdict, host, port, reason = (
-        read.fields.get(name) for name in ("seq", "verdict", "host", "port", "reason")
+    seq, verdict, host, port, reason, address = (
+        read.fields.get(name) for name in ("seq", "verdict", "host", "port", "reason", "address")
     )
     if not (
         isinstance(seq, int)
@@ -140,6 +140,7 @@ def _decision(line: str) -> EgressDecision | None:
         and isinstance(host, str)
         and isinstance(verdict, str)
         and isinstance(reason, str)
+        and isinstance(address, str)
     ):
         return None
     try:
@@ -148,6 +149,7 @@ def _decision(line: str) -> EgressDecision | None:
             verdict=EgressVerdict(verdict),
             destination=Destination(host, port),
             reason=EgressReason(reason),
+            address=address,
             time=read.time,
             line=line,
         )

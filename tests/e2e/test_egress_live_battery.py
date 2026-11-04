@@ -275,6 +275,7 @@ def test_each_decision_reaches_egress_decisions_with_its_destination_verdict_and
             "host",
             "port",
             "reason",
+            "address",
         ]
         assert raw["source"] == "egress-proxy"
         assert raw["event"] == "egress-decision"
@@ -286,6 +287,7 @@ def test_each_decision_reaches_egress_decisions_with_its_destination_verdict_and
         assert raw["verdict"] == decision.verdict.value
         assert (raw["host"], raw["port"]) == ("late.test", port)
         assert raw["reason"] == decision.reason.value
+        assert raw["address"] == decision.address == ""
     assert list(egress_decisions(jail)) == []
 
 
@@ -316,3 +318,44 @@ def test_a_grant_after_the_command_finished_is_refused_as_ended(
 
     assert " -- " in str(raised.value)
     assert len(egress_record(jail).changes) == 2
+
+
+_NEAR = r"""
+import socket, sys
+
+port = int(sys.argv[1])
+sock = socket.create_connection(("127.0.0.1", 3128), timeout=10)
+sock.sendall(f"CONNECT near.test:{port} HTTP/1.1\r\nHost: near.test:{port}\r\n\r\n".encode())
+head = b""
+while b"\r\n\r\n" not in head:
+    chunk = sock.recv(1)
+    if not chunk:
+        break
+    head += chunk
+print(head.decode().split("\r\n")[0], flush=True)
+"""
+"""One tunnel to `near.test`, granted by name only, which resolves to the host's loopback."""
+
+
+def test_a_name_refused_for_a_private_address_names_the_address_it_resolved_to(server: int) -> None:
+    """TASK-0054: a name granted by host that resolves to a private address, with no IP-literal
+    grant of it, is refused (decision-0009 item 4), and its decision says which address, so an
+    embedder can offer the one grant that would open it."""
+    with tempfile.TemporaryDirectory(dir="/tmp") as scratch:
+        out = Path(scratch) / "out"
+        jail = create_bwrap_jail(
+            (sys.executable, "-I", "-c", _NEAR, str(server)),
+            egress=EgressPolicy((Destination("near.test", server),)),
+            egress_hosts={"near.test": ("127.0.0.1",)},
+            stdio=Stdio(stdout=str(out)),
+        )
+        try:
+            assert run_jail(jail, timeout_s=_STEP_TIMEOUT_S) == 0
+            decisions = list(egress_decisions(jail))
+        finally:
+            destroy_jail(jail)
+        assert out.read_text().strip() == "HTTP/1.1 403 Forbidden"
+    assert [(d.verdict, d.reason, d.address) for d in decisions] == [
+        (EgressVerdict.REFUSED, EgressReason.PRIVATE_ADDRESS, "127.0.0.1")
+    ]
+    assert json.loads(decisions[0].line)["address"] == "127.0.0.1"
