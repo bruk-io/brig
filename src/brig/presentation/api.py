@@ -391,6 +391,8 @@ def destroy_jail(
 
 def interrupt_jail(jail: Jail) -> bool:
     """Send `SIGINT` to `jail`'s supervisor, which forwards it to the command (TASK-0020), and
-    say whether it was sent: `False` once the command has finished. The command decides what an
-    interrupt means; the jail keeps running until `destroy_jail`."""
+    say whether it was sent: `False` once the command has finished. Delivery is what brig
+    promises, not the command's end: the command decides what an interrupt means, and a Python
+    command can swallow one that arrives during its own startup (TASK-0053). The jail keeps running
+    until `destroy_jail`."""
     return _sockets.signal_jail_pid1(jail.process.pid, signal.SIGINT)

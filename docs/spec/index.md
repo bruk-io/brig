@@ -46,7 +46,9 @@ future contribution; a change that violates one is a SPEC change first, code sec
    `tests/e2e/test_supervisor_isolation_battery.py`.
 7. **Control must not require cooperation.** Interrupt and teardown work when the command is
    spinning, wedged or hostile: `interrupt_jail` signals through the supervisor and loses nothing
-   while the jail comes up; `destroy_jail` ends the jail's whole PID namespace and verifies it is
+   while the jail comes up: the command receives it. What the command does with it is its own: a
+   command that handles SIGINT can ignore it, and a Python command can swallow one that arrives
+   during its own startup ("Exception ignored ... KeyboardInterrupt", TASK-0053); `destroy_jail` ends the jail's whole PID namespace and verifies it is
    gone. A `create_bwrap_jail` that fails once its supervisor has started tears it down the same
    way, through the one cleanup `destroy_jail` runs, and the embedder never gets a running jail
    it has no `Jail` for (TASK-0044); so is a supervisor whose start failed after its spawn, which
