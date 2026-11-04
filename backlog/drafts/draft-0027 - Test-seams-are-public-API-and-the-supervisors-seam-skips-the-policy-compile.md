@@ -4,7 +4,7 @@ title: Test seams are public API, and the supervisors seam skips the policy comp
 status: Draft
 assignee: []
 created_date: '2026-11-03T17:47:00Z'
-updated_date: '2026-11-04T02:59:00Z'
+updated_date: '2026-11-04T03:33:00Z'
 labels:
   - brig
   - api
@@ -24,4 +24,6 @@ Architecture review 2026-11-03: create_bwrap_jail(supervisors=...) skips the com
 2026-11-03 (TASK-0045's review): Jail now holds two raw fd ints that destroy_jail closes, channel_namespace_fd and channel_directory_fd; both want the stateful handle that refuses use after close.
 
 2026-11-04 (TASK-0001.36's review): create_bwrap_jail's egress_hosts is a test seam (a resolver override) in the public API; it lets an embedder point a granted name at any address. Every address is still judged by decide_egress, so it is no bypass, but it belongs with this draft's brig.testing / host-facts move.
+
+2026-11-04 (TASK-0001.37's review): with a caller's own supervisors plus an EgressPolicy no proxy starts; the command then fails closed only because the proxy variables point at an unbridged 127.0.0.1:3128, a side effect rather than a guarantee. Moving the seams out of the public API ends it.
 <!-- SECTION:NOTES:END -->
