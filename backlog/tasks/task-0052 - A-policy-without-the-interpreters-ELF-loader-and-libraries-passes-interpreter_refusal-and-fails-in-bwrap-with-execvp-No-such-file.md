@@ -6,7 +6,12 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-11-03T03:46:00Z'
-labels: []
+updated_date: '2026-11-04T12:40:00Z'
+labels:
+  - brig
+  - fs-policy
+  - size-2
+  - finish-moved
 dependencies: []
 type: bug
 ---
@@ -22,4 +27,13 @@ Found reviewing TASK-0029 at 55336cd. FsPolicy(readable=(.venv, ~/.local/share/u
 - [ ] #1 A policy that lacks the interpreter's ELF interpreter or a shared library it needs is refused before bwrap with a typed error naming the path
 - [ ] #2 A policy that bwrap can start the supervisor under is not refused
 - [ ] #3 link_chain resolves '..' after a link as the kernel does
+- [ ] #4 infra.files.link_chain resolves a/link/../b as the kernel does (the link first, then ..), not by normalising .. as text; a tmp-tree test pins it; repro test recorded failing
+- [ ] #5 A policy whose readable root is the venv's python3 link itself is not refused by interpreter_refusal
+- [ ] #6 The ELF loader and DT_NEEDED half is split out as a design draft of its own
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Lead, 2026-11-04: promoted from a draft review; criteria written right after promotion (finish-moved for that reason only).
+<!-- SECTION:NOTES:END -->
