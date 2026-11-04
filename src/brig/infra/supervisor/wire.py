@@ -24,6 +24,11 @@ BRIDGE_FD = 5
 end of a `SOCK_SEQPACKET` socketpair, over which it sends one end of a socketpair per connection
 it accepts on the jail's loopback, with `SCM_RIGHTS`."""
 
+BRIDGE_CONNECTION_LIMIT = 256
+"""How many connections the bridge relays at once, per jail, unless the exec request lowers it
+(`bridge_limit`): one more is accepted and closed at once, never handed to the proxy
+(TASK-0049)."""
+
 
 class _MessageKind(StrEnum):
     """Every shape this module defines, named once, matching its own `kind` field."""
@@ -38,13 +43,16 @@ class _ExecRequest(TypedDict, closed=True):
     """The one incoming message: the real command to run as the supervisor's
     own child, and the environment to run it in. `bridge_port`, when not `None`, is the port
     the supervisor listens on in the jail's loopback and bridges to the egress proxy over
-    `BRIDGE_FD`, bound before the command starts (decision-0009 item 1).
+    `BRIDGE_FD`, bound before the command starts (decision-0009 item 1); `bridge_limit` is how
+    many connections it relays at once (`BRIDGE_CONNECTION_LIMIT`, or lower), unused without a
+    port.
     """
 
     kind: _MessageKind
     argv: list[str]
     env: dict[str, str]
     bridge_port: int | None
+    bridge_limit: int
 
 
 class _StartedEvent(TypedDict, closed=True):
@@ -90,15 +98,20 @@ class WireError(Exception):
 
 
 def encode_exec_request(
-    argv: tuple[str, ...], env: Mapping[str, str], bridge_port: int | None = None
+    argv: tuple[str, ...],
+    env: Mapping[str, str],
+    bridge_port: int | None = None,
+    bridge_limit: int = BRIDGE_CONNECTION_LIMIT,
 ) -> str:
     """Encode an `exec` request as one newline-delimited JSON line; `bridge_port` is the egress
-    bridge's port, or `None` for a jail with none."""
+    bridge's port, or `None` for a jail with none, and `bridge_limit` how many connections the
+    bridge relays at once."""
     message: _ExecRequest = {
         "kind": _MessageKind.EXEC,
         "argv": list(argv),
         "env": dict(env),
         "bridge_port": bridge_port,
+        "bridge_limit": bridge_limit,
     }
     return json.dumps(message) + "\n"
 
@@ -119,6 +132,7 @@ def _decode_exec_request(line: str) -> _ExecRequest:
             "argv": [str(arg) for arg in raw["argv"]],
             "env": {str(name): str(value) for name, value in raw["env"].items()},
             "bridge_port": None if port is None else int(port),
+            "bridge_limit": int(raw["bridge_limit"]),
         }
     except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError) as exc:
         raise WireError(line) from exc

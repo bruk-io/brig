@@ -26,6 +26,15 @@ A change applies to the next connection: each turn of `_main` reads the config p
 control socket, and a connection is decided against the grants in force when its fd arrived, so
 one the supervisor hands over after a change was written is decided against the new grants. A
 connection already relaying is never judged again: revoking a grant leaves it open.
+
+What a jail can hold of the host here is bounded (TASK-0049), by two limits the config line may
+lower and never raise:
+- `CONNECTION_LIMIT` connections served at once, each on its own thread (two once relaying). One
+  more is answered `403` (HTTP) or SOCKS reply `0x01` without a thread, by `_main`'s own loop,
+  and closed; at most as many again wait there for their first byte, and past that one is closed
+  unanswered.
+- `HANDSHAKE_DEADLINE_S` from a connection's arrival to its destination named, in all, however
+  the bytes are paced: past it the connection is closed. A relayed connection has no deadline.
 """
 
 import ipaddress
@@ -35,6 +44,7 @@ import select
 import socket
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import ModuleType
@@ -66,9 +76,14 @@ DECISION_EVENT = "egress-decision"
 _HEAD_LIMIT = 65536
 """The longest HTTP request head read before the request is refused as unreadable."""
 
+CONNECTION_LIMIT = 256
+"""How many connections this proxy, one jail's, serves at once, unless the config line lowers it
+(`connections`): one more is refused (`403`, or SOCKS reply `0x01`) and closed."""
+
 HANDSHAKE_DEADLINE_S = 30.0
-"""How long a connection may take to name its destination, unless the config line lowers it
-(`handshake_s`)."""
+"""How long a connection may take, in all from its arrival, to name its destination, unless the
+config line lowers it (`handshake_s`): a total, not a per-read limit, so a client that sends one
+byte at a time is closed at it all the same."""
 
 _CONNECT_TIMEOUT_S = 10.0
 """How long one connect to an allowed address may take."""
@@ -87,11 +102,13 @@ request to one decided destination."""
 @dataclass(frozen=True)
 class _Config:
     """What the host sends on `CONFIG_FD`: the grants as `(host, port)` pairs, the resolver
-    table to look names up in instead of the host's resolver (`None`: the host's), and how long
-    a connection may take to name its destination (`HANDSHAKE_DEADLINE_S`, or lower)."""
+    table to look names up in instead of the host's resolver (`None`: the host's), how many
+    connections may be served at once (`CONNECTION_LIMIT`, or lower), and how long a connection
+    may take in all to name its destination (`HANDSHAKE_DEADLINE_S`, or lower)."""
 
     allow: tuple[tuple[str, int], ...]
     hosts: frozendict[str, tuple[str, ...]] | None
+    connections: int
     handshake_s: float
 
 
@@ -228,12 +245,16 @@ def _resolve(
 @dataclass(frozen=True)
 class _Context:
     """What serving one connection takes beside it: the decision module, the grants in force
-    when the connection arrived, the config, and the decisions pipe's writer."""
+    when the connection arrived, the config, the decisions pipe's writer, the slots of
+    `_Config.connections` the connection holds one of, and the `time.monotonic` deadline by
+    which it must name its destination."""
 
     decision: ModuleType
     policy: object
     config: _Config
     decisions: _Decisions
+    slots: threading.BoundedSemaphore
+    deadline: float
 
 
 def _judge(context: _Context, host: str, port: int) -> _Verdict:
@@ -272,15 +293,30 @@ def _connect(addresses: tuple[str, ...], port: int) -> socket.socket | None:
     return None
 
 
-def _exactly(client: socket.socket, count: int) -> bytes:
-    """`count` bytes from `client`.
+def _recv(client: socket.socket, size: int, deadline: float) -> bytes:
+    """At most `size` bytes from `client`, waiting no later than `deadline` (`time.monotonic`):
+    the handshake's one read, so its limit is a total however the bytes are paced.
+
+    Raises:
+        TimeoutError: `deadline` passed first.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("the connection named no destination before its deadline")
+    client.settimeout(remaining)
+    return client.recv(size)
+
+
+def _exactly(client: socket.socket, count: int, deadline: float) -> bytes:
+    """`count` bytes from `client`, by `deadline`: `_recv`'s `TimeoutError` propagates once it
+    has passed.
 
     Raises:
         ConnectionError: `client` ended first.
     """
     data = b""
     while len(data) < count:
-        chunk = client.recv(count - len(data))
+        chunk = _recv(client, count - len(data), deadline)
         if not chunk:
             raise ConnectionError("the connection ended before its request did")
         data += chunk
@@ -337,7 +373,7 @@ def _http(
         if len(head) > _HEAD_LIMIT:
             _http_reply(client, "400 Bad Request", "brig: egress proxy could not read the request")
             return None
-        chunk = client.recv(4096)
+        chunk = _recv(client, 4096, context.deadline)
         if not chunk:
             return None
         head += chunk
@@ -393,15 +429,15 @@ def _socks_reply(client: socket.socket, code: int) -> None:
     client.sendall(bytes((5, code, 0, 1, 0, 0, 0, 0, 0, 0)))
 
 
-def _socks_host(client: socket.socket, kind: int) -> str | None:
+def _socks_host(client: socket.socket, kind: int, deadline: float) -> str | None:
     match kind:
         case 1:
-            return str(ipaddress.IPv4Address(_exactly(client, 4)))
+            return str(ipaddress.IPv4Address(_exactly(client, 4, deadline)))
         case 4:
-            return str(ipaddress.IPv6Address(_exactly(client, 16)))
+            return str(ipaddress.IPv6Address(_exactly(client, 16, deadline)))
         case 3:
-            length = _exactly(client, 1)[0]
-            return _exactly(client, length).decode("latin-1")
+            length = _exactly(client, 1, deadline)[0]
+            return _exactly(client, length, deadline).decode("latin-1")
         case _:
             return None
 
@@ -411,22 +447,23 @@ def _socks(context: _Context, client: socket.socket) -> tuple[socket.socket, byt
     only, to an IPv4 or IPv6 literal or a name the proxy resolves (`socks5h`). The connection to
     relay, or `None` once a refusal or failure is answered (reply `0x02` for a refusal by the
     policy, `0x04` for a name that resolved to nothing, `0x05` for a connect that failed)."""
-    methods = _exactly(client, _exactly(client, 1)[0])
+    deadline = context.deadline
+    methods = _exactly(client, _exactly(client, 1, deadline)[0], deadline)
     if 0 not in methods:
         client.sendall(b"\x05\xff")
         return None
     client.sendall(b"\x05\x00")
-    version, command, _, kind = _exactly(client, 4)
+    version, command, _, kind = _exactly(client, 4, deadline)
     if version != 5:
         return None
     if command != 1:
         _socks_reply(client, 0x07)
         return None
-    host = _socks_host(client, kind)
+    host = _socks_host(client, kind, deadline)
     if host is None:
         _socks_reply(client, 0x08)
         return None
-    port = int.from_bytes(_exactly(client, 2), "big")
+    port = int.from_bytes(_exactly(client, 2, deadline), "big")
     match _judge(context, host, port):
         case _Denied():
             _socks_reply(client, 0x02)
@@ -479,10 +516,11 @@ def _relay(client: socket.socket, upstream: socket.socket) -> None:
 
 def _serve(context: _Context, client: socket.socket) -> None:
     """One connection from the jail: SOCKS5 when its first byte is `0x05`, HTTP otherwise;
-    decided, answered, and relayed when allowed. Closes `client` whatever happened."""
+    decided, answered, and relayed when allowed. Every read before the destination is named
+    waits only until `context.deadline`, so a handshake past it is closed however it is paced.
+    Closes `client` whatever happened, and gives back its slot."""
     try:
-        client.settimeout(context.config.handshake_s)
-        first = client.recv(1)
+        first = _recv(client, 1, context.deadline)
         if not first:
             return
         if first == b"\x05":
@@ -500,6 +538,71 @@ def _serve(context: _Context, client: socket.socket) -> None:
         pass
     finally:
         client.close()
+        context.slots.release()
+
+
+_CAPPED_BODY = "brig: egress refused: the jail holds as many connections as it may"
+"""The body of the `403` that answers an HTTP connection past `_Config.connections`."""
+
+
+def _refuse(client: socket.socket) -> None:
+    """Answer a connection past the cap from what its first byte says, without serving it:
+    `403` to HTTP, or to SOCKS5 its method choice and reply `0x01` at once, then close it. Never
+    blocks: `client` is non-blocking, and one whose reply does not fit is closed unanswered."""
+    try:
+        client.setblocking(False)
+        first = client.recv(1)
+        if first == b"\x05":
+            client.send(b"\x05\x00" + bytes((5, 0x01, 0, 1, 0, 0, 0, 0, 0, 0)))
+        elif first:
+            _http_reply(client, "403 Forbidden", _CAPPED_BODY)
+        client.recv(_HEAD_LIMIT)
+    except OSError:
+        pass
+    finally:
+        client.close()
+
+
+class _Capped:
+    """The connections past the cap, each waiting in `_main`'s own loop for its first byte so
+    its refusal can speak its protocol, with no thread of its own.
+
+    Invariant (rule 7): `_waiting` maps each held connection's fd to it and the `time.monotonic`
+    deadline past which it is closed unanswered, and holds at most `_limit`; one more is closed
+    at once. Only `_main`'s thread touches it.
+    """
+
+    def __init__(self, limit: int, wait_s: float) -> None:
+        self._limit = limit
+        self._wait_s = wait_s
+        self._waiting: dict[int, tuple[socket.socket, float]] = {}
+
+    def fds(self) -> list[int]:
+        """The held connections' fds, for `select`."""
+        return list(self._waiting)
+
+    def timeout(self, now: float) -> float | None:
+        """How long `select` may wait before the nearest deadline; `None` with none held."""
+        if not self._waiting:
+            return None
+        return max(0.0, min(deadline for _, deadline in self._waiting.values()) - now)
+
+    def hold(self, client: socket.socket, now: float) -> None:
+        """Hold `client` until its first byte or `_wait_s`; past `_limit`, close it now."""
+        if len(self._waiting) >= self._limit:
+            client.close()
+            return
+        self._waiting[client.fileno()] = (client, now + self._wait_s)
+
+    def settle(self, ready: list[int], now: float) -> None:
+        """Refuse each held connection in `ready`, and close each past its deadline."""
+        for fd, (client, deadline) in list(self._waiting.items()):
+            if fd in ready:
+                del self._waiting[fd]
+                _refuse(client)
+            elif deadline <= now:
+                del self._waiting[fd]
+                client.close()
 
 
 def _read_config() -> _Config:
@@ -531,7 +634,12 @@ def _read_config() -> _Config:
             }
         )
     )
-    return _Config(allow=allow, hosts=hosts, handshake_s=float(raw["handshake_s"]))
+    return _Config(
+        allow=allow,
+        hosts=hosts,
+        connections=int(raw["connections"]),
+        handshake_s=float(raw["handshake_s"]),
+    )
 
 
 def _changed(decision: ModuleType, policy: object, line: bytes) -> object:
@@ -548,19 +656,24 @@ def _changed(decision: ModuleType, policy: object, line: bytes) -> object:
 
 def _main(decision: ModuleType, log: ModuleType) -> None:
     """Read the config, then serve every connection the supervisor sends, each on a daemon
-    thread, until `CONFIG_FD` or `CONTROL_FD` reaches end of file: the host let go, or the jail
-    is gone. Each turn applies every whole change line on `CONFIG_FD` before it takes the next
-    connection, which is decided against the grants in force then. Returning ends the program,
-    and every connection with it."""
+    thread while fewer than `_Config.connections` are served, until `CONFIG_FD` or `CONTROL_FD`
+    reaches end of file: the host let go, or the jail is gone. One past the cap is held by
+    `_Capped` and refused when its first byte arrives. Each turn applies every whole change line
+    on `CONFIG_FD` before it takes the next connection, which is decided against the grants in
+    force then. Returning ends the program, and every connection with it."""
     config = _read_config()
     policy: object = decision.EgressPolicy(
         tuple(decision.Destination(host, port) for host, port in config.allow)
     )
     decisions = _Decisions(log, DECISIONS_FD)
     control = socket.socket(fileno=CONTROL_FD)
+    slots = threading.BoundedSemaphore(config.connections)
+    capped = _Capped(config.connections, config.handshake_s)
     pending = b""
     while True:
-        ready, _, _ = select.select([CONFIG_FD, CONTROL_FD], [], [])
+        watched = [CONFIG_FD, CONTROL_FD, *capped.fds()]
+        ready, _, _ = select.select(watched, [], [], capped.timeout(time.monotonic()))
+        capped.settle(ready, time.monotonic())
         if CONFIG_FD in ready:
             chunk = os.read(CONFIG_FD, 4096)
             if not chunk:
@@ -577,8 +690,17 @@ def _main(decision: ModuleType, log: ModuleType) -> None:
                 return
             for fd in fds:
                 client = socket.socket(fileno=fd)
-                context = _Context(decision, policy, config, decisions)
-                threading.Thread(target=_serve, args=(context, client), daemon=True).start()
+                arrived = time.monotonic()
+                if not slots.acquire(blocking=False):
+                    capped.hold(client, arrived)
+                    continue
+                deadline = arrived + config.handshake_s
+                context = _Context(decision, policy, config, decisions, slots, deadline)
+                try:
+                    threading.Thread(target=_serve, args=(context, client), daemon=True).start()
+                except RuntimeError:
+                    client.close()
+                    slots.release()
 
 
 if __name__ == "__main__":

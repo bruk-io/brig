@@ -68,6 +68,7 @@ class _Config(TypedDict, closed=True):
 
     allow: list[tuple[str, int]]
     hosts: dict[str, list[str]] | None
+    connections: int
     handshake_s: float
 
 
@@ -84,14 +85,16 @@ class ProxyLaunch:
     """What starting a jail's egress proxy takes: `argv`, an interpreter line that runs the
     program its stdin carries (`python -I -`); `source`, the assembled file
     (`infra.proxy.assemble`); `allow`, the grants as `(host, port)` pairs; `hosts`, a table
-    the proxy resolves names from instead of the host's resolver, or `None` for the host's; and
-    `handshake_s`, how long a connection may take to name its destination
-    (`program.HANDSHAKE_DEADLINE_S`, or lower for a test)."""
+    the proxy resolves names from instead of the host's resolver, or `None` for the host's;
+    `connections`, how many connections it serves at once (`program.CONNECTION_LIMIT`, or lower
+    for a test); and `handshake_s`, how long a connection may take in all to name its
+    destination (`program.HANDSHAKE_DEADLINE_S`, or lower for a test)."""
 
     argv: tuple[str, ...]
     source: str
     allow: tuple[tuple[str, int], ...]
     hosts: frozendict[str, tuple[str, ...]] | None = None
+    connections: int = program.CONNECTION_LIMIT
     handshake_s: float = program.HANDSHAKE_DEADLINE_S
 
 
@@ -103,6 +106,7 @@ def _config_line(launch: ProxyLaunch) -> str:
             if launch.hosts is None
             else {name: list(addresses) for name, addresses in launch.hosts.items()}
         ),
+        "connections": launch.connections,
         "handshake_s": launch.handshake_s,
     }
     return json.dumps(config) + "\n"

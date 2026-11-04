@@ -3,7 +3,10 @@
 Reads one `exec` request from fd 3, starts the command as its child, reaps everything
 reparented to it (nothing else in the namespace will), and writes `started`, `exited` and
 `done` to fd 4. With an egress proxy (decision-0009 item 1) it also listens on the jail's
-loopback and bridges each connection to the proxy over fd 5. Assembled with `wire.py` into one
+loopback and bridges each connection to the proxy over fd 5, at most the exec request's
+`bridge_limit` at once (`wire.BRIDGE_CONNECTION_LIMIT`, 256, or lower; TASK-0049): one more is
+accepted and closed at once, so a program in the jail cannot make it hold threads and fds
+without limit. Assembled with `wire.py` into one
 stdlib-only file (rule 17), where an import of `wire` cannot resolve, so it repeats `wire.py`'s
 numbers and message shapes.
 """
@@ -67,7 +70,7 @@ def _make_undumpable() -> None:
         )
 
 
-def _read_exec_request() -> tuple[list[str], dict[str, str], int | None]:
+def _read_exec_request() -> tuple[list[str], dict[str, str], int | None, int]:
     """Read and parse the one exec request on `_REQUEST_FD`.
 
     Leaves `_REQUEST_FD` open (`closefd=False`): `_start_child`'s `CLOSE` action names it, and
@@ -77,7 +80,7 @@ def _read_exec_request() -> tuple[list[str], dict[str, str], int | None]:
     Raises:
         _NoCommandError: `_REQUEST_FD` closed (EOF) before a line arrived.
         ValueError: the line read is not well-formed JSON, is missing
-            `argv`, `env` or `bridge_port`, or names an empty `argv`.
+            `argv`, `env`, `bridge_port` or `bridge_limit`, or names an empty `argv`.
     """
     with os.fdopen(_REQUEST_FD, "r", closefd=False) as request_pipe:
         line = request_pipe.readline()
@@ -89,7 +92,7 @@ def _read_exec_request() -> tuple[list[str], dict[str, str], int | None]:
         raise ValueError("exec request names an empty argv")
     env = {str(name): str(value) for name, value in raw["env"].items()}
     port = raw["bridge_port"]
-    return argv, env, None if port is None else int(port)
+    return argv, env, None if port is None else int(port), int(raw["bridge_limit"])
 
 
 def _listen(port: int) -> list[socket.socket]:
@@ -131,21 +134,29 @@ def _copy(source: socket.socket, sink: socket.socket) -> None:
         pass
 
 
-def _relay(accepted: socket.socket, kept: socket.socket) -> None:
+def _relay(accepted: socket.socket, kept: socket.socket, slots: threading.Semaphore) -> None:
     """Relay `accepted` (the command's connection) and `kept` (this side of its socketpair to
-    the proxy) both ways until each has ended, then close both."""
-    back = threading.Thread(target=_copy, args=(kept, accepted), daemon=True)
-    back.start()
-    _copy(accepted, kept)
-    back.join()
-    accepted.close()
-    kept.close()
+    the proxy) both ways until each has ended, then close both and give back the connection's
+    slot. A copy thread that cannot start ends both at once."""
+    try:
+        back = threading.Thread(target=_copy, args=(kept, accepted), daemon=True)
+        try:
+            back.start()
+        except RuntimeError:
+            return
+        _copy(accepted, kept)
+        back.join()
+    finally:
+        accepted.close()
+        kept.close()
+        slots.release()
 
 
-def _bridge_one(proxy: socket.socket, accepted: socket.socket) -> None:
-    """Hand one accepted connection to the proxy: a socketpair, one end sent over `proxy` with
-    `SCM_RIGHTS` and closed here, the other relayed with `accepted`. A proxy that cannot take it
-    (gone, or its end full and closed) closes `accepted`: the connection fails, never routes
+def _bridge_one(proxy: socket.socket, accepted: socket.socket, slots: threading.Semaphore) -> None:
+    """Hand one accepted connection, which holds one of `slots`, to the proxy: a socketpair, one
+    end sent over `proxy` with `SCM_RIGHTS` and closed here, the other relayed with `accepted`.
+    A proxy that cannot take it (gone, or its end full and closed), or a relay thread that
+    cannot start, closes `accepted` and gives the slot back: the connection fails, never routes
     elsewhere."""
     handed, kept = socket.socketpair()
     try:
@@ -153,29 +164,41 @@ def _bridge_one(proxy: socket.socket, accepted: socket.socket) -> None:
     except OSError:
         accepted.close()
         kept.close()
+        slots.release()
         return
     finally:
         handed.close()
-    threading.Thread(target=_relay, args=(accepted, kept), daemon=True).start()
+    try:
+        threading.Thread(target=_relay, args=(accepted, kept, slots), daemon=True).start()
+    except RuntimeError:
+        accepted.close()
+        kept.close()
+        slots.release()
 
 
-def _accept(listener: socket.socket, proxy: socket.socket) -> None:
-    """Accept on `listener` for the supervisor's life, bridging each connection to `proxy`."""
+def _accept(listener: socket.socket, proxy: socket.socket, slots: threading.Semaphore) -> None:
+    """Accept on `listener` for the supervisor's life, bridging each connection to `proxy` while
+    one of `slots` is free; one more is closed as soon as it is accepted."""
     while True:
         try:
             accepted, _ = listener.accept()
         except OSError:
             continue
-        _bridge_one(proxy, accepted)
+        if not slots.acquire(blocking=False):
+            accepted.close()
+            continue
+        _bridge_one(proxy, accepted, slots)
 
 
-def _start_bridge(listeners: list[socket.socket]) -> None:
+def _start_bridge(listeners: list[socket.socket], limit: int) -> None:
     """Accept on each of `listeners` on a daemon thread of its own, bridging to the proxy over
-    `_BRIDGE_FD`. Started only once the command exists, so `posix_spawnp` ran with one thread;
-    daemon, so the supervisor's exit after `done` ends them, and every socket with it."""
+    `_BRIDGE_FD` at most `limit` connections at once across them all: the jail's. Started only
+    once the command exists, so `posix_spawnp` ran with one thread; daemon, so the supervisor's
+    exit after `done` ends them, and every socket with it."""
     proxy = socket.socket(fileno=_BRIDGE_FD)
+    slots = threading.BoundedSemaphore(limit)
     for listener in listeners:
-        threading.Thread(target=_accept, args=(listener, proxy), daemon=True).start()
+        threading.Thread(target=_accept, args=(listener, proxy, slots), daemon=True).start()
 
 
 def _emit(message: dict[str, object]) -> None:
@@ -265,7 +288,7 @@ def _main() -> None:
 
     for forwarded in (signal.SIGTERM, signal.SIGINT):
         signal.signal(forwarded, forward)
-    argv, env, bridge_port = _read_exec_request()
+    argv, env, bridge_port, bridge_limit = _read_exec_request()
     listeners = _listen(bridge_port) if bridge_port is not None else []
     child_pid = _start_child(argv, env, bridged=bridge_port is not None)
     started.append(child_pid)
@@ -274,7 +297,7 @@ def _main() -> None:
     # Only now: `_start_child`'s CLOSE action needed it open (`_read_exec_request`).
     os.close(_REQUEST_FD)
     if listeners:
-        _start_bridge(listeners)
+        _start_bridge(listeners, bridge_limit)
     _emit({"kind": "started", "pid": child_pid})
     exit_code = _reap_until_gone(child_pid)
     _emit({"kind": "done", "exit_code": exit_code})

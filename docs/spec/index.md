@@ -58,8 +58,9 @@ future contribution; a change that violates one is a SPEC change first, code sec
    teardown (TASK-0042). A jail's egress proxy ends with it too: closing the supervisor (when
    `run_jail` sees `done`, in `destroy_jail`, and in a failed create's cleanup) tells the proxy
    to leave, kills its group if it has not, and reaps it, and a start that fails part way ends
-   the proxy it began (TASK-0001.36). *Held by* `tests/e2e/test_interrupt_battery.py`,
-   `tests/e2e/test_egress_route_battery.py`,
+   the proxy it began (TASK-0001.36), with its route full too: every connection it holds goes
+   with it (TASK-0049). *Held by* `tests/e2e/test_interrupt_battery.py`,
+   `tests/e2e/test_egress_route_battery.py`, `tests/e2e/test_egress_connection_caps.py`,
    `tests/e2e/test_supervisor_reaps_orphans.py`, `tests/e2e/test_stdio_pumps_battery.py`, the
    teardown integration tests and, for a failed create, `tests/integration/test_create_failure_*`
    and `tests/integration/test_create_error_edges*`; a battery that plants survivors from the host is not yet
@@ -268,6 +269,32 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   failed connect `502` or `0x05`, and an unreadable request `400` or `0x01`. The SOCKS reply's
   bound address is always `0.0.0.0:0`, so the jail learns nothing of the host's.
 
+  What a jail can hold of the host through its route is bounded (TASK-0049), by limits that are
+  named constants in the programs. A test lowers them, and nothing raises them:
+  - **The bridge** relays at most `wire.BRIDGE_CONNECTION_LIMIT` (256) connections at once,
+    across its listeners, two threads each. One more is accepted and closed at once, with no
+    answer, and never reaches the proxy.
+  - **The proxy** serves at most `program.CONNECTION_LIMIT` (256) connections at once, one
+    thread each and two once relaying. One more gets no thread: the proxy's own loop holds it
+    until its first byte (at most as many again, each for at most the handshake deadline;
+    past that it is closed unanswered). It answers `403` with the body `brig: egress refused:
+    the jail holds as many connections as it may`, or a SOCKS5 method choice and reply `0x01`,
+    and closes it. It makes no decision line, since it named no destination. The proxy's cap
+    holds even against a supervisor that sent more than its own cap allows.
+  - **A handshake** has `program.HANDSHAKE_DEADLINE_S` (30 s) in all, from the connection's
+    arrival at the proxy to its destination named. Every read before then waits only for what
+    is left of it, so a client that sends one byte a second is closed at it as surely as one
+    that sends nothing. Past it, the connection is closed. A relayed connection has no deadline,
+    since a held tunnel is legitimate, and the caps bound those instead.
+
+  Each lowered limit travels on the host's own line to its program: the proxy's two on its
+  config line (`connections`, `handshake_s`), the bridge's in the supervisor's exec request
+  (`bridge_limit`). Both lines are written by the host on fds the command never holds. argv was
+  not used for three reasons. The supervisor's argv is readable in the jail as `/proc/1/cmdline`.
+  The proxy's is `python -I -`, which is how the host finds it. And neither program parses
+  arguments: each already reads one closed JSON shape from the host. The embedder's side is
+  `EgressLimits` (presentation).
+
   Grants change while the jail runs, and decisions come back (decision-0009 items 5 and 6,
   TASK-0001.37). Each line on the config pipe after the first is one change, `{kind, host,
   port}`, written whole (far shorter than `PIPE_BUF`) by `RunningProxy.change`, which records it
@@ -336,7 +363,10 @@ the supervisor with the bridge, and holds the `EgressPort` to its proxy on the `
 (`jail.py`'s `real_egress_port`, which translates the link's plain data into the domain's values
 and its `ProxyEnded` into `JailEgressEnded`). `egress_hosts` is the proxy's resolver seam: a table of names to
 addresses, given as data, that the proxy resolves from instead of the host's resolver; every
-address is still judged. With no `egress`, nothing new runs and nothing changes. What every jail
+address is still judged. `egress_limits` is an `EgressLimits(connections, bridge_connections,
+handshake_s)`, each defaulting to its program's constant and refused by `check_egress_limits`
+(`PolicyEgressLimitOutOfRange`) when it is not above zero or is above that default, before
+anything starts (TASK-0049). With no `egress`, nothing new runs and nothing changes. What every jail
 type shares is beside it: `jail.py` (the `Jail`, brig's state directory, the real ports'
 wiring, and `dismantle`: the verified kill ladder for a process that exists, then removing the
 script, the channel directory and the fds, and releasing the placeholders only on a group read

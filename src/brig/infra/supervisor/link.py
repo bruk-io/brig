@@ -73,10 +73,12 @@ class ReadTimedOut:
 @dataclass(frozen=True)
 class Bridge:
     """A jail's one route out (decision-0009 item 1): the supervisor listens on `port` in the
-    jail's loopback and hands each connection to the egress proxy `proxy` describes."""
+    jail's loopback and hands each connection to the egress proxy `proxy` describes, relaying
+    at most `limit` at once (`wire.BRIDGE_CONNECTION_LIMIT`, or lower for a test)."""
 
     port: int
     proxy: launch.ProxyLaunch
+    limit: int = wire.BRIDGE_CONNECTION_LIMIT
 
 
 class Supervisor:
@@ -305,10 +307,11 @@ def _start(
     os.close(events_write_fd)
     pumps: Pumps | None = None
     port = None if bridge is None else bridge.port
+    limit = wire.BRIDGE_CONNECTION_LIMIT if bridge is None else bridge.limit
     try:
         pumps = Pumps(flows)
         with os.fdopen(request_write_fd, "w") as request_pipe:
-            request_pipe.write(wire.encode_exec_request(command_argv, command_env, port))
+            request_pipe.write(wire.encode_exec_request(command_argv, command_env, port, limit))
     except (OSError, RuntimeError) as exc:
         # Spawned, then failed: a thread that could not start (`RuntimeError`), or a request
         # that hit a pipe its reader closed. Left for the caller's verified teardown.

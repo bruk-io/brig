@@ -34,6 +34,7 @@ from brig.domain.policy.egress import (
 from brig.domain.policy.egress_record import EgressDecision, EgressRecord
 from brig.infra import sockets as _sockets
 from brig.infra.proxy import program as _proxy_program
+from brig.infra.supervisor import wire as _wire
 from brig.presentation.driver import run
 from brig.presentation.errors import (
     ChannelNameRefused,
@@ -86,10 +87,17 @@ class EgressLimits:
     the program's own named constant, and may only be lowered, which a test does so a limit is
     reached in seconds: `check_egress_limits` refuses one above its default.
 
-    `handshake_s` is how long a connection may take to name its destination
-    (`HANDSHAKE_DEADLINE_S` of the proxy, 30 s).
+    - `connections`: how many connections the proxy serves at once (its `CONNECTION_LIMIT`,
+      256). One more is answered `403`, or SOCKS reply `0x01`, and closed.
+    - `bridge_connections`: how many the supervisor's bridge in the jail relays at once (its
+      wire's `BRIDGE_CONNECTION_LIMIT`, 256). One more is accepted and closed at once.
+    - `handshake_s`: how long a connection may take, in all, to name its destination (the
+      proxy's `HANDSHAKE_DEADLINE_S`, 30 s), however its bytes are paced. Past it the proxy
+      closes it. A relayed connection has no deadline: the caps bound those.
     """
 
+    connections: int = _proxy_program.CONNECTION_LIMIT
+    bridge_connections: int = _wire.BRIDGE_CONNECTION_LIMIT
     handshake_s: float = _proxy_program.HANDSHAKE_DEADLINE_S
 
 

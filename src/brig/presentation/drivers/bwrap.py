@@ -165,9 +165,10 @@ def _bridge(
         source=source,
         allow=tuple((destination.host, destination.port) for destination in egress.allow),
         hosts=table,
+        connections=limits.connections,
         handshake_s=limits.handshake_s,
     )
-    return link.Bridge(port=bwrap.EGRESS_BRIDGE_PORT, proxy=launch)
+    return link.Bridge(port=bwrap.EGRESS_BRIDGE_PORT, proxy=launch, limit=limits.bridge_connections)
 
 
 def _facts(paths: tuple[str, ...]) -> dict[str, tuple[str, str]]:

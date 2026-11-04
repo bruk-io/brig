@@ -24,11 +24,15 @@
 **egress decision**
 : What a jail's egress proxy did with one request that named a destination: allowed or refused, the destination, the reason, the time and the proxy's count, handed back to the embedder as data by `egress_decisions` with the envelope line the proxy wrote (`EgressDecision`, decision-0009 item 6).
 
+**egress limits**
+: What a jail's egress route may hold of the host at once: the proxy's and the bridge's connection caps (256 each) and the handshake deadline (30 s in all to name a destination), named constants in the programs that a test lowers through `EgressLimits` and nothing raises (TASK-0049).
+
 **egress policy**
 : The destinations a jail's command may reach, `EgressPolicy(allow)`; the empty one, the default, is loopback and nothing else. A name it grants reaches only public addresses unless an IP-literal grant names the private one (`domain/policy/egress.py`, decision-0009 items 3 and 4).
 
 **egress proxy**
 : The host-side process, one per jail with an egress policy, that reads what each bridged connection asks for (HTTP `CONNECT`, absolute-form HTTP, SOCKS5 `CONNECT`), decides it with the egress decision, resolves granted names itself, and connects only where the decision allowed; it ends with the jail (`infra/proxy/`, decision-0009 item 2).
+
 
 **egress record**
 : A jail's egress grants as created and every egress change since, in order, which the report states (`EgressRecord`, `egress_record(jail)`, decision-0009 item 5).
