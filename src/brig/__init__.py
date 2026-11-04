@@ -1,6 +1,7 @@
 """brig: a standalone sandbox library. The whole public surface: presentation's API and errors,
-and the domain's plain data an embedder writes or reads (the policies, channels, claims and
-grades). An e2e battery may import this and `brig.infra` only (decision-0001 rule 4)."""
+and the domain's plain data an embedder writes or reads (the policies, egress destinations,
+channels, claims and grades). An e2e battery may import this and `brig.infra` only
+(decision-0001 rule 4)."""
 
 from brig.domain.channels import Channel, ChannelDirectory, Reservation, Reservations
 from brig.domain.claims import Claim
@@ -15,11 +16,13 @@ from brig.domain.jail_types.bwrap import (
     declared_channel_paths,
     writable_shared_paths,
 )
+from brig.domain.policy.egress import Destination, EgressPolicy
 from brig.domain.policy.env import DENY_ALL, EnvPolicy
 from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, FsPolicy
 from brig.domain.policy.stdio import Stdio
 from brig.presentation.api import (
     await_channel_ready,
+    check_egress_policy,
     destroy_jail,
     interrupt_jail,
     reserve_channels,
@@ -36,6 +39,12 @@ from brig.presentation.errors import (
     JailWaitTimedOut,
     PlaceholdersFailed,
     PolicyCwdOutsideRoots,
+    PolicyEgressCidr,
+    PolicyEgressHostEmpty,
+    PolicyEgressHostInvalid,
+    PolicyEgressNeedlessBrackets,
+    PolicyEgressPortOutOfRange,
+    PolicyEgressWildcardMisplaced,
     PolicyInterpreterUnreachable,
     PolicyMaskHides,
     PolicyPathNotAbsolute,
@@ -82,6 +91,8 @@ __all__ = [
     "ChannelRefused",
     "Claim",
     "DENY_ALL",
+    "Destination",
+    "EgressPolicy",
     "EnvPolicy",
     "Evidence",
     "ExitCodeUnknown",
@@ -94,6 +105,12 @@ __all__ = [
     "JailWaitTimedOut",
     "PlaceholdersFailed",
     "PolicyCwdOutsideRoots",
+    "PolicyEgressCidr",
+    "PolicyEgressHostEmpty",
+    "PolicyEgressHostInvalid",
+    "PolicyEgressNeedlessBrackets",
+    "PolicyEgressPortOutOfRange",
+    "PolicyEgressWildcardMisplaced",
     "PolicyInterpreterUnreachable",
     "PolicyMaskHides",
     "PolicyPathNotAbsolute",
@@ -114,6 +131,7 @@ __all__ = [
     "WHOLE_HOST_READ_ONLY",
     "at_most",
     "await_channel_ready",
+    "check_egress_policy",
     "create_bwrap_jail",
     "declared_channel_paths",
     "destroy_jail",

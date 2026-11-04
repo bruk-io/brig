@@ -6,11 +6,17 @@
 **claim**
 : A statement made by a jail type's compile about what its jail enforces (decision-0001 rule 11).
 
+**destination**
+: A host and a port a jail may reach through its egress proxy, and what an embedder grants: an exact hostname, `*.suffix` (the names under it, never the suffix itself) or an exact IP literal, always with one port (`domain/policy/egress.py`, decision-0009 item 3).
+
 **driver**
 : What performs the effects a domain generator yields: `presentation/driver.py`, shared by every jail type, beside each type's own `presentation/drivers/<type>.py` (decision-0001 rule 10, decision-0007).
 
 **effect**
 : A value yielded by an operation or teardown generator for a driver to perform and report back from (examples: `StartSupervisedCommand`, `AwaitSupervisorDone`, `Verify`, `SignalGroup`, `Release`; decision-0001 rule 10).
+
+**egress policy**
+: The destinations a jail's command may reach, `EgressPolicy(allow)`; the empty one, the default, is loopback and nothing else. A name it grants reaches only public addresses unless an IP-literal grant names the private one (`domain/policy/egress.py`, decision-0009 items 3 and 4).
 
 **embedder**
 : A program that embeds brig as a library to create, run, and tear down jails (decision-0001 rule 1).

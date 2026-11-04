@@ -1,6 +1,6 @@
-"""What an embedder calls for any jail type: reserve channels, wait for one to be ready, wait for
-the command's exit, interrupt it, tear the jail down. Creating a jail is each jail type's own
-(`presentation/drivers/<type>.py`)."""
+"""What an embedder calls for any jail type: check an egress policy, reserve channels, wait for one
+to be ready, wait for the command's exit, interrupt it, tear the jail down. Creating a jail is
+each jail type's own (`presentation/drivers/<type>.py`)."""
 
 import signal
 import time
@@ -16,6 +16,16 @@ from brig.domain.channels import (
     Reservations,
 )
 from brig.domain.effects import ExitCodeUnknown, GroupState
+from brig.domain.policy.egress import (
+    CidrNotation,
+    EgressPolicy,
+    EmptyHost,
+    InvalidHostname,
+    MisplacedWildcard,
+    NeedlessBrackets,
+    PortOutOfRange,
+    egress_refusal,
+)
 from brig.infra import sockets as _sockets
 from brig.presentation.driver import run
 from brig.presentation.errors import (
@@ -23,6 +33,12 @@ from brig.presentation.errors import (
     JailExitUnknown,
     JailTeardownFailed,
     JailWaitTimedOut,
+    PolicyEgressCidr,
+    PolicyEgressHostEmpty,
+    PolicyEgressHostInvalid,
+    PolicyEgressNeedlessBrackets,
+    PolicyEgressPortOutOfRange,
+    PolicyEgressWildcardMisplaced,
 )
 from brig.presentation.jail import (
     CHANNEL_DIRECTORIES,
@@ -53,6 +69,39 @@ _DEFAULT_CHANNEL_READY_TIMEOUT_S = 30.0
 
 _CHANNEL_READY_POLL_INTERVAL_S = 0.05
 """The pause between readiness attempts: each is a connect and several `/proc` reads."""
+
+
+def check_egress_policy(policy: EgressPolicy) -> None:
+    """Refuse `policy` if any `Destination` in it cannot be granted, naming the first that
+    cannot (`domain/policy/egress.py`'s `egress_refusal`, decision-0009 item 3). A jail's create
+    refuses a policy the same way, before anything starts; an embedder that builds a
+    `Destination` from what its person typed can check it here first.
+
+    Raises:
+        PolicyEgressHostEmpty: an entry names no host.
+        PolicyEgressNeedlessBrackets: an entry's host is bracketed.
+        PolicyEgressCidr: an entry's host is an address range.
+        PolicyEgressWildcardMisplaced: an entry's host has a `*` anywhere but a leading `*.`.
+        PolicyEgressHostInvalid: an entry's host is no valid hostname or IP literal.
+        PolicyEgressPortOutOfRange: an entry's port is not from 1 to 65535.
+    """
+    match egress_refusal(policy):
+        case EmptyHost(destination=destination):
+            raise PolicyEgressHostEmpty(destination)
+        case NeedlessBrackets(destination=destination):
+            raise PolicyEgressNeedlessBrackets(destination)
+        case CidrNotation(destination=destination):
+            raise PolicyEgressCidr(destination)
+        case MisplacedWildcard(destination=destination):
+            raise PolicyEgressWildcardMisplaced(destination)
+        case InvalidHostname(destination=destination):
+            raise PolicyEgressHostInvalid(destination)
+        case PortOutOfRange(destination=destination):
+            raise PolicyEgressPortOutOfRange(destination)
+        case None:
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def reserve_channels(
