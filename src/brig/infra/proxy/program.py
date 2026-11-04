@@ -66,8 +66,9 @@ DECISION_EVENT = "egress-decision"
 _HEAD_LIMIT = 65536
 """The longest HTTP request head read before the request is refused as unreadable."""
 
-_HANDSHAKE_TIMEOUT_S = 30.0
-"""How long a connection may take to name its destination."""
+HANDSHAKE_DEADLINE_S = 30.0
+"""How long a connection may take to name its destination, unless the config line lowers it
+(`handshake_s`)."""
 
 _CONNECT_TIMEOUT_S = 10.0
 """How long one connect to an allowed address may take."""
@@ -85,11 +86,13 @@ request to one decided destination."""
 
 @dataclass(frozen=True)
 class _Config:
-    """What the host sends on `CONFIG_FD`: the grants as `(host, port)` pairs, and the resolver
-    table to look names up in instead of the host's resolver (`None`: the host's)."""
+    """What the host sends on `CONFIG_FD`: the grants as `(host, port)` pairs, the resolver
+    table to look names up in instead of the host's resolver (`None`: the host's), and how long
+    a connection may take to name its destination (`HANDSHAKE_DEADLINE_S`, or lower)."""
 
     allow: tuple[tuple[str, int], ...]
     hosts: frozendict[str, tuple[str, ...]] | None
+    handshake_s: float
 
 
 @dataclass(frozen=True)
@@ -478,7 +481,7 @@ def _serve(context: _Context, client: socket.socket) -> None:
     """One connection from the jail: SOCKS5 when its first byte is `0x05`, HTTP otherwise;
     decided, answered, and relayed when allowed. Closes `client` whatever happened."""
     try:
-        client.settimeout(_HANDSHAKE_TIMEOUT_S)
+        client.settimeout(context.config.handshake_s)
         first = client.recv(1)
         if not first:
             return
@@ -528,7 +531,7 @@ def _read_config() -> _Config:
             }
         )
     )
-    return _Config(allow=allow, hosts=hosts)
+    return _Config(allow=allow, hosts=hosts, handshake_s=float(raw["handshake_s"]))
 
 
 def _changed(decision: ModuleType, policy: object, line: bytes) -> object:

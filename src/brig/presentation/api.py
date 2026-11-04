@@ -6,6 +6,7 @@ command's exit, interrupt it, tear the jail down. Creating a jail is each jail t
 import signal
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass, fields
 from typing import assert_never
 
 from brig.domain import channels as _channels
@@ -32,6 +33,7 @@ from brig.domain.policy.egress import (
 )
 from brig.domain.policy.egress_record import EgressDecision, EgressRecord
 from brig.infra import sockets as _sockets
+from brig.infra.proxy import program as _proxy_program
 from brig.presentation.driver import run
 from brig.presentation.errors import (
     ChannelNameRefused,
@@ -42,6 +44,7 @@ from brig.presentation.errors import (
     PolicyEgressCidr,
     PolicyEgressHostEmpty,
     PolicyEgressHostInvalid,
+    PolicyEgressLimitOutOfRange,
     PolicyEgressNeedlessBrackets,
     PolicyEgressPortOutOfRange,
     PolicyEgressWildcardMisplaced,
@@ -75,6 +78,37 @@ _DEFAULT_CHANNEL_READY_TIMEOUT_S = 30.0
 
 _CHANNEL_READY_POLL_INTERVAL_S = 0.05
 """The pause between readiness attempts: each is a connect and several `/proc` reads."""
+
+
+@dataclass(frozen=True)
+class EgressLimits:
+    """How much of the host a jail's egress route may hold (TASK-0049). Each field defaults to
+    the program's own named constant, and may only be lowered, which a test does so a limit is
+    reached in seconds: `check_egress_limits` refuses one above its default.
+
+    `handshake_s` is how long a connection may take to name its destination
+    (`HANDSHAKE_DEADLINE_S` of the proxy, 30 s).
+    """
+
+    handshake_s: float = _proxy_program.HANDSHAKE_DEADLINE_S
+
+
+_EGRESS_LIMIT_CEILINGS = EgressLimits()
+"""Every limit's default, the most it may be."""
+
+
+def check_egress_limits(limits: EgressLimits) -> None:
+    """Refuse `limits` if a field is not above zero or is above its default, naming the first.
+    A jail's create calls this, with an egress policy, before anything starts.
+
+    Raises:
+        PolicyEgressLimitOutOfRange: a field is not above zero, or above its default.
+    """
+    for field in fields(EgressLimits):
+        value = getattr(limits, field.name)
+        ceiling = getattr(_EGRESS_LIMIT_CEILINGS, field.name)
+        if not 0 < value <= ceiling:
+            raise PolicyEgressLimitOutOfRange(field.name, value, ceiling)
 
 
 def check_egress_policy(policy: EgressPolicy) -> None:

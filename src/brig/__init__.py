@@ -34,8 +34,10 @@ from brig.domain.policy.env import DENY_ALL, EnvPolicy
 from brig.domain.policy.paths import WHOLE_HOST_READ_ONLY, FsPolicy
 from brig.domain.policy.stdio import Stdio
 from brig.presentation.api import (
+    EgressLimits,
     allow_egress,
     await_channel_ready,
+    check_egress_limits,
     check_egress_policy,
     destroy_jail,
     egress_decisions,
@@ -62,6 +64,7 @@ from brig.presentation.errors import (
     PolicyEgressCidr,
     PolicyEgressHostEmpty,
     PolicyEgressHostInvalid,
+    PolicyEgressLimitOutOfRange,
     PolicyEgressNeedlessBrackets,
     PolicyEgressPortOutOfRange,
     PolicyEgressWildcardMisplaced,
@@ -118,6 +121,7 @@ __all__ = [
     "EgressChange",
     "EgressChangeKind",
     "EgressDecision",
+    "EgressLimits",
     "EgressPolicy",
     "EgressPort",
     "EgressProxySourceUnreadable",
@@ -141,6 +145,7 @@ __all__ = [
     "PolicyEgressCidr",
     "PolicyEgressHostEmpty",
     "PolicyEgressHostInvalid",
+    "PolicyEgressLimitOutOfRange",
     "PolicyEgressNeedlessBrackets",
     "PolicyEgressPortOutOfRange",
     "PolicyEgressWildcardMisplaced",
@@ -166,6 +171,7 @@ __all__ = [
     "allow_egress",
     "at_most",
     "await_channel_ready",
+    "check_egress_limits",
     "check_egress_policy",
     "create_bwrap_jail",
     "declared_channel_paths",

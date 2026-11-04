@@ -53,7 +53,7 @@ from brig.infra import state_dir as _state_dir_mod
 from brig.infra.proxy import assemble as _proxy_assemble
 from brig.infra.proxy import launch as _proxy_launch
 from brig.infra.supervisor import assemble, link
-from brig.presentation.api import check_egress_policy
+from brig.presentation.api import EgressLimits, check_egress_limits, check_egress_policy
 from brig.presentation.driver import run
 from brig.presentation.errors import (
     ChannelDirectoryCreateFailed,
@@ -137,11 +137,14 @@ def _supervisor_path(state_dir: str) -> tuple[str, ...]:
     return (sys.executable, "-I", handle.name)
 
 
-def _bridge(egress: EgressPolicy, hosts: Mapping[str, tuple[str, ...]] | None) -> link.Bridge:
+def _bridge(
+    egress: EgressPolicy, hosts: Mapping[str, tuple[str, ...]] | None, limits: EgressLimits
+) -> link.Bridge:
     """The jail's egress route: the supervisor's port on the jail's loopback, and the proxy that
     decides with `egress`, its program assembled with the decision's own source inlined
     (`infra.proxy.assemble`), run from its stdin under `-I` by this interpreter. `hosts`, when
-    given, is the table the proxy resolves names from instead of the host's resolver.
+    given, is the table the proxy resolves names from instead of the host's resolver; `limits`
+    are what the route may hold, each carried on the line its program reads.
 
     Raises:
         EgressProxySourceUnreadable: brig's own proxy or decision source could not be read;
@@ -162,6 +165,7 @@ def _bridge(egress: EgressPolicy, hosts: Mapping[str, tuple[str, ...]] | None) -
         source=source,
         allow=tuple((destination.host, destination.port) for destination in egress.allow),
         hosts=table,
+        handshake_s=limits.handshake_s,
     )
     return link.Bridge(port=bwrap.EGRESS_BRIDGE_PORT, proxy=launch)
 
@@ -337,6 +341,7 @@ def create_bwrap_jail(
     stdio: Stdio = INHERIT,
     egress: EgressPolicy | None = None,
     egress_hosts: Mapping[str, tuple[str, ...]] | None = None,
+    egress_limits: EgressLimits = EgressLimits(),
     processes: ProcessPort = PROCESSES,
     supervisors: SupervisorPort | None = None,
     directories: ChannelDirectoryPort = CHANNEL_DIRECTORIES,
@@ -376,6 +381,10 @@ def create_bwrap_jail(
             host's resolver (a name it lacks resolves to nothing): host data given as data,
             for a test or an embedder that pins its names. Every address is still judged
             (decision-0009 item 4). Unused without `egress`.
+        egress_limits: With `egress`, how much of the host its route may hold (TASK-0049):
+            each limit at its default unless lowered, which a test does so a limit is reached
+            in seconds. Carried on the host's own line to each program, never the jail's.
+            Unused without `egress`.
         processes: The `ProcessPort` (a fake in a test).
         supervisors: A `SupervisorPort` to use as given (a fake in a test); `policy` is then not
             compiled, no supervisor script is written and no egress proxy started (`egress` is
@@ -400,7 +409,8 @@ def create_bwrap_jail(
     `PolicyPathUninspectable` (the host refused to say what is at a path the policy or stdio
     names, or at the interpreter; TASK-0047), `SupervisorSourceUnreadable` and
     `EgressProxySourceUnreadable` (brig's own install is broken; TASK-0047), the egress policy
-    refusals of `check_egress_policy`, before anything else is looked at, and
+    refusals of `check_egress_policy` and `check_egress_limits`'s `PolicyEgressLimitOutOfRange`,
+    before anything else is looked at, and
     `ChannelNamespaceNotFound` from `_namespace_fd_for` propagate. A jail whose command finished
     before its namespace was found has no namespace fd (TASK-0001.30).
 
@@ -420,6 +430,7 @@ def create_bwrap_jail(
     """
     if egress is not None:
         check_egress_policy(egress)
+        check_egress_limits(egress_limits)
         match proxy_variable_refusal(env_policy):
             case ProxyVariableNamed(name=name):
                 raise PolicyEnvNamesProxyVariable(name)
@@ -434,7 +445,7 @@ def create_bwrap_jail(
         mounts: tuple[bwrap.Mount, ...] = ()
         absent: tuple[str, ...] = ()
     else:
-        bridge = None if egress is None else _bridge(egress, egress_hosts)
+        bridge = None if egress is None else _bridge(egress, egress_hosts, egress_limits)
         resolved_supervisors, egress_port, supervisor_script, mounts, absent = _supervisors_for(
             policy, channels, cwd, stdio, bridge
         )

@@ -191,6 +191,27 @@ class PolicyEgressPortOutOfRange(Exception):
         self.destination = destination
 
 
+class PolicyEgressLimitOutOfRange(Exception):
+    """Raised when an `EgressLimits` field is not above zero, or is above the default it may
+    only lower (TASK-0049): a limit bounds what a jail's egress route may hold of the host, so
+    an embedder can tighten it, for a test or a small jail, and never loosen it.
+
+    Args:
+        name: The field.
+        value: What it was given.
+        ceiling: Its default, the most it may be.
+    """
+
+    def __init__(self, name: str, value: float, ceiling: float) -> None:
+        super().__init__(
+            f"egress limit {name}={value!r} is out of range -- give a value above 0 and at most "
+            f"{ceiling!r}, its default; a limit can be lowered, never raised"
+        )
+        self.name = name
+        self.value = value
+        self.ceiling = ceiling
+
+
 class PolicyEgressWildcardMisplaced(Exception):
     """Raised when a `Destination`'s host in a caller's `EgressPolicy` has a `*` anywhere but as
     its whole first label (decision-0009 item 3).
