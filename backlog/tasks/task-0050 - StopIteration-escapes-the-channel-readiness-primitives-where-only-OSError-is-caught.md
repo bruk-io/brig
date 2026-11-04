@@ -1,11 +1,11 @@
 ---
-id: DRAFT-0011
+id: TASK-0050
 title: >-
   StopIteration escapes the channel-readiness primitives where only OSError is
   caught
-status: Draft
+status: To Do
 assignee: []
-created_date: '2026-10-25 16:57'
+created_date: 2026-10-25 16:57
 labels: []
 dependencies: []
 type: bug
