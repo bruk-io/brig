@@ -24,7 +24,7 @@ Reviewing TASK-0050/0001.38/0051/0052 on claude/small-bugs (2026-11-04): five fu
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The failing assert and its cause are identified, from a run that keeps the test's output
+- [x] #1 The failing assert and its cause are identified, from a run that keeps the test's output
 - [ ] #2 The test passes 10 full-tier runs in a row, or the window it shows is fixed with a test that pins it
 - [ ] #3 The failing assert of test_an_interrupt_sent_as_soon_as_the_jail_exists_is_not_lost is named, with its message, from runs under load (the full tier, or the e2e layer run with other e2e tests in parallel) until it fails at least 3 times
 - [ ] #4 The cause is found and stated: a flaw in the test (a timing assumption) or a lost interrupt in brig (TASK-0030's window open again); if brig's, a repro is recorded and the fix keeps the interrupt from being lost
