@@ -19,6 +19,7 @@ dev = [
     "mkdocs-material>=9.7.7",
     "mkdocstrings-python==2.0.9",
     "mkdocs-likec4==1.2.2",
+    "hypothesis==6.168.0",
 ]
 
 [build-system]

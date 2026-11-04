@@ -23,7 +23,8 @@ future contribution; a change that violates one is a SPEC change first, code sec
 2. **Refuse, never downgrade.** A request brig cannot meet is refused with brig's own error before
    anything starts, never met partly: a policy it cannot compile, a stdio path a jail could
    redirect, an interpreter the policy does not mount. There is no fallback the caller did not
-   write. *Held by* `tests/integration/test_policy_refusal.py`, the refusal cases in
+   write. *Held by* `tests/integration/test_policy_refusal.py`,
+   `tests/integration/test_egress_policy_refusal.py`, the refusal cases in
    `tests/e2e/test_fs_policy_battery.py` and `tests/e2e/test_cwd_stdio_battery.py`.
 3. **The policy is constant; only delivery varies.** An `FsPolicy` states intent (roots, denies,
    masks), and each jail type compiles the same value its own way (decision-0007); what varies per
@@ -105,6 +106,35 @@ name) and `interpreter_refusal` (a policy that does not mount the supervisor's i
 gets pipes. Mappings are `frozendict`, sequences
 tuples (decision-0001 rule 8).
 
+`egress.py` is where a jail may reach through its egress proxy (decision-0009 items 3 and 4,
+TASK-0001.35). An `EgressPolicy(allow)` is a tuple of `Destination(host, port)`: the port always
+named, no port wildcards, and the host one of three forms, an exact hostname, `*.suffix` (any name
+under the suffix, never the suffix itself: "the site" and "its subdomains" are two grants), or an
+exact IPv4 or IPv6 literal, bare. The empty `allow`, the default, is loopback and nothing else.
+`egress_refusal` names the first entry that cannot be granted: an empty host, a port not from 1
+to 65535, a `*` anywhere but a leading `*.`, CIDR notation, a host that is no valid hostname (an
+ASCII name of 1-to-63-character labels, 253 characters at most, whose last label no resolver
+would read as a number, so `127.1` and `0x7f000001` are refused, not looked up), or a bracketed
+host. Names compare without case and with one trailing dot dropped; literals compare by value,
+an IPv4-mapped IPv6 address as the IPv4 address it maps. `parse_authority` reads what an HTTP
+`CONNECT` or an absolute URL names (`host:port`, `[v6]:port`, a URL's default port) into an
+`Authority`, refusing, never trimming or guessing at, anything else with an
+`AuthorityProblem`; a SOCKS5 request builds its `Authority` directly. `decide_egress` is the
+whole decision, and it decides before anything is resolved: a literal request is allowed only by
+a literal grant of that address and port, never by a name grant; a name request no exact or
+suffix grant names with its port is `NotGranted` and never looked up, so the jail cannot use the
+proxy's resolver as a way out; a granted one is `Resolve(name)`, and asked again with what it
+resolved to, is `Allowed(grant, addresses)` only if every address is public or named, with the
+same port, by an IP-literal grant. One address that is not public refuses the whole name
+(`PrivateAddress`): loopback, link-local (169.254.169.254 and `fe80::/10` among them), RFC 1918,
+unique-local (`fc00::/7`), unspecified, shared (`100.64.0.0/10`), reserved, multicast, site-local,
+an IPv4-mapped or NAT64 address that carries one of these, every 6to4 and Teredo address, and
+the host's own addresses, which come in as data. Public means the standard library's `ipaddress` calls it global, and
+neither reserved nor multicast: wider than the ranges listed, so an address nobody thought of is
+refused rather than reached. The proxy connects to `Allowed.addresses` and resolves nothing
+again, so a name cannot rebind between the check and the connect. The old brig's filter allowed
+by name alone (old SPEC decisions 133 and 134); the private-address rule is decision-0009's.
+
 `jail_types/bwrap.py` is bwrap's slice: `compile_run` makes the plan, `compile_mounts` turns the
 policy into one ordered tuple of mounts, from which `compile_supervisor_launch`'s argv,
 `writable_shared_paths` and `ceilings` are all read. A deny or a mask is a mount on the entry it
@@ -146,7 +176,9 @@ its result sent back in. The teardown ladder verifies, sends TERM, verifies, sen
 polls until gone or a deadline passes; every verify only peeks the leader, and the last step
 releases its pid (decision-0003).
 
-Not yet built: `facts.py`, `records.py`, `identity.py`, `egress.py`, and the Seatbelt jail type.
+Not yet built: `facts.py`, `records.py`, `identity.py`, and the Seatbelt jail type. (decision-0001's
+layout put the egress decision at `domain/egress.py`; it is `policy/egress.py`, beside the other
+policies an embedder states.)
 
 ## Infra
 
@@ -209,8 +241,8 @@ wiring, and `dismantle`: the verified kill ladder for a process that exists, the
 script, the channel directory and the fds, and releasing the placeholders only on a group read
 gone, the one cleanup `destroy_jail` and a failed create both run; it raises nothing, and hands
 back what its ladder or the supervisor's close raised, a raising ladder reading as a group not
-verified gone, for its caller to attach to what it raises, TASK-0046), `api.py` (reserving channels, readiness, waiting, interrupting the command with
-`SIGINT` through its supervisor, teardown) and `report.py` (a report as text).
+verified gone, for its caller to attach to what it raises, TASK-0046), `api.py` (checking an egress policy, reserving channels, readiness, waiting,
+interrupting the command with `SIGINT` through its supervisor, teardown) and `report.py` (a report as text).
 
 An embedder talks to a channel only over the connection readiness verified. `await_channel_ready`
 returns `ChannelReady(connection)`, the verified socket still open, and the embedder owns it and

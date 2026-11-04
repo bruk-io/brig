@@ -3,6 +3,7 @@ presentation calls infra, so only it catches an infra exception and raises one o
 place: an embedder never handles infra's."""
 
 from brig.domain.effects import Process
+from brig.domain.policy.egress import Destination
 
 
 class PolicyPathNotAbsolute(Exception):
@@ -155,6 +156,108 @@ class PolicyPathThroughLink(Exception):
         )
         self.path = path
         self.root = root
+
+
+class PolicyEgressHostEmpty(Exception):
+    """Raised when a `Destination` in a caller's `EgressPolicy` names no host (decision-0009
+    item 3).
+
+    Args:
+        destination: The refused entry.
+    """
+
+    def __init__(self, destination: Destination) -> None:
+        super().__init__(
+            f"egress policy grants {destination!r}, which names no host -- name a hostname, "
+            "*.suffix, or an IP address"
+        )
+        self.destination = destination
+
+
+class PolicyEgressPortOutOfRange(Exception):
+    """Raised when a `Destination` in a caller's `EgressPolicy` has a port that is not a whole
+    number from 1 to 65535. A grant always names one port; there are no port wildcards
+    (decision-0009 item 3).
+
+    Args:
+        destination: The refused entry.
+    """
+
+    def __init__(self, destination: Destination) -> None:
+        super().__init__(
+            f"egress policy grants {destination!r}, whose port is not from 1 to 65535 -- name "
+            "the one port the jail may reach there, and grant each other port on its own"
+        )
+        self.destination = destination
+
+
+class PolicyEgressWildcardMisplaced(Exception):
+    """Raised when a `Destination`'s host in a caller's `EgressPolicy` has a `*` anywhere but as
+    its whole first label (decision-0009 item 3).
+
+    Args:
+        destination: The refused entry.
+    """
+
+    def __init__(self, destination: Destination) -> None:
+        super().__init__(
+            f"egress policy grants {destination!r}, with a wildcard brig cannot read -- the one "
+            "wildcard is a leading '*.' (as in '*.example.com', the names under it and not "
+            "example.com itself); grant other names exactly"
+        )
+        self.destination = destination
+
+
+class PolicyEgressCidr(Exception):
+    """Raised when a `Destination`'s host in a caller's `EgressPolicy` is an address range in
+    CIDR notation: a grant names one address (decision-0009 item 3).
+
+    Args:
+        destination: The refused entry.
+    """
+
+    def __init__(self, destination: Destination) -> None:
+        super().__init__(
+            f"egress policy grants {destination!r}, an address range -- grant each address "
+            "the jail may reach on its own, without a '/' prefix length"
+        )
+        self.destination = destination
+
+
+class PolicyEgressHostInvalid(Exception):
+    """Raised when a `Destination`'s host in a caller's `EgressPolicy` is neither an IP literal
+    nor a valid hostname: labels of 1 to 63 ASCII letters, digits and hyphens with no hyphen at
+    either end, 253 characters at most, and a last label that is not a number (decision-0009
+    item 3).
+
+    Args:
+        destination: The refused entry.
+    """
+
+    def __init__(self, destination: Destination) -> None:
+        super().__init__(
+            f"egress policy grants {destination!r}, whose host is no valid hostname or IP "
+            "address -- write a name in ASCII (an internationalised one in its xn-- form), an "
+            "IPv4 address as four decimal numbers, and an IPv6 address without a zone"
+        )
+        self.destination = destination
+
+
+class PolicyEgressNeedlessBrackets(Exception):
+    """Raised when a `Destination`'s host in a caller's `EgressPolicy` is bracketed: a
+    `Destination` holds its port apart, so an IPv6 address needs no brackets (decision-0009
+    item 3).
+
+    Args:
+        destination: The refused entry.
+    """
+
+    def __init__(self, destination: Destination) -> None:
+        super().__init__(
+            f"egress policy grants {destination!r}, a bracketed host -- name the IPv6 address "
+            "without its brackets, as in Destination('::1', 443)"
+        )
+        self.destination = destination
 
 
 class PlaceholdersFailed(Exception):
