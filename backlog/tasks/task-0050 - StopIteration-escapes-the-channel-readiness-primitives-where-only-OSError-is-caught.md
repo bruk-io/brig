@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: 2026-10-25 16:57
-updated_date: '2026-11-04T12:40:00Z'
+updated_date: '2026-11-04T13:46:00Z'
 labels:
   - brig
   - channels
@@ -42,4 +42,48 @@ Does not breach TASK-0001.27 AC#4, whose enumeration is literally OSError.
 
 <!-- SECTION:NOTES:BEGIN -->
 Lead, 2026-11-04: promoted from a draft review; criteria written right after promotion (finish-moved for that reason only).
+
+Repro at 627b070b7545, test files: tests/e2e/test_sockets_nspid_missing.py; command: `uv run pytest tests/e2e/test_sockets_nspid_missing.py -q` exited 1
+
+```text
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_a_child_without_an_nspid_line_is_skipped_until_the_deadline _______
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-741/test_a_child_without_an_nspid_0')
+
+    def test_a_child_without_an_nspid_line_is_skipped_until_the_deadline(tmp_path: Path) -> None:
+        """bwrap is running and its one child's `status` carries `PPid:` but no `NSpid:`: no PID 1
+        is found, so the scan answers `JailPid1NotFound` once its deadline passes."""
+        proc_root = tmp_path / "proc"
+        _plant(proc_root, _BWRAP, "Name:\tbwrap\nState:\tS (sleeping)\nPPid:\t1\nNSpid:\t3000\n")
+        _plant(proc_root, _CANDIDATE, f"Name:\tgoing\nState:\tS (sleeping)\nPPid:\t{_BWRAP}\n")
+    
+>       outcome = sockets.jail_pid1_namespace(_BWRAP, time.monotonic() + 0.2, str(proc_root))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/e2e/test_sockets_nspid_missing.py:36: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/brig/infra/sockets.py:143: in jail_pid1_namespace
+    if _nspid(child, proc_root).split()[-1] != "1":
+       ^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+pid = 3001
+proc_root = '/tmp/pytest-of-root/pytest-741/test_a_child_without_an_nspid_0/proc'
+
+    def _nspid(pid: int, proc_root: str = "/proc") -> str:
+        """`pid`'s `NSpid` line: its pid in each PID namespace, outermost first. Its `OSError` and
+        `StopIteration` (no `NSpid:` line) are left to the caller."""
+        with open(f"{proc_root}/{pid}/status") as handle:
+>           return next(line.split(":", 1)[1].strip() for line in handle if line.startswith("NSpid:"))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           StopIteration
+
+src/brig/infra/sockets.py:110: StopIteration
+=========================== short test summary info ============================
+FAILED tests/e2e/test_sockets_nspid_missing.py::test_a_child_without_an_nspid_line_is_skipped_until_the_deadline
+1 failed in 0.21s
+```
 <!-- SECTION:NOTES:END -->
