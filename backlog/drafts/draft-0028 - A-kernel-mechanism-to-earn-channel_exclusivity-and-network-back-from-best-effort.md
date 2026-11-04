@@ -6,6 +6,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-11-03T18:00:00Z'
+updated_date: '2026-11-04T12:40:00Z'
 labels:
   - brig
   - grades
@@ -25,3 +26,9 @@ What is measured here: this kernel's Landlock is ABI 7 (landlock_create_ruleset 
 
 The candidate: the supervisor holds each declared channel as a listening fd it was handed before the jail starts (so the command never needs to create or connect a pathname socket to reach a channel), and installs a seccomp filter before exec that refuses socket(AF_UNIX, ...) (and socketpair is harmless: it reaches nothing outside), so the command cannot make a socket to dial with. Open questions for the design: how a command that legitimately makes AF_UNIX sockets (a language server, a test suite, git's fsmonitor) is served, or whether such a policy opts out and keeps BEST_EFFORT; whether connect on an inherited unconnected socket must be filtered too; how the channel endpoints in argv change when the command is handed an fd instead of a path; whether io_uring (IORING_OP_SOCKET) must be refused alongside; and the battery that plants a host socket under a readable root and measures the dial refused, with a positive control that the channel still works.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Design review 2026-11-04: the candidate (the supervisor creates the channel listeners at their reserved paths, installs a seccomp filter on itself before posix_spawnp refusing socket(AF_UNIX) and io_uring_setup, refusing non-native arch and x32 for socketcall, allowing socketpair for the bridge; BPF bytes built by a pure domain function and sent over the wire; a policy flag opts out at BEST_EFFORT) silently reopens decision-0005: a listen() by brig makes readiness pass at once or never, and endpoints become fds, which breaks embedders whose command binds its own channel. Seccomp unotify on connect is rejected (races on user memory). Spike (size 3): a planted host listener refused with a positive control; io_uring with and without the rule; what fds the command holds; a compatibility census (git fsmonitor and credential-cache, the multiprocessing forkserver, glibc nscd and syslog fallbacks under EACCES versus EAFNOSUPPORT, pytest, uv, language servers); what readiness can observe. Design size 5 after the spike.
+<!-- SECTION:NOTES:END -->
