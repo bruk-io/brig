@@ -3,7 +3,7 @@ id: TASK-0053
 title: >-
   test_an_interrupt_sent_as_soon_as_the_jail_exists_is_not_lost fails
   intermittently in the full tier
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-11-04T14:23:00Z'
 updated_date: '2026-11-04T15:15:00Z'
@@ -101,4 +101,16 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Worker, 2026-11-04: cause found; a flaw in the test, not a lost interrupt in brig. Fixed in f9c4376 (test only).
+
+**Asserts seen.** Six failures under load, every one the first assert: `AssertionError: interrupt_jail said True and nothing arrived` / `assert not (True and 0 == 0)`. The second assert never fired. Load: the test run on its own, repeatedly, while the whole e2e layer ran in a loop alongside, plus 4 to 6 CPU busy-loops on this 4-core host. A scratchpad pytest plugin (measurement only, not committed) kept each failure's message, the timing of each create/interrupt/run, and a read-only `/proc` snapshot of PID 1 and its child just before and after the signal (no ptrace, no /proc/<pid>/mem). The e2e layer alone did not reproduce it here: 14 serial runs with 4 busy-loops and 45 runs three at a time (with 6 busy-loops for the later ones) never failed this test.
+
+**Cause.** The interrupt does reach the command. At the moment of a failing signal, PID 1 was the supervisor with its SIGINT handler installed (SigCgt 0x4002) and its child was the command, already past exec with Python's own SIGINT handler installed (SigCgt 0x2). The three failures whose stderr was kept each end with the command's own `Exception ignored while calling weakref callback <function _get_module_lock.<locals>.cb ...>: ... KeyboardInterrupt`: a SIGINT that lands while the interpreter is still starting up can raise KeyboardInterrupt inside one of importlib's weakref callbacks, where CPython reports it as unraisable and carries on. The command then sleeps the full 3 s and exits 0, which the test read as "nothing arrived". It needs no jail: 580 SIGINTs sent 2 to 16 ms after spawning a bare `python -I -c "import time; time.sleep(3)"` gave 293 exits by the signal (-2), 286 exits of 1 (KeyboardInterrupt in site import, fatal) and 1 exit of 0, with the same weakref message. Load makes the interpreter's startup longer, so more interrupts land inside it. TASK-0030's window is not open again, and TASK-0001.30/TASK-0045 are not involved.
+
+**Fix.** The command is now `/bin/sleep 3`. It never handles SIGINT, so an interrupt that arrives at any point after the spawn kills it (glibc's posix_spawn resets the supervisor's handler to the default in the child before exec). The assert is stronger: the exit code must be exactly -SIGINT, not merely non-zero. The property is unchanged: an interrupt sent as soon as the jail exists reaches the command.
+
+**Evidence that it holds.** 50 rounds under the same load (e2e layer loop, 6 busy-loops, the pre-signal /proc probe), each round running the fixed test and then HEAD's old test: the fixed test passed 50 of 50 (1000 interrupts: interrupt_jail True every time, exit -2 every time). The old test failed 2 of 50 in the same rounds (992 interrupts: 842 exits of -2, 148 of 1, 2 of 0), both with the weakref message. Without the probe, a second set of 50 rounds passed both 50 of 50: the probe's small delay moves the signal into the interpreter's startup. Full tier: record-check --tier full passed (recorded above).
+
+**Seen in passing, not this task:** under the parallel and busy-loop load, the e2e layer also failed `test_egress_connection_caps.py::test_destroy_jail_at_the_cap_leaves_no_proxy_process_thread_or_fd` (twice), `test_egress_connection_caps.py::test_the_proxy_serves_at_most_its_cap_and_refuses_one_more_with_403_or_socks_0x01` (once) and `test_report_battery.py::test_fs_read_a_mask_the_host_renames_over_is_undone_so_the_report_says_best_effort` (once). Their messages were not kept. Criteria left unticked for the reviewer.
 <!-- SECTION:NOTES:END -->
