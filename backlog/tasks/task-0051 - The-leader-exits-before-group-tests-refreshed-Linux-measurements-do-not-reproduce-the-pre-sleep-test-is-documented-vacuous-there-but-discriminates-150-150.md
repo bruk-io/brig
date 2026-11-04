@@ -7,7 +7,12 @@ title: >-
 status: To Do
 assignee: []
 created_date: 2026-10-18 22:30
-labels: []
+updated_date: '2026-11-04T12:40:00Z'
+labels:
+  - brig
+  - tests
+  - size-1
+  - finish-moved
 dependencies: []
 type: bug
 ---
@@ -34,4 +39,13 @@ Note for whoever picks this up: the reviewer's host runs the amd64 image emulate
 <!-- AC:BEGIN -->
 - [ ] #1 The docstrings on both test_destroy_jail_survives_the_leader_exiting_before_its_group tests state only Linux measurements that reproduce in brig-probe-amd64:latest, or name the host and method each figure was taken on
 - [ ] #2 Whichever of the two tests actually discriminates on Linux is identified correctly, so a maintainer trimming the suite cannot delete the wrong one on the docstring's say-so
+- [ ] #3 Every measured figure in test_processes_gateway.py's two leader-exits docstrings names its host, kernel, emulation and method
+- [ ] #4 Each docstring says the no-pre-sleep test is the one that discriminates on native Linux (40/40 here, 2026-11-04) and that the pre-sleep test's power depends on the host (0 to 3 in 150 here)
+- [ ] #5 No test's behaviour changes
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Lead, 2026-11-04: promoted from a draft review; criteria written right after promotion (finish-moved for that reason only).
+<!-- SECTION:NOTES:END -->
