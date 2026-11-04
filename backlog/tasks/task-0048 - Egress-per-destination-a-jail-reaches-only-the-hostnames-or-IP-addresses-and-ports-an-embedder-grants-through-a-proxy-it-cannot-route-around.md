@@ -11,6 +11,7 @@ labels:
   - brig
   - egress
   - size-3
+  - finish-moved
 dependencies: []
 references:
   - >-
@@ -104,4 +105,6 @@ done: all steps passed
 ```
 
 Review (reviewer agent, 2026-11-04): not closed. close-task refused: the task was accepted (promoted in f1ffe56) with no acceptance criteria, and '#1 Decision recorded' was added afterwards without the finish-moved label or a note saying why. The decision itself passes review: decision-0009 answers the question (egress enforced through one route: --unshare-net kept, the supervisor bridges loopback via SCM_RIGHTS to a per-jail host-side proxy) and settles every point the description lists (policy shape, wildcards, proxy-side resolution with private-address refusal, where the proxy runs, refusal as data via egress_decisions, the grade capped by DRAFT-0028, the JSON log line). It is written as Context, Decision and Consequences, status accepted, acceptance recorded. Full check passed with no file changes. To close: whoever owns the finish line adds the finish-moved label and a note on the added criterion, commits, and close-task is run again.
+
+Lead, 2026-11-04: finish moved by me. The draft was promoted with no criteria, and I added 'Decision recorded' in a separate edit, as record-decision asks of a design task; the label and this note were missed then.
 <!-- SECTION:NOTES:END -->
