@@ -1,9 +1,9 @@
 ---
-id: DRAFT-0029
+id: TASK-0049
 title: >-
   The egress route bounds neither its connections nor a handshake's whole time:
   a jailed program can hold host threads and fds without limit
-status: Draft
+status: To Do
 assignee: []
 created_date: '2026-11-04T02:59:00Z'
 labels:
