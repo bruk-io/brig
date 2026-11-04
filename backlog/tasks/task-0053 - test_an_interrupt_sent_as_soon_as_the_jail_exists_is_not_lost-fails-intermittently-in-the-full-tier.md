@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-11-04T14:23:00Z'
-updated_date: '2026-11-04T15:15:00Z'
+updated_date: '2026-11-04T15:16:00Z'
 labels:
   - brig
   - tests
@@ -113,4 +113,6 @@ Worker, 2026-11-04: cause found; a flaw in the test, not a lost interrupt in bri
 **Evidence that it holds.** 50 rounds under the same load (e2e layer loop, 6 busy-loops, the pre-signal /proc probe), each round running the fixed test and then HEAD's old test: the fixed test passed 50 of 50 (1000 interrupts: interrupt_jail True every time, exit -2 every time). The old test failed 2 of 50 in the same rounds (992 interrupts: 842 exits of -2, 148 of 1, 2 of 0), both with the weakref message. Without the probe, a second set of 50 rounds passed both 50 of 50: the probe's small delay moves the signal into the interpreter's startup. Full tier: record-check --tier full passed (recorded above).
 
 **Seen in passing, not this task:** under the parallel and busy-loop load, the e2e layer also failed `test_egress_connection_caps.py::test_destroy_jail_at_the_cap_leaves_no_proxy_process_thread_or_fd` (twice), `test_egress_connection_caps.py::test_the_proxy_serves_at_most_its_cap_and_refuses_one_more_with_403_or_socks_0x01` (once) and `test_report_battery.py::test_fs_read_a_mask_the_host_renames_over_is_undone_so_the_report_says_best_effort` (once). Their messages were not kept. Criteria left unticked for the reviewer.
+
+Worker, correction to "seen in passing" above (the counts and messages, from the kept run output): in 59 e2e-layer runs under load, other tests failed six times. `test_egress_connection_caps.py::test_the_proxy_serves_at_most_its_cap_and_refuses_one_more_with_403_or_socks_0x01` failed 3 times, each `assert 12 == (7 + (2 * 3))` on the fd count. `test_egress_connection_caps.py::test_destroy_jail_at_the_cap_leaves_no_proxy_process_thread_or_fd` failed twice, each with an extra `process_request_thread` thread left over. `test_report_battery.py::test_fs_read_a_mask_the_host_renames_over_is_undone_so_the_report_says_best_effort` failed once with `JailExitUnknown: jail's exit code was lost before it was reported`. All of these were three e2e layers at a time or with busy-loops, which is heavier than the full tier. Not investigated.
 <!-- SECTION:NOTES:END -->
