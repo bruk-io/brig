@@ -6,7 +6,12 @@ title: >-
 status: To Do
 assignee: []
 created_date: 2026-10-25 16:57
-labels: []
+updated_date: '2026-11-04T12:40:00Z'
+labels:
+  - brig
+  - channels
+  - size-1
+  - finish-moved
 dependencies: []
 type: bug
 ---
@@ -29,4 +34,12 @@ Does not breach TASK-0001.27 AC#4, whose enumeration is literally OSError.
 <!-- AC:BEGIN -->
 - [ ] #1 channel_ready returns ChannelRefused(PEER_LOOKUP_FAILED) rather than raising when /proc/self/fdinfo/<pidfd> carries no Pid: line, and a test pins it
 - [ ] #2 jail_pid1_namespace skips a candidate whose status carries no NSpid: line and keeps scanning until its deadline, as _nspid's docstring already specifies, and a test pins it
+- [ ] #3 No StopIteration escapes infra/sockets.py: _verify's fdinfo parse and jail_pid1_namespace's NSpid read each treat a missing line as their documented outcome; repro test: a fake proc_root child whose status has PPid but no NSpid makes jail_pid1_namespace raise StopIteration today
+- [ ] #4 A test pins each site
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Lead, 2026-11-04: promoted from a draft review; criteria written right after promotion (finish-moved for that reason only).
+<!-- SECTION:NOTES:END -->
