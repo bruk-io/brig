@@ -1,11 +1,11 @@
 ---
 id: TASK-0036
 title: Restate the ten laws against this design, each naming what holds it
-status: Done
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-03T04:07:00Z'
-updated_date: '2026-11-03T04:21:00Z'
+updated_date: '2026-11-04T20:23:00Z'
 labels:
   - size-2
 dependencies: []
@@ -16,7 +16,7 @@ ordinal: 41000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-TASK-0001's notes (architecture review, 2026-11-02): the ten laws are carried verbatim from the old SPEC and still name things cut or never built here (law 2's mechanism/stack/launcher, law 7's Process.stop/control, law 9's EnvPolicy.set, laws 5-6's inbound messages and provenance), so criterion #17's tests could not mean anything yet. Restate each in this design's terms, keeping its number and intent, and say which code and which test holds it, or that none does yet.
+An embedder that turns a refusal into a prompt can't offer the one grant that would allow a name pointing at a private address: decision-0009's rule is that only an IP-literal grant of that address opens it, and `EgressDecision` carries the name and port but not the address (`PrivateAddress.address` is dropped in `_judge`). An embedder asking its person needs the address to offer that IP-literal grant, with a warning that it is private.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
