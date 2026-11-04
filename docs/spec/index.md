@@ -351,7 +351,9 @@ TASK-0001.37). `allow_egress(jail, destination)` and `revoke_egress(jail, destin
 jail with no egress proxy with `JailHasNoEgress` (one created without an `EgressPolicy`, or with
 a caller's own `supervisors`), then a malformed destination exactly as `check_egress_policy`
 refuses one, before anything is sent, then send the change; the jail is not restarted, and the
-next connection is decided against the new grants. Once the proxy has ended (`run_jail` saw the
+next connection is decided against the new grants. A revoke does not cut a connection already
+open (each is judged once, when it names its destination); only `destroy_jail` ends what is open.
+Once the proxy has ended (`run_jail` saw the
 command done, or `destroy_jail` ran) a change is `JailEgressEnded`, sent and recorded nowhere.
 `egress_decisions(jail)` returns, without blocking, an iterator over the decisions that arrived
 since the last call, each handed back once, so an embedder can poll it between its own events

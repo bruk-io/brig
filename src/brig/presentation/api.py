@@ -134,8 +134,9 @@ def allow_egress(jail: Jail, destination: Destination) -> None:
 def revoke_egress(jail: Jail, destination: Destination) -> None:
     """Take `destination` back from `jail` while it runs (decision-0009 item 5): its egress proxy
     removes every grant equal to it (none is no error), and refuses the next connection that
-    asks for it. A connection already open through it is left open: the proxy judges each
-    connection once, when it names its destination, and relays a granted one as opaque bytes.
+    asks for it. A revoke does not cut a connection already open through it: the proxy judges
+    each connection once, when it names its destination, and relays a granted one as opaque
+    bytes. To end what is open, an embedder destroys the jail (`destroy_jail`).
     A grant `*.suffix` is revoked only by naming it as written. The change is in
     `egress_record(jail)` from now on.
 
