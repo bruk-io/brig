@@ -4,7 +4,7 @@ title: >-
   The leader-exits-before-group tests' refreshed Linux measurements do not
   reproduce -- the pre-sleep test is documented vacuous there but discriminates
   150/150
-status: In Progress
+status: Done
 assignee: []
 created_date: 2026-10-18 22:30
 updated_date: '2026-11-04T14:23:00Z'
@@ -196,4 +196,6 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 done: all steps passed
 ```
+
+Reviewer, 2026-11-04: closed. Every criterion met. Code outside docstrings unchanged: the reviewer's own AST comparison of tests/e2e/test_processes_gateway.py with every string-expression statement removed is identical between 1f2d75d~1 and HEAD, and 1f2d75d touches that file only. Each figure names host, kernel (or 'not recorded'), emulation, method and who measured it; both docstrings name the no-pre-sleep test as the native-Linux discriminator (40/40) and say the pre-sleep test's power depends on the host (0 to 4 in 150 here, 0 to 3 in the lead's runs, which covers AC#4's 0 to 3). Full tier: five runs of one tree (branch claude/small-bugs, all four tasks), three green; two failed only test_interrupt_battery.py::test_an_interrupt_sent_as_soon_as_the_jail_exists_is_not_lost, a path this branch does not touch (signal_jail_pid1/_pid1_under); passes alone 3/3 and 8/8 in parallel. Filed as DRAFT-0030. No files changed by the check.
 <!-- SECTION:NOTES:END -->
