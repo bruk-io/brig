@@ -1,12 +1,10 @@
-// Component: presentation/drivers/seatbelt.py -- planned, not built
-// (decision-0001: bwrap first, Seatbelt next; TASK-0001 criterion #4 waits
-// for a Mac run).
+// Component: presentation/drivers/seatbelt.py -- Seatbelt's slice of presentation
+// (decision-0001 rule 3, decision-0007 item 5, decision-0010).
 model {
   extend brig.library {
     seatbeltDriver = component 'Seatbelt Driver' {
-      #planned
       technology 'Python 3.15'
-      description 'Seatbelt\'s slice of presentation, the counterpart of the Bwrap Driver: would refuse and compile the policy into a profile and start the jail under macOS\'s sandbox-exec through the shared driver (decision-0007 item 5). Planned, not built.'
+      description 'Seatbelt\'s slice of presentation (create_seatbelt_jail): looks up the policy\'s host facts, refuses or compiles the policy into an SBPL profile, holds placeholders for absent carve-out directories, writes the assembled supervisor script and profile, starts the jail under sandbox-exec through the shared driver, and holds its group identity fd for channel readiness.'
     }
   }
 }

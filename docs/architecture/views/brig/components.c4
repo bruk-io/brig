@@ -10,13 +10,13 @@ views {
     // Visual grouping only (decision-0001 rule 1), not a fourth abstraction
     // level: domain and infra depend on neither presentation nor each other.
     group 'domain' {
-      include effects, operations, teardown, plan, policy, channels, grades, bwrapJailType
+      include effects, operations, teardown, plan, policy, channels, grades, bwrapJailType, seatbeltJailType
     }
     group 'infra' {
       include processes, sockets, files, placeholders, stateDir, supervisorLink, proxyLink, logEnvelope
     }
     group 'presentation' {
-      include api, jail, driver, bwrapDriver, ports, errors, report
+      include api, jail, driver, bwrapDriver, seatbeltDriver, ports, errors, report
     }
   }
 }
