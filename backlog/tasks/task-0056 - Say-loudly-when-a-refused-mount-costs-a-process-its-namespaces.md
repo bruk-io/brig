@@ -4,11 +4,13 @@ title: Say loudly when a refused mount costs a process its namespaces
 status: To Do
 assignee: []
 created_date: '2026-11-10 17:16'
+updated_date: '2026-11-10 17:16'
 labels:
   - isolation
   - security
   - size-2
-dependencies: []
+dependencies:
+  - TASK-0055
 type: task
 ordinal: 51000
 ---
