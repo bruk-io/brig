@@ -16,6 +16,7 @@ import json
 import os
 import signal
 import socket
+import sys
 import threading
 from types import FrameType
 
@@ -36,6 +37,10 @@ _PR_SET_DUMPABLE = 4
 """`prctl(2)`'s option number for the dumpable flag (`<linux/prctl.h>`): `ctypes` has no name
 for it, and the standard library has no `prctl` of its own."""
 
+_PT_DENY_ATTACH = 31
+"""`ptrace(2)`'s request number on Darwin (`<sys/ptrace.h>`): blocks any process from attaching
+to this process via `ptrace` or Mach task ports (decision-0010 item 2)."""
+
 
 class _NoCommandError(Exception):
     """Raised when `_REQUEST_FD` closes before one `exec` request line arrives."""
@@ -50,20 +55,35 @@ class _NotProtectedError(Exception):
 
 
 def _make_undumpable() -> None:
-    """Make this process non-dumpable before the command exists (decision-0006 item 1).
+    """Make this process non-dumpable before the command exists (decision-0006 item 1,
+    decision-0010 item 2).
 
-    The command is this process's child, under the same uid, with the jail's own procfs:
-    while this process is dumpable the command can reopen `_EVENTS_FD` through
+    The command is this process's child, under the same uid: on Linux it has the jail's own
+    procfs, so while this process is dumpable the command can reopen `_EVENTS_FD` through
     `/proc/1/fd/4` and write a `done` of its own, whatever `_start_child`'s closes did, and
     `ptrace` this process outright. Non-dumpable, both are refused to a peer without
     `CAP_SYS_PTRACE` in the jail's user namespace, which `--cap-drop ALL` (the bwrap
-    compile) ensures the command never holds. The command's own exec makes it dumpable again,
-    which protects nothing of brig's.
+    compile) ensures the command never holds. On Darwin (`/proc` absent), `PT_DENY_ATTACH`
+    refuses `ptrace` attachment from any child process. The command's own exec resets the
+    flag for the child, which protects nothing of brig's.
 
     Raises:
-        _NotProtectedError: `prctl` refused the flag.
+        _NotProtectedError: `prctl` or `ptrace` refused the flag.
     """
     libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        libc.ptrace.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        ]
+        libc.ptrace.restype = ctypes.c_int
+        if libc.ptrace(_PT_DENY_ATTACH, 0, ctypes.c_void_p(0), 0) != 0:
+            raise _NotProtectedError(
+                f"ptrace(PT_DENY_ATTACH) failed: {os.strerror(ctypes.get_errno())}"
+            )
+        return
     if libc.prctl(_PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
         raise _NotProtectedError(
             f"prctl(PR_SET_DUMPABLE, 0) failed: {os.strerror(ctypes.get_errno())}"
