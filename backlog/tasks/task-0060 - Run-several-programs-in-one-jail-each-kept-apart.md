@@ -4,11 +4,13 @@ title: 'Run several programs in one jail, each kept apart'
 status: To Do
 assignee: []
 created_date: '2026-11-10 17:16'
+updated_date: '2026-11-10 17:16'
 labels:
   - isolation
   - security
   - size-5
-dependencies: []
+dependencies:
+  - TASK-0055
 type: task
 ordinal: 55000
 ---
