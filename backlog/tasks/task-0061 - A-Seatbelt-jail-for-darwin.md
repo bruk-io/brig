@@ -88,7 +88,8 @@ Inherited from the first worker (reviewed here and corrected where wrong):
 - `d6348d2` feat(infra): support Darwin in placeholders, sockets, supervisor, and proxy
 
 Mine:
-- `93a9f7b` Update task TASK-0061 (the plan, written by the `backlog` CLI)
+- `93a9f7b`, `4714566` and the last `Update task TASK-0061` commits: the plan and these notes,
+  written by the `backlog` CLI
 - `26d1197` feat(seatbelt): a Seatbelt jail type and driver for darwin, with a measured profile header
 - `4b55998` test(seatbelt): e2e batteries on a Mac, each attack beside its unjailed control
 - `49ee409` docs(seatbelt): correct decision-0010 and the spec to what was measured
@@ -175,10 +176,14 @@ cited two test files that did not exist.
    argv through `sysctl` (environment not visible), user and group lookups.
 6. **decision-0010 says `accepted`**; I found no record that Bruk accepted it. Its body has now
    changed substantially; Bruk should confirm the status.
-7. **The Mach allowlist is one service**, enough for CPython, `sh` and `git`. Larger programs
-   (Node, a CLI that uses the keychain or trust store) may need more; each addition would need
-   its own measurement.
+7. **The Mach allowlist is one service**, enough for CPython, `sh` and `git`. The
+   `channel_exclusivity` and `network` `ENFORCED` grades assume that service, read-only user and
+   group lookups through opendirectoryd, carries nothing out of the jail; that was not probed
+   beyond its use. Larger programs (Node, a CLI that uses the keychain or trust store) may need
+   more services, and each addition would need its own measurement and may lower a grade.
 8. **AC #2** (bh-02 running jailed on a Mac) is another repo's step and was not attempted.
 9. Not measured: `LOCAL_PEERTOKEN`'s `EINVAL` after the listener is reaped; any macOS other than
    27.0.1.
+10. `board-check` still reports that TASK-0061 is in progress at size 8 with no children. That
+    was so before this work; I did not split a task whose work is done.
 <!-- SECTION:NOTES:END -->
