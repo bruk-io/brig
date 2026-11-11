@@ -27,6 +27,7 @@ from brig.domain.policy.egress import (
 )
 from brig.domain.policy.egress_record import EgressChange, EgressDecision, EgressRecord
 from brig.infra import log as _log
+from brig.infra import members as _members
 from brig.infra import placeholders as _placeholders
 from brig.infra import sockets as _sockets
 from brig.infra import state_dir as _state_dir_mod
@@ -53,6 +54,7 @@ from brig.presentation.ports import (
     ChannelReady,
     ChannelRefused,
     EgressPort,
+    MembersPort,
     PlaceholderPort,
     ProcessPort,
     SupervisorPort,
@@ -284,6 +286,23 @@ PLACEHOLDERS: PlaceholderPort = _RealPlaceholders()
 
 
 @dataclass(frozen=True)
+class _RealMembers:
+    """`MembersPort` onto infra's `members`."""
+
+    kill: Callable[[str, str, float], bool] = _members.kill_members
+
+
+MEMBERS: MembersPort = _RealMembers()
+
+
+def member_decoy(mark: Path) -> Path:
+    """The decoy beside a Seatbelt jail's member `mark`: a file its profile refuses, as every
+    file of the state directory but the jail's own, so a broader sandbox that allows the mark
+    is told apart (`infra.members`)."""
+    return mark.with_suffix(".decoy")
+
+
+@dataclass(frozen=True)
 class Jail:
     """A bwrap jail an embedder created.
 
@@ -298,7 +317,9 @@ class Jail:
     was made and held for the jail's lifetime, beneath which readiness opens each channel's name
     (TASK-0045); `None` with no channel. `mounts` is what the jail was compiled with and
     `report` its ceiling per claim (decision-0008). `egress` is the port to the jail's egress
-    proxy (decision-0009 items 5 and 6), `None` for a jail with none.
+    proxy (decision-0009 items 5 and 6), `None` for a jail with none. `member_mark` is a Seatbelt
+    jail's mark (with its decoy beside it, `member_decoy`), which `destroy_jail` finds every
+    process of the jail by and removes once none is left; `None` for any other jail.
     """
 
     process: Process
@@ -312,6 +333,7 @@ class Jail:
     placeholders: str | None = None
     report: frozendict[Claim, Grade] = frozendict()
     egress: EgressPort | None = None
+    member_mark: Path | None = None
 
 
 def _close_fd(fd: int) -> None:
@@ -347,6 +369,8 @@ def dismantle(
     channel_namespace_fd: int | None = None,
     channel_directory_fd: int | None = None,
     placeholder_record: str | None = None,
+    member_mark: Path | None = None,
+    members: MembersPort = MEMBERS,
 ) -> _Dismantled:
     """Tear down what a jail made, and return what teardown found: the one cleanup `destroy_jail`
     and a failed `create_bwrap_jail` both run, so the two cannot disagree (TASK-0044).
@@ -361,6 +385,12 @@ def dismantle(
     record is released only when the state is `GONE`: removing a placeholder a jail still
     mounts over detaches that mount (TASK-0027), so a record a live jail holds is left for a
     later sweep.
+
+    With `member_mark` (a Seatbelt jail), once the ladder has run, `members` kills every process
+    that carries the jail's profile, however it left the group, polling until none is left or a
+    further `kill_grace_s` passes; one left makes the state `ALIVE`. The mark and its decoy are
+    removed only once the state is `GONE`, since a process that carries the profile is found by
+    them and by nothing else.
 
     Raises nothing, so it never hides the error of a failed step that called it (TASK-0046): an
     exception from the ladder makes the state `ALIVE` (the group was not verified gone), and it
@@ -380,6 +410,17 @@ def dismantle(
         except Exception as error:
             state = GroupState.ALIVE
             ladder_error = error
+        if member_mark is not None:
+            sweep_deadline = time.monotonic() + kill_grace_s
+            try:
+                gone = members.kill(
+                    str(member_mark), str(member_decoy(member_mark)), sweep_deadline
+                )
+            except Exception as error:
+                gone = False
+                ladder_error = ladder_error or error
+            if not gone:
+                state = GroupState.ALIVE
         try:
             supervisors.close(process.pid)
         except Exception as error:
@@ -401,6 +442,12 @@ def dismantle(
     for fd in (channel_namespace_fd, channel_directory_fd):
         if fd is not None:
             _close_fd(fd)
+    if state is GroupState.GONE and member_mark is not None:
+        for made in (member_mark, member_decoy(member_mark)):
+            try:
+                made.unlink(missing_ok=True)
+            except OSError:
+                pass
     if state is GroupState.GONE and placeholder_record is not None:
         try:
             placeholders.release(placeholder_record)

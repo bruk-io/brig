@@ -103,6 +103,17 @@ class PlaceholderPort(Protocol):
         ...
 
 
+class MembersPort(Protocol):
+    """What a Seatbelt jail's teardown needs from infra on Darwin: to find and kill every process
+    that carries the jail's profile, however it left the jail's process group (decision-0010
+    item 2)."""
+
+    def kill(self, mark: str, decoy: str, deadline: float) -> bool:
+        """Kill every process whose sandbox allows `mark` and refuses `decoy`, looking again
+        until none is left (`True`) or `time.monotonic()` passes `deadline` (`False`)."""
+        ...
+
+
 class ChannelReadinessRefusal(Enum):
     """Why readiness refused a connection that did connect (decision-0005)."""
 

@@ -12,7 +12,12 @@ import dataclasses
 from pathlib import Path
 
 import pytest
-from tests.integration.fakes import FakeChannelDirectories, FakeProcesses, FakeSupervisors
+from tests.integration.fakes import (
+    FakeChannelDirectories,
+    FakeMembers,
+    FakeProcesses,
+    FakeSupervisors,
+)
 
 from brig import (
     WHOLE_HOST_READ_ONLY,
@@ -22,6 +27,7 @@ from brig import (
     EgressPolicy,
     EnvPolicy,
     FsPolicy,
+    JailTeardownFailed,
     PolicyEnvNamesProxyVariable,
     PolicyMaskHides,
     PolicyPathNotAbsolute,
@@ -107,3 +113,56 @@ def test_destroying_a_jail_deletes_its_profile_with_its_script(tmp_path: Path) -
 
     assert not script.exists()
     assert not profile.exists()
+
+
+def _member_files(tmp_path: Path) -> tuple[Path, Path]:
+    mark = tmp_path / "brig-supervisor-fake.mark"
+    decoy = tmp_path / "brig-supervisor-fake.decoy"
+    mark.write_text("")
+    decoy.write_text("")
+    return mark, decoy
+
+
+def test_destroying_a_jail_kills_what_carries_its_mark_and_then_removes_the_mark(
+    tmp_path: Path,
+) -> None:
+    mark, decoy = _member_files(tmp_path)
+    processes = FakeProcesses()
+    supervisors = FakeSupervisors()
+    members = FakeMembers(gone=True)
+    jail = create_seatbelt_jail(("true",), processes=processes, supervisors=supervisors)
+    jail = dataclasses.replace(jail, member_mark=mark)
+
+    destroy_jail(jail, processes=processes, supervisors=supervisors, members=members)
+
+    assert members.asked == [(str(mark), str(decoy))]
+    assert not mark.exists() and not decoy.exists()
+
+
+def test_a_member_left_alive_fails_teardown_and_keeps_the_mark(tmp_path: Path) -> None:
+    """The mark is what finds a process that left the group, so it stays while one may live."""
+    mark, decoy = _member_files(tmp_path)
+    processes = FakeProcesses()
+    supervisors = FakeSupervisors()
+    members = FakeMembers(gone=False)
+    jail = create_seatbelt_jail(("true",), processes=processes, supervisors=supervisors)
+    jail = dataclasses.replace(jail, member_mark=mark)
+
+    with pytest.raises(JailTeardownFailed):
+        destroy_jail(jail, processes=processes, supervisors=supervisors, members=members)
+
+    assert mark.exists() and decoy.exists()
+
+
+def test_a_create_that_fails_after_compiling_leaves_no_member_files_behind() -> None:
+    reserved = reserve_channels((Channel("ctl"),))
+    state_dir = Path(reserved.directory.host_path).parent.parent
+    directories = FakeChannelDirectories(path=reserved.directory.host_path, fail_create=True)
+    before = {path.name for path in state_dir.iterdir()}
+
+    with pytest.raises(ChannelDirectoryCreateFailed):
+        create_seatbelt_jail(
+            ("true",), policy=WHOLE_HOST_READ_ONLY, channels=reserved, directories=directories
+        )
+
+    assert {path.name for path in state_dir.iterdir()} == before

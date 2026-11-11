@@ -57,6 +57,7 @@ from brig.presentation.jail import (
     CHANNEL_DIRECTORIES,
     CHANNEL_READINESS,
     KILL_GRACE_S,
+    MEMBERS,
     PLACEHOLDERS,
     PROCESSES,
     Jail,
@@ -69,6 +70,7 @@ from brig.presentation.ports import (
     ChannelReadinessPort,
     ChannelReady,
     ChannelRefused,
+    MembersPort,
     PlaceholderPort,
     ProcessPort,
     SupervisorPort,
@@ -356,8 +358,11 @@ def destroy_jail(
     supervisors: SupervisorPort | None = None,
     directories: ChannelDirectoryPort = CHANNEL_DIRECTORIES,
     placeholders: PlaceholderPort = PLACEHOLDERS,
+    members: MembersPort = MEMBERS,
 ) -> None:
-    """Tear `jail` down, verified: no process of its group is left when this returns.
+    """Tear `jail` down, verified: no process of its group is left when this returns, and for
+    a Seatbelt jail no process that carries its profile, however it left the group (`members`,
+    decision-0010 item 2).
 
     Runs `dismantle`, the cleanup a failed `create_bwrap_jail` runs too (TASK-0044):
     `kill_grace_s` bounds the post-KILL rung's poll; then, whatever the ladder found, it closes
@@ -370,7 +375,8 @@ def destroy_jail(
     Raises:
         JailTeardownFailed: the kill ladder's last verify still found the group alive, or the
             ladder itself raised, so the group was never verified gone; then that error is the
-            `__cause__` (TASK-0046).
+            `__cause__` (TASK-0046). For a Seatbelt jail, also when a process that carries its
+            profile was still alive once `kill_grace_s` more had passed.
     """
     dismantled = dismantle(
         jail.process,
@@ -384,6 +390,8 @@ def destroy_jail(
         channel_namespace_fd=jail.channel_namespace_fd,
         channel_directory_fd=jail.channel_directory_fd,
         placeholder_record=jail.placeholders,
+        member_mark=jail.member_mark,
+        members=members,
     )
     if dismantled.state is not GroupState.GONE:
         raise JailTeardownFailed(jail.process) from dismantled.ladder_error

@@ -53,7 +53,7 @@ future contribution; a change that violates one is a SPEC change first, code sec
    spinning, wedged or hostile: `interrupt_jail` signals through the supervisor and loses nothing
    while the jail comes up: the command receives it. What the command does with it is its own: a
    command that handles SIGINT can ignore it, and a Python command can swallow one that arrives
-   during its own startup ("Exception ignored ... KeyboardInterrupt", TASK-0053); `destroy_jail` ends the jail's whole process group / PID namespace and verifies it is
+   during its own startup ("Exception ignored ... KeyboardInterrupt", TASK-0053); `destroy_jail` ends the jail's whole process group / PID namespace (and, for a Seatbelt jail, every process that carries its profile, however it left the group: decision-0010 item 2) and verifies it is
    gone. A `create_bwrap_jail` or `create_seatbelt_jail` that fails once its supervisor has started tears it down the same
    way, through the one cleanup `destroy_jail` runs, and the embedder never gets a running jail
    it has no `Jail` for (TASK-0044); so is a supervisor whose start failed after its spawn, which
@@ -225,16 +225,18 @@ root but `/` and every directory between a writable root and a carve-out (old SP
 and 208); then brig's state directory masked, this jail's supervisor script readable, its
 channel directory writable and its one place for Unix sockets, and with egress the bridge port.
 `render_profile` renders them after a fixed header, each line of it measured: deny by default;
-signals only within the jail's own sandbox; `setsid` and `setpgid` refused, so no process leaves
-the group `destroy_jail` kills; one Mach service, the directory lookups; read on `/` itself, which
+signals only within the jail's own sandbox; one Mach service, the directory lookups; read on `/` itself, which
 `dyld` needs; `/dev`'s null, zero and random devices and the process's own descriptors only. No
-`(import "system.sb")`. Every rule is rendered through a Python 3.15 template string
+`(import "system.sb")`, and no system call refused by number. With `member_mark`, the profile
+allows the jail's own mark file in the state directory, by which `destroy_jail` finds and kills
+every process that carries the profile however it left the jail's process group (decision-0010
+item 2, `infra/members.py`). Every rule is rendered through a Python 3.15 template string
 (`string.templatelib.Template`, decision-0001 rule 16), escaping `\` and `"` and refusing a NUL
 byte. `ceilings` states Seatbelt's grade ceilings per claim (decision-0010 item 4): `fs_write` is
 `ENFORCED` when no non-writable subpath lies beneath a writable root and `BEST_EFFORT` when one
 does (Seatbelt judges a path, so the host renaming or linking an entry on the way moves what lies
 beneath it); `fs_read` is always `BEST_EFFORT` (the jail lists `/`, reads its roots' ancestors'
-metadata and host processes' arguments, and looks up users and groups; and a mask follows a path,
+metadata, host processes' arguments and the hardware registry, and looks up users and groups; and a mask follows a path,
 not a file); `env` is `ENFORCED`; `channel_exclusivity` is `VIOLATED` when an undeclared writable
 path is shared with the host and `ENFORCED` otherwise (Seatbelt refuses a dial of a host Unix
 socket inside a readable root, a signal outside the jail, and every Mach service but the
@@ -268,6 +270,9 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   and a file's link count.
 - `state_dir.py`: brig's state directory (`BRIG_HOME`, else `~/.brig`) and its empty read-only
   directory.
+- `members.py`: on Darwin, every process of the user that carries a Seatbelt jail's profile,
+  found by what `sandbox_check` says the profile decides for the jail's mark and decoy, and
+  killed until none is left (decision-0010 item 2).
 - `placeholders.py`: the directories made on the host for bwrap to mount over or Seatbelt to pin
   at absent paths, recorded per jail (tagged with the `user.brig.placeholder` extended attribute
   and verified against process start time via `/proc/<pid>/stat` on Linux or

@@ -50,12 +50,13 @@ decision-0009's body was written after its `create`.
      - `(allow signal (target same-sandbox))`. Unfiltered, a jail sent `SIGTERM` to a host
        process of the same user and killed it; filtered, `kill` of a host process or another
        jail's supervisor is `EPERM`, and the jail still signals its own children.
-     - `(deny syscall-unix (syscall-number SYS_setsid SYS_setpgid))`: both are then `EPERM`. Darwin
-       has no PID namespace, so a command that left the supervisor's process group would outlive
-       `destroy_jail`'s group kill and `group_alive`'s check; with the deny it cannot. The
-       supervisor's own session comes from the host's spawn of `sandbox-exec`, before the
-       profile applies. The cost: a command that daemonises or asks for a new session
-       (`start_new_session=True`, `setsid(1)`) fails in a jail.
+     - No system call is refused by number. *Amended 2026-11-11 after review:* this revision
+       first refused `SYS_setsid` and `SYS_setpgid`, so a command could not leave the group
+       `destroy_jail` kills. It held nothing: `os.posix_spawn(..., setpgroup=0)` or
+       `setsid=True` left the group anyway (the reviewer's repro, measured again here: the
+       spawned shell outlived `destroy_jail` and wrote its file 3 seconds later), and the refusal
+       cost every daemon its session. Teardown now finds the jail's processes by their sandbox
+       (item 2), so the refusal is dropped and a jailed `setsid` works.
      - `(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))`, nothing
        else of Mach. Unfiltered, `pbpaste` in a jail read the host's pasteboard; with only the
        directory lookups, `pwd`, `grp`, `whoami`, `id`, `git`, `ssl` and `subprocess` still
@@ -117,7 +118,28 @@ decision-0009's body was written after its `create`.
    - What differs from Linux: the supervisor shares the command's sandbox, so the command can
      signal it. Measured: a command that sends its supervisor `SIGKILL` makes `run_jail` raise
      `JailExitUnknown`; the exit code is lost, never forged, and `destroy_jail` still ends the
-     group.
+     jail.
+   - **Teardown finds every process of the jail by its sandbox (`brig.infra.members`).** Darwin
+     has no PID namespace: a jailed process can leave the supervisor's group (`posix_spawn` with
+     `setpgroup` or `setsid`), and once its parent exits it is launchd's child, so neither a
+     group kill nor a walk of the process tree finds it. What it cannot shed is its sandbox, and
+     `sandbox_check(3)` asks the kernel what a given process's profile decides. Each jail gets
+     two empty files in brig's state directory, a mark and a decoy beside it; its profile allows
+     `file-read-metadata` on its own mark after the state directory's mask, which refuses the
+     decoy. After the group's kill ladder, `destroy_jail` lists every process of the embedder's
+     uid (`proc_listpids`, `proc_pidinfo`), and `SIGKILL`s each that is sandboxed, allowed the
+     mark and refused the decoy, looking again until a look finds none or `kill_grace_s` more
+     passes (then `JailTeardownFailed`, and the mark is kept so nothing that carries it is lost
+     track of); the mark and decoy are removed once none is left. Measured: `sandbox_check` tells
+     jail A's process (mark A allowed, mark B refused) from jail B's (the reverse) and from an
+     unsandboxed process (not sandboxed), and still finds A's process after it called `setsid`;
+     the paths must exist (for a missing path it answers "refused" for every process); and on
+     arm64 its variadic path argument reaches it only when ctypes places it on the stack, behind
+     five unused fixed arguments (without them every check answered "refused"; x86_64 is not
+     measured). The reviewer's repro and its `setsid=True` variant now leave no process and no
+     file behind, and destroying one jail leaves another jail's and the host's processes
+     running. A pid that exited and was reused between a look and its kill could be signalled;
+     the two are microseconds apart and Darwin hands out pids in rising order.
 
 3. **Channel readiness and peer verification on Darwin (`brig.infra.sockets`).**
    - `open_directory` opens the channel directory `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` (no
@@ -132,10 +154,10 @@ decision-0009's body was written after its `create`.
      `proc_pidinfo(PROC_PIDTBSDINFO)`'s `pbi_pgid` equals `os.getpgid`.
    - The peer is the jail's when its `euid` is the embedder's, it is alive and no zombie, its
      `p_idversion` is the token's (the pid was not reused), and its process group is the
-     supervisor's, held in `jail_namespace_fd`. Since the profile refuses `setpgid`, no jailed
-     process leaves the group, and POSIX lets `setpgid` join only a group in the caller's own
-     session, so no process outside the jail's session can join it. Measured:
-     a listener the host put in the jail's channel directory is `ChannelRefused`.
+     supervisor's, held in `jail_namespace_fd`. POSIX lets `setpgid` join only a group in the
+     caller's own session, so no process outside the jail's session can join it; a jailed
+     listener that left the group (a daemon) is refused, never let in. Measured: a listener the
+     host put in the jail's channel directory is `ChannelRefused`.
    - Not measured here: the first version's statement that `LOCAL_PEERTOKEN` reads `EINVAL` once
      the listener has exited and been reaped. Either way such a peer fails the `proc_pidinfo`
      lookup and is refused.
@@ -152,8 +174,10 @@ decision-0009's body was written after its `create`.
      from it to a read-only file, a rename of the directory above a write deny, and opening a
      terminal for writing are refused, each beside an unjailed control that does it.
    - **`fs_read`:** `BEST_EFFORT` whatever the policy: the jail lists the names at `/`, reads the
-     metadata of every ancestor of a root, reads host processes' arguments through `sysctl`, and
-     looks up the host's users and groups (all measured), and a mask matches a path, so a host
+     metadata of every ancestor of a root, reads host processes' arguments through `sysctl`,
+     reads the hardware registry (`ioreg` in a jail prints what it prints outside, the machine's
+     serial number among it; opening a driver is refused), and looks up the host's users and
+     groups (all measured), and a mask matches a path, so a host
      hard link or rename of a masked file shows it under another name. Measured: a masked file
      and a file outside every readable root are refused.
    - **`env`:** `ENFORCED` (the supervisor spawns every command with the allowed environment
@@ -183,6 +207,7 @@ decision-0009's body was written after its `create`.
   `tests/e2e/test_seatbelt_battery.py`, `test_seatbelt_channels.py`, `test_seatbelt_egress.py`,
   `test_seatbelt_journey.py` and `test_seatbelt_supervisor.py`, which run on a Mac and skip on
   Linux; the profile's shape by `tests/unit/test_seatbelt_compile.py` and
-  `test_seatbelt_ceilings.py`.
+  `test_seatbelt_ceilings.py`. Teardown by `test_seatbelt_journey.py`'s escape tests and
+  `tests/integration/test_seatbelt_create.py`.
 - Open: the bridge port's fixed number on a shared stack (one egress jail per host), and the
   readiness dial's path window above.

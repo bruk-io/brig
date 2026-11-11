@@ -117,6 +117,7 @@ model {
     driver -> supervisorLink 'catches start and wire failures from'
     jail -> placeholders 'wires the placeholder port onto'
     jail -> processes 'wires the process port onto'
+    jail -> members 'wires the members port onto'
     jail -> sockets 'wires the channel ports onto'
     jail -> stateDir 'resolves brig\'s state directory through'
     jail -> supervisorLink 'wires the supervisor port onto'

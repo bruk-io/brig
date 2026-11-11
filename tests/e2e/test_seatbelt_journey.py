@@ -1,8 +1,9 @@
 """TASK-0061: the Seatbelt jail's whole journey on a Mac, through brig's public API against the
 real `/usr/bin/sandbox-exec`, nothing faked: create, run, interrupt, time out, destroy; the
 command's working directory and environment; and teardown that leaves nothing of the jail
-running, which on Darwin rests on the profile refusing `setsid` and `setpgid` (no PID namespace
-takes a process that left the group with it).
+running. Darwin has no PID namespace to take a process that left the jail's group with it, so
+teardown also kills every process that carries the jail's profile (`infra.members`); a process
+that leaves the group, however, is still the jail's, and one outside the jail is never touched.
 """
 
 import os
@@ -34,9 +35,6 @@ pytestmark = pytest.mark.skipif(
     not Path("/usr/bin/sandbox-exec").exists(),
     reason="sandbox-exec is Darwin's; test skips on Linux, runs on a Mac",
 )
-
-_REFUSED = 7
-"""What a probe exits with when the kernel refused it (`EPERM` or `EACCES`)."""
 
 
 def _python(program: str, *argv: str) -> tuple[str, ...]:
@@ -134,40 +132,80 @@ def test_the_command_sees_only_the_environment_its_policy_allows(tmp_path: Path)
     assert at_most(jail.report[SEATBELT_ENV_CLAIM], measured[SEATBELT_ENV_CLAIM])
 
 
-_LEAVE_GROUP = (
-    "import os, sys\n"
-    "for leave in (os.setsid, lambda: os.setpgid(0, 0)):\n"
-    "    try:\n"
-    "        leave()\n"
-    "    except PermissionError:\n"
-    "        continue\n"
-    "    sys.exit(0)\n"
-    f"sys.exit({_REFUSED})\n"
-)
-"""Try to leave the process group: `setsid`, then `setpgid`. Exits 0 if either worked, 7 if
-both were refused. Run as a child, never as a group leader, so `setsid` can succeed."""
-
-
-def test_the_command_cannot_leave_the_jail_s_process_group() -> None:
-    wrapper = (
+def test_a_jailed_command_may_start_a_session_of_its_own() -> None:
+    """Leaving the group is allowed: a daemon's `setsid` works in a jail, as it does outside,
+    and teardown finds what left by its sandbox instead."""
+    program = (
         "import subprocess, sys\n"
-        "sys.exit(subprocess.run([sys.executable, '-I', '-c', sys.argv[1]]).returncode)\n"
+        "child = subprocess.run([sys.executable, '-I', '-c', 'import os; os.setsid()'])\n"
+        "sys.exit(child.returncode)\n"
     )
-    control = subprocess.run(_python(wrapper, _LEAVE_GROUP), check=False).returncode
-    jail = create_seatbelt_jail(_python(wrapper, _LEAVE_GROUP))
+    jail = create_seatbelt_jail(_python(program))
     try:
-        jailed = run_jail(jail, timeout_s=15)
+        assert run_jail(jail, timeout_s=15) == 0
     finally:
         destroy_jail(jail)
 
-    assert control == 0, "control: an unjailed child leaves its group"
-    assert jailed == _REFUSED
+
+def _escape(directory: Path, leave: str) -> str:
+    """A command that spawns a shell out of its process group (`posix_spawn` with `leave`, as
+    `setpgroup=0` or `setsid=True`), which waits, writes `after` into `directory` and sleeps on,
+    prints its pid and exits at once, so the shell is launchd's child by the time teardown
+    runs: the attack a group kill and a walk of the process tree both miss."""
+    script = f"sleep 3; echo outlived > {directory}/after; sleep 60"
+    return (
+        "import os\n"
+        f"pid = os.posix_spawn('/bin/sh', ['sh', '-c', {script!r}], os.environ, {leave})\n"
+        "print(pid, flush=True)\n"
+    )
+
+
+@pytest.mark.parametrize("leave", ["setpgroup=0", "setsid=True"])
+def test_a_process_that_left_the_group_does_not_outlive_destroy(tmp_path: Path, leave: str) -> None:
+    directory = tmp_path / "d"
+    directory.mkdir()
+    out = tmp_path / "pid"
+    jail = create_seatbelt_jail(
+        _python(_escape(directory, leave)),
+        policy=FsPolicy(readable=("/",), writable=(str(directory),)),
+        stdio=Stdio(stdout=str(out)),
+    )
+    try:
+        assert run_jail(jail, timeout_s=15) == 0
+        escaped = int(out.read_text().strip())
+        assert _alive(escaped), "control: the escaped shell runs on after the command exits"
+        assert os.getpgid(escaped) != jail.process.pid, "control: it left the jail's group"
+    finally:
+        destroy_jail(jail)
+
+    survived = _alive(escaped)
+    time.sleep(4)
+    wrote = (directory / "after").exists()
+    if _alive(escaped):
+        os.kill(escaped, signal.SIGKILL)
+    assert not survived, "a process that left the jail's group outlived destroy_jail"
+    assert not wrote
+
+
+def test_destroy_kills_nothing_outside_the_jail() -> None:
+    """The sweep finds a jail's processes by what its own profile decides, so another jail's
+    and the host's own are left running."""
+    host = subprocess.Popen(["/bin/sleep", "60"])
+    other = create_seatbelt_jail(("/bin/sleep", "60"))
+    try:
+        jail = create_seatbelt_jail(("/bin/sleep", "60"))
+        destroy_jail(jail)
+        assert host.poll() is None, "a host process was killed"
+        assert _alive(other.process.pid), "another jail's process was killed"
+    finally:
+        destroy_jail(other)
+        host.kill()
+        host.wait()
 
 
 def test_destroy_leaves_no_process_of_the_jail_running(tmp_path: Path) -> None:
-    """A command that starts a background process, tries to take it out of the group, and
-    exits: on Darwin the orphan is not the supervisor's to reap, so only the group kill ends
-    it."""
+    """A command that starts a background process that takes itself out of the group, and
+    exits: on Darwin the orphan is not the supervisor's to reap, and no group kill reaches it."""
     pid_file = tmp_path / "pid"
     program = (
         "import os, subprocess, sys\n"

@@ -232,8 +232,9 @@ def test_a_file_outside_every_readable_root_cannot_be_read(tmp_path: Path) -> No
 
 def test_the_reasons_reads_are_only_best_effort_are_real(tmp_path: Path) -> None:
     """What `SEATBELT_FS_READ_CLAIM` names as host data the jail sees whatever its policy: the
-    names at `/`, and a host process's arguments through `sysctl`. Measured, so the report's
-    `BEST_EFFORT` is not stated weaker than it needs to be without a reason."""
+    names at `/`, a host process's arguments through `sysctl`, and the hardware registry.
+    Measured, so the report's `BEST_EFFORT` is not stated weaker than it needs to be without a
+    reason."""
     readable = tmp_path / "readable"
     readable.mkdir()
     policy = FsPolicy(readable=(str(readable), *_interpreter_roots()))
@@ -255,7 +256,16 @@ def test_the_reasons_reads_are_only_best_effort_are_real(tmp_path: Path) -> None
         host.kill()
         host.wait()
 
+    registry = create_seatbelt_jail(
+        ("/bin/sh", "-c", "/usr/sbin/ioreg -c IOPlatformExpertDevice -d 2 | grep -q SerialNumber"),
+    )
+    try:
+        read_registry = run_jail(registry, timeout_s=30)
+    finally:
+        destroy_jail(registry)
+
     assert seen == _WORKED
+    assert read_registry == 0, "the hardware registry, the serial number in it, is readable"
     assert jail.report[SEATBELT_FS_READ_CLAIM] is Grade.BEST_EFFORT
 
 

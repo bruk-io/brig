@@ -69,10 +69,29 @@ def test_signals_reach_only_the_jail_s_own_sandbox() -> None:
     assert signal_lines == ["(allow signal (target same-sandbox))"]
 
 
-def test_the_command_cannot_leave_the_jail_s_process_group() -> None:
+def test_no_system_call_is_refused_by_number() -> None:
+    """Refusing `setsid` and `setpgid` held nothing (`posix_spawn` left the group anyway), and
+    cost daemons their session; teardown finds the jail's processes by the mark instead."""
     lines = _profile(WHOLE_HOST_READ_ONLY, _same("/"))
 
-    assert "(deny syscall-unix (syscall-number SYS_setsid SYS_setpgid))" in lines
+    assert not any("syscall" in line for line in lines)
+
+
+def test_the_member_mark_alone_is_visible_inside_the_state_directory() -> None:
+    mark = _STATE_DIR + "/brig-supervisor-x.mark"
+    rules = seatbelt.compile_rules(
+        WHOLE_HOST_READ_ONLY,
+        _same("/", _STATE_DIR),
+        state_dir=_STATE_DIR,
+        supervisor_script=_SCRIPT,
+        member_mark=mark,
+    )
+    lines = seatbelt.render_profile(rules).splitlines()
+
+    state_mask = lines.index(f'(deny file-read* file-write* (subpath "{_STATE_DIR}"))')
+    allowed = lines.index(f'(allow file-read-metadata (literal "{mark}"))')
+    assert state_mask < allowed
+    assert not any("brig-supervisor-x.decoy" in line for line in lines)
 
 
 def test_only_the_directory_lookup_mach_service_is_allowed() -> None:

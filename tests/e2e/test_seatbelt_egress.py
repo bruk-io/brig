@@ -8,6 +8,7 @@ A TLS-less HTTP server on the host's `127.0.0.1:<ephemeral>` stands in for the i
 by its IP literal (decision-0009 item 4 refuses a name resolving to loopback).
 """
 
+import errno
 import http.server
 import socket
 import subprocess
@@ -93,19 +94,25 @@ except OSError as error:
     sys.exit(7 if error.errno in (errno.EPERM, errno.EACCES) else 3)
 """
 
+_OFF_HOST = ("1.1.1.1", "80")
+"""An address off this host: what the bypass first measured reached (TASK-0061)."""
+
 _FROM_BRIDGE_PORT = r"""
-import errno, socket, sys
+import socket, sys
 sock = socket.socket()
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 try:
-    sock.bind(("0.0.0.0", int(sys.argv[2])))
+    sock.bind(("0.0.0.0", int(sys.argv[3])))
     sock.settimeout(5)
-    sock.connect(("127.0.0.1", int(sys.argv[1])))
+    sock.connect((sys.argv[1], int(sys.argv[2])))
 except OSError as error:
-    sys.exit(7 if error.errno in (errno.EPERM, errno.EACCES) else 3)
+    print(f"refused: errno {error.errno} ({error.strerror})", flush=True)
+    sys.exit(1)
+print(f"connected from {sock.getsockname()}", flush=True)
 """
 """Bind the source port to the bridge's, on the wildcard address beside the supervisor's own
-loopback listener, and connect somewhere else."""
+loopback listener, and connect off the host. Exits 0 only when the connect succeeded, and says
+why when it did not."""
 
 
 def _egress_jail_exit(program: str, *argv: str, granted: int) -> tuple[int, Jail]:
@@ -138,15 +145,37 @@ def test_a_granted_destination_is_reached_only_through_the_bridge(server_port: i
     assert at_most(jail.report[claim], measured[claim])
 
 
-def test_a_source_port_bound_to_the_bridge_s_does_not_open_a_route(server_port: int) -> None:
-    port = str(server_port)
+def test_a_source_port_bound_to_the_bridge_s_does_not_open_a_route(
+    server_port: int, tmp_path: Path
+) -> None:
+    """Fails if the jailed connect succeeds; any refusal passes, and its errno is shown. The
+    control connects from an ephemeral port: from the bridge's own, its closed connection's
+    TIME_WAIT would hold the very address pair the attack uses, which then fails `EADDRINUSE`
+    whatever the profile says, a probe that measured nothing (so that errno fails too)."""
+    target = (*_OFF_HOST, str(_BRIDGE_PORT))
     control = subprocess.run(
-        (sys.executable, "-I", "-c", _FROM_BRIDGE_PORT, port, str(_BRIDGE_PORT)), check=False
-    ).returncode
-    attack, _ = _egress_jail_exit(_FROM_BRIDGE_PORT, port, str(_BRIDGE_PORT), granted=server_port)
+        (sys.executable, "-I", "-c", _FROM_BRIDGE_PORT, *_OFF_HOST, "0"),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if control.returncode != 0:
+        pytest.skip(f"no route off this host to measure against: {control.stdout.strip()}")
+    out = tmp_path / "out"
+    jail = create_seatbelt_jail(
+        (sys.executable, "-I", "-c", _FROM_BRIDGE_PORT, *target),
+        egress=EgressPolicy(allow=(Destination("127.0.0.1", server_port),)),
+        stdio=Stdio(stdout=str(out), stderr="/dev/null"),
+    )
+    try:
+        attack = run_jail(jail, timeout_s=30)
+    finally:
+        destroy_jail(jail)
 
-    assert control == 0, "control: unjailed, a socket bound to that port connects anywhere"
-    assert attack == 7
+    said = out.read_text().strip() if out.exists() else "(nothing)"
+    assert attack != 0, f"a jailed socket bound to the bridge's port reached {_OFF_HOST}: {said}"
+    assert f"errno {errno.EADDRINUSE} " not in said, f"inconclusive, nothing measured: {said}"
+    print(f"jailed attempt: exit {attack}, {said}")
 
 
 def test_an_ungranted_destination_is_refused_by_the_proxy(server_port: int) -> None:

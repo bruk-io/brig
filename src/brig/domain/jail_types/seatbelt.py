@@ -51,7 +51,6 @@ _HEADER_LINES: tuple[str, ...] = (
     "(deny default)",
     "(allow process-exec process-fork sysctl-read)",
     "(allow signal (target same-sandbox))",
-    "(deny syscall-unix (syscall-number SYS_setsid SYS_setpgid))",
     '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))',
     '(allow file-read-data file-read-metadata (literal "/"))',
     (
@@ -69,10 +68,10 @@ and without it the system's own paths are readable only where the policy reads t
   (it also shows the jail every host process's argv, so `fs_read` is never `ENFORCED`).
 - Signals only to processes in this same sandbox: unfiltered, a jail killed a host process of
   the same user. The command can still signal its own children and its supervisor.
-- `setsid` and `setpgid` refused, so the command cannot leave the process group the supervisor
-  leads, which is what `destroy_jail` kills and `group_alive` watches: Darwin has no PID
-  namespace to take a process that left the group with it. Nor can the command become a session
-  leader and take a controlling terminal, the TIOCSTI route.
+- No refusal of `setsid` or `setpgid`: refusing the system calls held nothing, since
+  `posix_spawn` with `setpgroup` or `setsid` left the group anyway (measured). Teardown finds a
+  process that left the group by its sandbox instead (`compile_rules`' `member_mark`,
+  `infra.members`).
 - One Mach service, the directory lookups (`getpwuid` and the like, read-only); unfiltered,
   `mach-lookup` let a jail read the host's pasteboard, and every other service is a route out
   this compile cannot grade.
@@ -295,6 +294,7 @@ def compile_rules(
     channels: Reservations | None = None,
     egress_port: int | None = None,
     links: Mapping[str, tuple[str, ...]] = frozendict(),
+    member_mark: str | None = None,
 ) -> tuple[Rule, ...]:
     """Every rule a Seatbelt jail for `policy` needs, in profile order.
 
@@ -302,6 +302,11 @@ def compile_rules(
     `supervisor_script` and `channels.directory.host_path` (kind and `os.path.realpath`); a path
     it does not name reads as absent and unresolved. `links` is any symbolic-link chain for the
     roots. `refusal` in `domain/policy/paths.py` must have passed first.
+
+    `member_mark`, a file inside `state_dir` made for this jail alone, is allowed
+    `file-read-metadata` after the state directory's mask, and nothing else of the state
+    directory beside the jail's own files: what lets teardown ask the kernel which processes
+    carry this jail's profile, however they left its process group (`infra.members`).
     """
     kept = _kept(policy, host, state_dir)
     expanded = sorted(
@@ -346,6 +351,8 @@ def compile_rules(
     )
     for anc in state_ancestors:
         rules.append(Rule(RuleKind.METADATA_LITERAL, anc, state_dir))
+    if member_mark is not None:
+        rules.append(Rule(RuleKind.METADATA_LITERAL, member_mark, state_dir))
     for target in script_targets:
         rules.append(Rule(RuleKind.READABLE, target, supervisor_script))
     if channels is not None and channels.reservations:
@@ -451,7 +458,8 @@ SEATBELT_FS_READ_CLAIM = Claim(
         "the command reads only the policy's roots, and nothing a mask names. Best-effort on "
         "Darwin, whatever the policy: the jail lists the names at / and reads the metadata of "
         "every directory on the way to a root (dyld and path lookup need both), reads every host "
-        "process's arguments through sysctl, and looks up the host's users and groups; and a "
+        "process's arguments through sysctl, reads the hardware registry (I/O Kit's properties, "
+        "the machine's serial number among them), and looks up the host's users and groups; and a "
         "mask matches a path, so a host hard link or rename of a masked file inside a readable "
         "root shows it under another name"
     ),
@@ -550,7 +558,8 @@ def ceilings(
       writable one (`_beneath_writable`), else `ENFORCED`: Seatbelt refuses every write outside
       the writable roots in the kernel.
     - `fs_read` is always `BEST_EFFORT`: the header's measured needs (`/`'s names, ancestor
-      metadata, `sysctl-read`, the directory lookups) show the jail host data no policy names.
+      metadata, `sysctl-read`, the directory lookups) and the hardware registry, which Seatbelt
+      lets any process read, show the jail host data no policy names.
     - `network` is `ENFORCED` without `egress` (Seatbelt refuses every network operation outside
       the channel directory), `BEST_EFFORT` with it (`SEATBELT_NETWORK_EGRESS_CLAIM`'s gaps).
     - `channel_exclusivity` is `VIOLATED` when a writable path the jail shares with the host is

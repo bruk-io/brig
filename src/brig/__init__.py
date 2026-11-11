@@ -103,6 +103,7 @@ from brig.presentation.ports import (
     ChannelReady,
     ChannelRefused,
     EgressPort,
+    MembersPort,
 )
 from brig.presentation.report import render
 
@@ -157,6 +158,7 @@ __all__ = [
     "JailSpawnFailed",
     "JailTeardownFailed",
     "JailWaitTimedOut",
+    "MembersPort",
     "PlaceholdersFailed",
     "PolicyCwdOutsideRoots",
     "PolicyEgressCidr",

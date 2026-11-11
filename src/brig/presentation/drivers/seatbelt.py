@@ -80,6 +80,7 @@ from brig.presentation.jail import (
     PROCESSES,
     Jail,
     dismantle,
+    member_decoy,
     real_egress_port,
     real_supervisor_port,
     resolved_state_dir,
@@ -127,22 +128,56 @@ def _supervisor_path(state_dir: str) -> tuple[str, ...]:
     return (sys.executable, "-I", handle.name)
 
 
+def _write_new(path: Path, text: str) -> None:
+    """Write `text` to `path`, a new file private to the embedder's user, as the script is.
+
+    Raises:
+        OSError: the host refused the file or its write; a file made in part is removed.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+    except OSError:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def _write_member_files(script_path: Path, state_dir: str) -> Path:
+    """Make the jail's member mark, `script_path.with_suffix(".mark")`, and its decoy beside it
+    (`member_decoy`), both empty: `sandbox_check` answers only for a path that exists, so
+    teardown can find the jail's processes by them (`infra.members`). On failure the script and
+    whatever was made are removed.
+
+    Raises:
+        StateDirectoryWriteFailed: the host refused either file.
+    """
+    mark = script_path.with_suffix(".mark")
+    try:
+        _write_new(mark, "")
+        _write_new(member_decoy(mark), "")
+    except OSError as error:
+        mark.unlink(missing_ok=True)
+        script_path.unlink(missing_ok=True)
+        raise StateDirectoryWriteFailed(state_dir) from error
+    return mark
+
+
 def _write_profile(script_path: Path, profile_text: str, state_dir: str) -> Path:
-    """Write `profile_text` to `script_path.with_suffix(".sb")`, a new file private to the
-    embedder's user as the script is, removing both files on failure.
+    """Write `profile_text` to `script_path.with_suffix(".sb")`, removing it, the script and the
+    member files on failure.
 
     Raises:
         StateDirectoryWriteFailed: the host refused the profile file or its write.
     """
     profile_path = script_path.with_suffix(".sb")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
-        descriptor = os.open(profile_path, flags, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(profile_text)
+        _write_new(profile_path, profile_text)
     except OSError as error:
-        profile_path.unlink(missing_ok=True)
-        script_path.unlink(missing_ok=True)
+        mark = script_path.with_suffix(".mark")
+        for made in (mark, member_decoy(mark), script_path):
+            made.unlink(missing_ok=True)
         raise StateDirectoryWriteFailed(state_dir) from error
     return profile_path
 
@@ -216,14 +251,17 @@ def _supervisors_for(
     cwd: str | None = None,
     stdio: Stdio = INHERIT,
     bridge: link.Bridge | None = None,
-) -> tuple[SupervisorPort, EgressPort | None, Path, tuple[seatbelt.Rule, ...], tuple[str, ...]]:
+) -> tuple[
+    SupervisorPort, EgressPort | None, Path, tuple[seatbelt.Rule, ...], tuple[str, ...], Path
+]:
     """Refuse or compile `policy` for one Seatbelt jail, and return its `SupervisorPort`, the
     `EgressPort` (`None` without `bridge`), the supervisor script path, its compiled `Rule`s,
-    and the paths it holds placeholders for. Nothing is written before every refusal has passed.
-    Beside what is listed below, `PolicyPathUninspectable` from `_facts` and `_link_chain`,
-    `SupervisorSourceUnreadable` from `_supervisor_path`, and `StateDirectoryWriteFailed` from
-    `_supervisor_path` and `_write_profile` (the host refused the supervisor script or the SBPL
-    profile) propagate.
+    the paths it holds placeholders for, and its member mark (`_write_member_files`). Nothing
+    is written before every refusal has passed. Beside what is listed below,
+    `PolicyPathUninspectable` from `_facts` and `_link_chain`, `SupervisorSourceUnreadable` from
+    `_supervisor_path`, and `StateDirectoryWriteFailed` from `_supervisor_path`,
+    `_write_member_files` and `_write_profile` (the host refused the supervisor script, the
+    member files or the SBPL profile) propagate.
 
     Raises:
         PolicyPathNotAbsolute: a path in `policy` is not absolute and normalised.
@@ -318,6 +356,7 @@ def _supervisors_for(
     except BaseException:
         script_file.unlink(missing_ok=True)
         raise
+    member_mark = _write_member_files(script_file, state_dir)
     rules = seatbelt.compile_rules(
         policy,
         host,
@@ -326,6 +365,7 @@ def _supervisors_for(
         channels=channels,
         egress_port=None if bridge is None else bridge.port,
         links=links,
+        member_mark=str(member_mark),
     )
     profile_path = _write_profile(script_file, seatbelt.render_profile(rules), state_dir)
     supervisor_argv = seatbelt.compile_supervisor_launch(supervisor_path, str(profile_path), cwd)
@@ -341,7 +381,7 @@ def _supervisors_for(
             and rule.source in held
         )
     )
-    return port, egress_port, script_file, rules, placeholders
+    return port, egress_port, script_file, rules, placeholders, member_mark
 
 
 def create_seatbelt_jail(
@@ -394,11 +434,17 @@ def create_seatbelt_jail(
         supervisor_script: Path | None = None
         rules: tuple[seatbelt.Rule, ...] = ()
         absent: tuple[str, ...] = ()
+        member_mark: Path | None = None
     else:
         bridge = None if egress is None else _bridge(egress, egress_hosts, egress_limits)
-        resolved_supervisors, egress_port, supervisor_script, rules, absent = _supervisors_for(
-            policy, channels, cwd, stdio, bridge
-        )
+        (
+            resolved_supervisors,
+            egress_port,
+            supervisor_script,
+            rules,
+            absent,
+            member_mark,
+        ) = _supervisors_for(policy, channels, cwd, stdio, bridge)
     channel_directory = (
         Path(channels.directory.host_path)
         if channels is not None and channels.reservations
@@ -453,6 +499,7 @@ def create_seatbelt_jail(
             channel_namespace_fd=namespace_fd,
             channel_directory_fd=directory_fd,
             placeholder_record=record,
+            member_mark=member_mark,
         )
         if dismantled.ladder_error is not None:
             error.add_note(f"tearing the jail down after this raised {dismantled.ladder_error!r}")
@@ -470,6 +517,7 @@ def create_seatbelt_jail(
         channel_directory_fd=directory_fd,
         rules=rules,
         placeholders=record,
+        member_mark=member_mark,
         report=(
             seatbelt.ceilings(rules, channels, egress=egress is not None) if rules else frozendict()
         ),
