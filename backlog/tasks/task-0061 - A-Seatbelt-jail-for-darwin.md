@@ -4,12 +4,24 @@ title: A Seatbelt jail for darwin
 status: In Progress
 assignee: []
 created_date: '2026-11-10 17:16'
-updated_date: '2026-11-11 15:29'
+updated_date: '2026-11-11 15:32'
 labels:
   - darwin
   - security
   - size-8
 dependencies: []
+modified_files:
+  - src/brig/domain/jail_types/seatbelt.py
+  - src/brig/presentation/drivers/seatbelt.py
+  - src/brig/presentation/jail.py
+  - src/brig/__init__.py
+  - src/brig/infra/supervisor/program.py
+  - src/brig/infra/sockets.py
+  - src/brig/infra/placeholders.py
+  - src/brig/infra/proxy/launch.py
+  - src/brig/infra/proxy/program.py
+  - src/brig/infra/supervisor/link.py
+  - docs/spec/index.md
 type: task
 ordinal: 56000
 ---
@@ -29,25 +41,37 @@ From bh-02's port onto bruk-io/brig v0.1.0: this brig has no darwin jail, so bh-
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Taken over 2026-11-11 from an agent that ran out of quota. Everything inherited (decision-0010, infra Darwin support, the uncommitted seatbelt jail type and driver) is treated as unreviewed; claims are re-measured on this Mac (macOS 27.0.1, /usr/bin/sandbox-exec).
+Taken over 2026-11-11 from an agent that ran out of quota. Everything inherited (decision-0010, infra Darwin support, the uncommitted seatbelt jail type and driver) is treated as unreviewed; its claims are re-measured on this Mac (macOS 27.0.1, /usr/bin/sandbox-exec, CPython 3.15.0).
 
-Measured before planning (scratch probes, to be pinned by e2e tests):
-- The profile does not import system.sb, and Python, sh and git start without it; /etc/passwd and /usr/lib/dyld are then unreadable. decision-0010's reason for fs_read BEST_EFFORT (system.sb's grants) is false; the real reasons are the listing of / and ancestor metadata.
-- Unfiltered (allow signal) lets a jail SIGTERM any host process of the user (killed a host sleep). (allow signal (target same-sandbox)) refuses it and still lets a jail signal its own children.
-- Unfiltered (allow mach-lookup) lets a jail read the host pasteboard (pbpaste). With mach-lookup limited to com.apple.system.opendirectoryd.libinfo, pbpaste is refused and pwd/grp/whoami/git/ssl/subprocess still work.
-- (deny syscall-unix (syscall-number SYS_setsid SYS_setpgid)) refuses both, so a command cannot leave the jail's process group and outlive destroy_jail's group kill.
-- LOCAL_PEERTOKEN (0x006, 32 bytes) layout verified against a forked listener: pid at [5], pidversion at [7] equals proc_pidinfo's p_idversion; pbi_pgid equals os.getpgid.
-- PT_DENY_ATTACH: a child calling ptrace(PT_ATTACHEXC, ppid) is killed with SIGSEGV; without it, attach and task_for_pid already fail (EPERM, KERN_FAILURE).
-- Unix sockets: bind and connect allowed in the channel directory with a subpath-filtered network-bind; connect to a host socket in a readable root and bind outside are EPERM; TCP, UDP and DNS are refused.
-- (remote tcp "localhost:P") also matches [::1]:P and the LAN address at P, not other ports.
+Measured before planning (scratch probes, then pinned by e2e tests):
+- The profile does not import system.sb, and Python, sh and git start without it; /etc/passwd and /usr/lib/dyld are then unreadable. decision-0010's reason for fs_read BEST_EFFORT (system.sb's grants) is false.
+- Unfiltered (allow signal) let a jail kill a host process of the user; (target same-sandbox) refuses it and still lets a jail signal its own children.
+- Unfiltered (allow mach-lookup) let a jail read the host pasteboard; with only com.apple.system.opendirectoryd.libinfo it is refused and pwd, grp, whoami, git, ssl and subprocess still work.
+- (deny syscall-unix (syscall-number SYS_setsid SYS_setpgid)) refuses both, so a command cannot leave the group destroy_jail kills.
+- LOCAL_PEERTOKEN (0x006, 32 bytes): pid at [5], pidversion at [7] equal proc_pidinfo's; pbi_pgid equals os.getpgid.
+- PT_DENY_ATTACH: an attaching child is killed with SIGSEGV; without it attach and task_for_pid already fail.
+- Unix sockets: bind and connect allowed in the channel directory under a subpath-filtered network-bind; a host socket in a readable root, a bind outside, TCP, UDP and DNS refused.
+- (remote tcp "localhost:P") also matches [::1]:P and the LAN address at P.
 
-Steps:
-1. Domain (seatbelt.py): narrow the header (signal same-sandbox, mach-lookup libinfo only, deny setsid/setpgid, /dev and ioctl narrowed as far as startup allows, / metadata only if startup allows); _render_atom private; claims' text corrected to the measured reasons.
-2. Egress on a shared network stack: per-jail bridge port chosen on the host (fails closed if taken), and on darwin the supervisor's [::1] bind is required rather than best-effort, since the profile's localhost filter reaches [::1].
-3. Presentation: export create_seatbelt_jail and the seatbelt claims from brig; lint fix for the Raises section.
-4. Tests: unit (compile order, render, escaping, ceilings), integration (driver with fakes where bwrap has them), e2e on darwin with an unjailed control beside every attack: write outside the project, network egress, masked secret read, another jail's channel, host process signal, pasteboard, setsid escape, pin rename, channel readiness with a verified peer, interrupt and destroy, report battery held with at_most.
-5. Correct decision-0010's unmeasured or false claims; update docs/spec where it repeats them.
-6. uv run just done and uv run just test-e2e green on this Mac; report in implementation notes and .gemini-report.md.
+### Order of work
+1. Domain (src/brig/domain/jail_types/seatbelt.py): narrow the header to the measured lines; fix the egress rule (no outbound under a local filter); _render_atom and the shared-path helpers private; claims' text and ceilings' docstring to the measured reasons.
+2. Infra (src/brig/infra/supervisor/program.py): on darwin the supervisor's [::1] bridge bind is required, since the profile's localhost filter reaches [::1].
+3. Presentation (src/brig/presentation/drivers/seatbelt.py, src/brig/presentation/jail.py, src/brig/__init__.py): lint fix for the Raises section; the profile written owner-only; export create_seatbelt_jail and the SEATBELT_* claims.
+4. Tests: unit (tests/unit/test_seatbelt_compile.py, test_seatbelt_ceilings.py), integration (tests/integration/test_seatbelt_create.py), e2e on darwin (tests/e2e/test_seatbelt_journey.py, test_seatbelt_battery.py, test_seatbelt_channels.py, test_seatbelt_egress.py, test_seatbelt_supervisor.py), each attack beside an unjailed control, each report held with at_most.
+5. Correct decision-0010's unmeasured or false claims and docs/spec/index.md where it repeats them.
+6. uv run just done and uv run just test-e2e on this Mac; report in implementation notes and .gemini-report.md.
+
+Changed from the first version of this plan: a per-jail bridge port was planned for step 2 and not built. It is a design change on a shared stack; the fixed port's limits are recorded in decision-0010 and the notes as open, for Bruk.
+
+### Risks
+- A header line narrowed too far breaks programs beyond CPython, sh and git (larger tools may need more Mach services or /dev nodes); each addition needs its own measurement.
+- Refusing setsid and setpgid breaks commands that daemonise; chosen for teardown completeness, flagged for Bruk.
+- Linux CI is not run from here: the only shared change for Linux is guarded by sys.platform == "darwin", and the new integration tests start nothing.
+- Egress on the host's shared stack stays BEST_EFFORT: one egress jail per host on port 3128, and SBPL's localhost matches every local address.
+
+### Proof
+- Every header narrowing, the egress rule, the pins, the masks, the peer group check, PT_DENY_ATTACH and the profile cleanup is mutation-checked: putting each weakness back fails its test.
+- uv run just done exits 0 and uv run just test-e2e exits 0 on this Mac, with no seatbelt test skipped.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
