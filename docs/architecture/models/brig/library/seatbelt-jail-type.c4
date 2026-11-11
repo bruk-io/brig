@@ -1,12 +1,9 @@
-// Component: domain/jail_types/seatbelt.py -- planned, not built
-// (decision-0001: bwrap first, Seatbelt next; TASK-0001 criterion #4 waits
-// for a Mac run).
+// Component: domain/jail_types/seatbelt.py (decision-0001 rule 3, decision-0010).
 model {
   extend brig.library {
     seatbeltJailType = component 'Seatbelt Jail Type' {
-      #planned
       technology 'Python 3.15'
-      description 'Seatbelt\'s slice of the domain: would compile the same FsPolicy into a sandbox profile, one subpath or literal rule per intent with the more specific rule last (decision-0007 item 6), rendered from a t-string template that refuses a plain str (rule 16). Planned, not built. No I/O itself.'
+      description 'Seatbelt\'s slice of the domain: compiles an FsPolicy into one ordered tuple of SBPL rules and renders the sandbox profile from a t-string template that refuses a plain str (decision-0001 rule 16, decision-0010), builds the sandbox-exec supervisor launch argv and the Plan it runs, and states each claim\'s ceiling on Darwin. No I/O itself.'
     }
   }
 }

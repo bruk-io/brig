@@ -165,7 +165,7 @@ def _open_through_no_link(path: str, flags: int) -> int:
     if path == "/dev/null":
         return os.open(path, flags | os.O_CLOEXEC)
     parts = [part for part in path.split("/") if part]
-    walk = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    walk = getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     current = os.open("/", walk)
     try:
         for part in parts[:-1]:

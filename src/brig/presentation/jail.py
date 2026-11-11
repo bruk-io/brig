@@ -17,7 +17,7 @@ from brig.domain import operations
 from brig.domain.claims import Claim
 from brig.domain.effects import ExitCodeUnknown, ExitOutcome, GroupState, Process
 from brig.domain.grades import Grade
-from brig.domain.jail_types import bwrap
+from brig.domain.jail_types import bwrap, seatbelt
 from brig.domain.policy.egress import (
     Destination,
     EgressChangeKind,
@@ -27,6 +27,7 @@ from brig.domain.policy.egress import (
 )
 from brig.domain.policy.egress_record import EgressChange, EgressDecision, EgressRecord
 from brig.infra import log as _log
+from brig.infra import members as _members
 from brig.infra import placeholders as _placeholders
 from brig.infra import sockets as _sockets
 from brig.infra import state_dir as _state_dir_mod
@@ -53,6 +54,7 @@ from brig.presentation.ports import (
     ChannelReady,
     ChannelRefused,
     EgressPort,
+    MembersPort,
     PlaceholderPort,
     ProcessPort,
     SupervisorPort,
@@ -284,6 +286,40 @@ PLACEHOLDERS: PlaceholderPort = _RealPlaceholders()
 
 
 @dataclass(frozen=True)
+class _RealMembers:
+    """`MembersPort` onto infra's `members`."""
+
+    kill: Callable[[str, str, float], bool] = _members.freeze_and_kill
+    includes: Callable[[str, str, int], bool] = _members.is_member
+    reap: Callable[[str, float], None] = _members.reap_kept
+
+
+MEMBERS: MembersPort = _RealMembers()
+
+
+def _members_found(
+    process: Process, mark: Path, *, members: MembersPort, processes: ProcessPort
+) -> bool:
+    """The canary of a Seatbelt jail's teardown (decision-0010 item 2): whether `members` finds
+    `process`, the jail's own supervisor, carrying the profile `mark` names, while it is known
+    to be running. `True` when it is found, and when it is not running before or after the
+    question (a process that has exited reads as refused, so then nothing was learned); `False`
+    only when it ran throughout and was not found: `sandbox_check` is answering otherwise than
+    measured, and a sweep that found nothing would mean nothing."""
+    if processes.peek(process.pid) is not None:
+        return True
+    found = members.includes(str(mark), str(member_decoy(mark)), process.pid)
+    return found or processes.peek(process.pid) is not None
+
+
+def member_decoy(mark: Path) -> Path:
+    """The decoy beside a Seatbelt jail's member `mark`: a file its profile refuses, as every
+    file of the state directory but the jail's own, so a broader sandbox that allows the mark
+    is told apart (`infra.members`)."""
+    return mark.with_suffix(".decoy")
+
+
+@dataclass(frozen=True)
 class Jail:
     """A bwrap jail an embedder created.
 
@@ -298,7 +334,9 @@ class Jail:
     was made and held for the jail's lifetime, beneath which readiness opens each channel's name
     (TASK-0045); `None` with no channel. `mounts` is what the jail was compiled with and
     `report` its ceiling per claim (decision-0008). `egress` is the port to the jail's egress
-    proxy (decision-0009 items 5 and 6), `None` for a jail with none.
+    proxy (decision-0009 items 5 and 6), `None` for a jail with none. `member_mark` is a Seatbelt
+    jail's mark (with its decoy beside it, `member_decoy`), which `destroy_jail` finds every
+    process of the jail by and removes once none is left; `None` for any other jail.
     """
 
     process: Process
@@ -308,9 +346,11 @@ class Jail:
     channel_namespace_fd: int | None = None
     channel_directory_fd: int | None = None
     mounts: tuple[bwrap.Mount, ...] = ()
+    rules: tuple[seatbelt.Rule, ...] = ()
     placeholders: str | None = None
     report: frozendict[Claim, Grade] = frozendict()
     egress: EgressPort | None = None
+    member_mark: Path | None = None
 
 
 def _close_fd(fd: int) -> None:
@@ -331,6 +371,8 @@ class _Dismantled:
     state: GroupState
     ladder_error: Exception | None = None
     close_error: Exception | None = None
+    members_left: bool = False
+    members_unverified: bool = False
 
 
 def dismantle(
@@ -346,6 +388,8 @@ def dismantle(
     channel_namespace_fd: int | None = None,
     channel_directory_fd: int | None = None,
     placeholder_record: str | None = None,
+    member_mark: Path | None = None,
+    members: MembersPort = MEMBERS,
 ) -> _Dismantled:
     """Tear down what a jail made, and return what teardown found: the one cleanup `destroy_jail`
     and a failed `create_bwrap_jail` both run, so the two cannot disagree (TASK-0044).
@@ -361,6 +405,16 @@ def dismantle(
     mounts over detaches that mount (TASK-0027), so a record a live jail holds is left for a
     later sweep.
 
+    With `member_mark` (a Seatbelt jail), before the ladder, `members` ends every process that
+    carries the jail's profile, however it left the group: it freezes the jail from inside and
+    kills it, within `kill_grace_s` (decision-0010 item 2). One left makes the state `ALIVE` and
+    `members_left` true, with the group itself verified by the ladder that follows as ever.
+    First the canary (`_members_found`): a supervisor still running that `members` does not find
+    makes the state `ALIVE` and `members_unverified` true, whatever the sweep then says. The
+    mark and its decoy are removed only once the state is `GONE`, since a process that carries
+    the profile is found by them and by nothing else; a kept mark is swept again by `members`'
+    `reap` before a later Seatbelt jail is made or destroyed.
+
     Raises nothing, so it never hides the error of a failed step that called it (TASK-0046): an
     exception from the ladder makes the state `ALIVE` (the group was not verified gone), and it
     and one from the close are returned on the `_Dismantled`, the rest of the cleanup still run.
@@ -372,13 +426,29 @@ def dismantle(
     state = GroupState.GONE
     ladder_error: Exception | None = None
     close_error: Exception | None = None
+    members_left = False
+    members_unverified = False
     if process is not None:
+        if member_mark is not None:
+            members_unverified = not _members_found(
+                process, member_mark, members=members, processes=processes
+            )
+            sweep_deadline = time.monotonic() + kill_grace_s
+            try:
+                members_left = not members.kill(
+                    str(member_mark), str(member_decoy(member_mark)), sweep_deadline
+                )
+            except Exception as error:
+                members_left = True
+                ladder_error = error
         deadline = time.monotonic() + kill_grace_s
         try:
             state = run(operations.destroy(process, deadline=deadline), processes, supervisors)
         except Exception as error:
             state = GroupState.ALIVE
-            ladder_error = error
+            ladder_error = ladder_error or error
+        if members_left or members_unverified:
+            state = GroupState.ALIVE
         try:
             supervisors.close(process.pid)
         except Exception as error:
@@ -386,6 +456,10 @@ def dismantle(
     if supervisor_script is not None:
         try:
             supervisor_script.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            supervisor_script.with_suffix(".sb").unlink(missing_ok=True)
         except OSError:
             pass
     if channel_directory is not None:
@@ -396,9 +470,15 @@ def dismantle(
     for fd in (channel_namespace_fd, channel_directory_fd):
         if fd is not None:
             _close_fd(fd)
+    if state is GroupState.GONE and member_mark is not None:
+        for made in (member_mark, member_decoy(member_mark)):
+            try:
+                made.unlink(missing_ok=True)
+            except OSError:
+                pass
     if state is GroupState.GONE and placeholder_record is not None:
         try:
             placeholders.release(placeholder_record)
         except OSError:
             pass  # left for the next jail's release to sweep
-    return _Dismantled(state, ladder_error, close_error)
+    return _Dismantled(state, ladder_error, close_error, members_left, members_unverified)

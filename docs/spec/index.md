@@ -29,9 +29,10 @@ future contribution; a change that violates one is a SPEC change first, code sec
    (a grant to a running jail is checked as a created policy is), the refusal cases in
    `tests/e2e/test_fs_policy_battery.py` and `tests/e2e/test_cwd_stdio_battery.py`.
 3. **The policy is constant; only delivery varies.** An `FsPolicy` states intent (roots, denies,
-   masks), and each jail type compiles the same value its own way (decision-0007); what varies per
-   jail type is the grade each claim earns. *Held by* `tests/unit/test_fs_policy_compile.py` for
-   bwrap; not yet tested across jail types, since Seatbelt is not built.
+   masks), and each jail type compiles the same value its own way (decision-0007, decision-0010);
+   what varies per jail type is the grade each claim earns. *Held by*
+   `tests/unit/test_fs_policy_compile.py` for bwrap and `tests/unit/test_seatbelt_compile.py` for
+   Seatbelt.
 4. **Observation is read-only or it is not observation.** Anything that can inject into the jail is
    a channel, declared and reserved (`reserve_channels`), subject to policy. brig has no
    observation surface today; this binds any that is added. *Held by* nothing yet beyond the
@@ -41,15 +42,19 @@ future contribution; a change that violates one is a SPEC change first, code sec
    embedder's policy applies. brig carries no messages itself, so this binds embedders' channels
    and any relay brig adds (the egress proxy). *Held by* nothing in brig yet.
 6. **Provenance is stamped by the deliverer.** What the host believes about a jail comes from code
-   the command cannot reach: the supervisor's events are written by a PID 1 the command can
-   neither reopen nor ptrace (decision-0006), never by the command's own claim. *Held by*
-   `tests/e2e/test_supervisor_isolation_battery.py`.
+   the command cannot reach: the supervisor's events are written by a root supervisor process the
+   command can neither reopen nor ptrace (`PR_SET_DUMPABLE=0` and `--cap-drop ALL` in an unshared
+   PID namespace on Linux, decision-0006; `ptrace(PT_DENY_ATTACH)` and no `/proc/<pid>/fd` on
+   Darwin, decision-0010), never by the command's own claim. *Held by*
+   `tests/e2e/test_supervisor_isolation_battery.py` and `tests/e2e/test_seatbelt_supervisor.py`
+   (on Darwin the command can still signal its supervisor, which leaves the exit code unknown,
+   never forged).
 7. **Control must not require cooperation.** Interrupt and teardown work when the command is
    spinning, wedged or hostile: `interrupt_jail` signals through the supervisor and loses nothing
    while the jail comes up: the command receives it. What the command does with it is its own: a
    command that handles SIGINT can ignore it, and a Python command can swallow one that arrives
-   during its own startup ("Exception ignored ... KeyboardInterrupt", TASK-0053); `destroy_jail` ends the jail's whole PID namespace and verifies it is
-   gone. A `create_bwrap_jail` that fails once its supervisor has started tears it down the same
+   during its own startup ("Exception ignored ... KeyboardInterrupt", TASK-0053); `destroy_jail` ends the jail's whole process group / PID namespace (and, for a Seatbelt jail, every process that carries its profile, however it left the group: decision-0010 item 2) and verifies it is
+   gone. A `create_bwrap_jail` or `create_seatbelt_jail` that fails once its supervisor has started tears it down the same
    way, through the one cleanup `destroy_jail` runs, and the embedder never gets a running jail
    it has no `Jail` for (TASK-0044); so is a supervisor whose start failed after its spawn, which
    the start hands back on its `JailSpawnFailed` (TASK-0046). In both, the placeholders are
@@ -208,6 +213,39 @@ carry the network: `VIOLATED` for a visible `SOCKET_DIRECTORIES` place, `BEST_EF
 jail sees any root; a writable shared root alone carries files, not a route out, and does not
 lower it.
 
+`jail_types/seatbelt.py` is Seatbelt's slice on Darwin (decision-0010, TASK-0061): `compile_run`
+makes the plan (with `egress_port`, setting the same proxy variables at `EGRESS_BRIDGE_PORT` on
+loopback), and `compile_rules` turns the `FsPolicy`, `state_dir`, `supervisor_script`, the channel
+directory and `egress_port` into one ordered tuple of rules: shallowest first, at both a path and
+where it resolves when a link such as `/var -> /private/var` differs; `file-read-metadata` on each
+root's ancestors; `allow file-read*` on readable roots (and `deny file-write*` on one nested in a
+writable root); `allow file-read* file-write*` on writable roots; `deny file-write*` on write
+denies and `deny file-read* file-write*` on masks; `deny file-write-unlink` pins on every writable
+root but `/` and every directory between a writable root and a carve-out (old SPEC decisions 207
+and 208); then brig's state directory masked, this jail's supervisor script readable, its
+channel directory writable and its one place for Unix sockets, and with egress the bridge port.
+`render_profile` renders them after a fixed header, each line of it measured: deny by default;
+signals only within the jail's own sandbox; one Mach service, the directory lookups; read on `/` itself, which
+`dyld` needs; `/dev`'s null, zero and random devices and the process's own descriptors only. No
+`(import "system.sb")`, and no system call refused by number. With `member_mark`, the profile
+allows the jail's own mark file in the state directory, by which `destroy_jail` finds every
+process that carries the profile however it left the jail's process group, freezes the jail
+from inside through the freezer its supervisor starts, and kills it (decision-0010 item 2,
+`infra/members.py`). Every rule is rendered through a Python 3.15 template string
+(`string.templatelib.Template`, decision-0001 rule 16), escaping `\` and `"` and refusing a NUL
+byte. `ceilings` states Seatbelt's grade ceilings per claim (decision-0010 item 4): `fs_write` is
+`ENFORCED` when no non-writable subpath lies beneath a writable root and `BEST_EFFORT` when one
+does (Seatbelt judges a path, so the host renaming or linking an entry on the way moves what lies
+beneath it); `fs_read` is always `BEST_EFFORT` (the jail lists `/`, reads its roots' ancestors'
+metadata, host processes' arguments and the hardware registry, and looks up users and groups; and a mask follows a path,
+not a file); `env` is `ENFORCED`; `channel_exclusivity` is `VIOLATED` when an undeclared writable
+path is shared with the host and `ENFORCED` otherwise (Seatbelt refuses a dial of a host Unix
+socket inside a readable root, a signal outside the jail, and every Mach service but the
+directory lookups); `network` without `EgressPolicy` is `ENFORCED`, and with one
+(`SEATBELT_NETWORK_EGRESS_CLAIM`) is `BEST_EFFORT` (SBPL's `localhost` matches every local
+address, so a host service at the bridge port on a LAN address is reachable past the proxy, and
+the command can listen at that port on the wildcard address).
+
 Where the domain and the world alternate, the exchange is a value too. `effects.py` names the
 closed set a generator may yield: start the supervised command, await the supervisor's report,
 signal a process group, verify it, release a pid. `operations.py` (create, start, destroy) and
@@ -216,7 +254,7 @@ its result sent back in. The teardown ladder verifies, sends TERM, verifies, sen
 polls until gone or a deadline passes; every verify only peeks the leader, and the last step
 releases its pid (decision-0003).
 
-Not yet built: `facts.py`, `records.py`, `identity.py`, and the Seatbelt jail type. (decision-0001's
+Not yet built: `facts.py`, `records.py`, and `identity.py`. (decision-0001's
 layout put the egress decision at `domain/egress.py`; it is `policy/egress.py`, beside the other
 policies an embedder states.)
 
@@ -233,25 +271,45 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   and a file's link count.
 - `state_dir.py`: brig's state directory (`BRIG_HOME`, else `~/.brig`) and its empty read-only
   directory.
-- `placeholders.py`: the directories made on the host for bwrap to mount over at absent paths,
-  recorded per jail and removed once no live jail mounts over them (TASK-0027). A teardown sweeps
-  every finished jail's directories together, deepest first, and one it cannot remove yet (not
-  empty) stays in a record for a later sweep (TASK-0001.32).
+- `members.py`: on Darwin, every process of the user that carries a Seatbelt jail's profile,
+  found by what `sandbox_check` says the profile decides for the jail's mark and decoy; frozen
+  from inside by the jail's freezer (`kill(-1, SIGSTOP)`, repeated until two scans find every
+  member stopped) and then killed; kept marks of failed teardowns swept again later; and the
+  canary that the jail's running supervisor is found (decision-0010 item 2). A command that
+  kills its freezer and then forks in a loop forever can outlive teardown, which then raises
+  `JailTeardownFailed` naming a process that left the group, never claiming the jail gone.
+  A failed teardown leaves the jail's freezer and its runaway process alive until the next
+  `create_seatbelt_jail` or `destroy_jail` sweeps the kept mark. No scan is acted on unless the
+  mark and its decoy are both regular files, before and after it: `sandbox_check` reads a
+  missing decoy as refused, which would make every sandboxed process that may read the mark a
+  member; a kept mark whose decoy is gone is skipped and left in place.
+- `placeholders.py`: the directories made on the host for bwrap to mount over or Seatbelt to pin
+  at absent paths, recorded per jail (tagged with the `user.brig.placeholder` extended attribute
+  and verified against process start time via `/proc/<pid>/stat` on Linux or
+  `proc_pidinfo(PROC_PIDTBSDINFO)` on Darwin) and removed once no live jail holds them
+  (TASK-0027, decision-0010). A teardown sweeps every finished jail's directories together,
+  deepest first, and one it cannot remove yet (not empty) stays in a record for a later sweep
+  (TASK-0001.32).
 - `sockets.py`: the channel directory's creation, the fd held on it, and its removal, finding
-  and holding the jail's PID namespace, the verified connect that says a channel is ready
-  (decision-0005), and signalling the jail's PID 1. A ready connect is handed back open, the one
-  connection the check vouches for; a refusal, a failed connect and the one raise each close
-  theirs (TASK-0001.34). The connect never follows a path the jail can change and never blocks
-  (TASK-0045): the channel's name is opened beneath the held directory fd with
-  `O_PATH | O_NOFOLLOW`, a symbolic link there is refused before any connect, anything else but
-  a socket is not ready, and the socket is dialled through `/proc/self/fd/N` without blocking,
-  so a full backlog is not ready at once.
+  and holding the jail's PID namespace (or process-group identity fd on Darwin), the verified
+  connect that says a channel is ready (decision-0005, decision-0010), and signalling the jail's
+  PID 1. A ready connect is handed back open, the one connection the check vouches for; a refusal,
+  a failed connect and the one raise each close theirs (TASK-0001.34). The connect never follows a
+  path the jail can change and never blocks (TASK-0045): on Linux the channel's name is opened
+  beneath the held directory fd with `O_PATH | O_NOFOLLOW` and dialled through `/proc/self/fd/N`,
+  verified via `SO_PEERCRED` and `/proc/<pid>/ns/pid`; on Darwin the held directory fd's path is
+  resolved via `fcntl(F_GETPATH)`, the entry is statted beneath `directory_fd` with
+  `follow_symlinks=False` before and after connecting, and the peer is verified via
+  `getsockopt(SOL_LOCAL, LOCAL_PEERTOKEN)` (`audit_token_t` with `euid`, `pid`, `pidversion`) plus
+  `proc_pidinfo` (`PROC_PIDTBSDINFO` and `PROC_PIDUNIQIDENTIFIERINFO`) matching `p_idversion` and
+  `pbi_pgid` against the jail's process group.
 - `supervisor/` and `proxy/`, the jail's one route out (decision-0009 items 1 and 2,
   TASK-0001.36). With an egress policy, the supervisor's exec request names a bridge port: before
   the command starts it listens on `127.0.0.1:<port>` in the jail's own network namespace (and
   `[::1]` where the namespace has IPv6), and once the command runs it accepts on daemon threads.
   For each connection it makes a socketpair, sends one end to the egress proxy with
-  `SCM_RIGHTS` over `wire.BRIDGE_FD` (5, its end of a `SOCK_SEQPACKET` pair it inherited), and
+  `SCM_RIGHTS` over `wire.BRIDGE_FD` (5, its end of a `SOCK_SEQPACKET` pair on Linux, or
+  `SOCK_STREAM` on Darwin where `AF_UNIX` `SOCK_SEQPACKET` is unsupported), and
   copies bytes between the other end and the connection, reading nothing of them. fd 5 is closed
   in the command like 3 and 4, and the supervisor stays non-dumpable, so the command reaches the
   proxy only through the port. No path is involved, so nothing in the jail's view names the
@@ -273,7 +331,7 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   the proxy and connection headers dropped, `Connection: close`). It asks `decide_egress` with
   no addresses first, resolves a name itself only on `Resolve` (through the host's resolver, or
   the embedder's table), asks again with the addresses and the host's own (`/proc/net/if_inet6`
-  and the local table of `/proc/net/fib_trie`, read per decision), and connects only to
+  and the local table of `/proc/net/fib_trie` on Linux, or `getifaddrs` on Darwin, read per decision), and connects only to
   `Allowed.addresses`. A refusal is `403` with the body `brig: egress denied by policy:
   host:port`, or SOCKS reply `0x02`. A name that resolved to nothing is `502` or `0x04`, a
   failed connect `502` or `0x05`, and an unreadable request `400` or `0x01`. The SOCKS reply's
@@ -337,7 +395,8 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   `brig-standalone-programs` gate), and the proxy's file carries it as a module of its own, so
   the proxy writes exactly the envelope the library reads. The supervisor's wire is its own
   protocol, not a log, and writes no envelope line yet.
-- `supervisor/`: the jail's PID 1 (decision-0002). `wire.py` and `program.py` assemble
+- `supervisor/`: the jail's PID 1 on Linux and root supervisor process on Darwin (decision-0002,
+  decision-0010). `wire.py` and `program.py` assemble
   (`assemble.py`) into one stdlib-only file that refuses an interpreter older than 3.15;
   `link.py` is the host's end, starting it and reading its events; a start that fails after
   the spawn hands back the spawned supervisor, unsignalled and unreaped, for the caller's verified
@@ -348,10 +407,11 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   feeding stdin and pumps what the command wrote until end of file, for at most a bounded drain.
   A pump blocked on the embedder's own stream (a pipe nobody reads) is left behind, not waited
   for. The supervised command is its
-  child, under the same uid, so the supervisor makes itself non-dumpable before the command
+  child, under the same uid, so the supervisor makes itself non-dumpable (`PR_SET_DUMPABLE=0` on
+  Linux; `ptrace(PT_DENY_ATTACH, 0, 0, 0)` on Darwin) before the command
   exists, and the bwrap compile drops every capability (`--cap-drop ALL`): the command can
-  neither reopen the supervisor's fds through `/proc/1` nor ptrace it, so the exit code the host
-  reports is the one `waitpid(2)` gave (decision-0006).
+  neither reopen the supervisor's fds through `/proc/1` (absent on Darwin) nor ptrace it, so the
+  exit code the host reports is the one `waitpid(2)` gave (decision-0006, decision-0010).
 
 Not yet built: `tether.py` and `sandbox_exec.py`.
 
@@ -364,9 +424,11 @@ port speaks domain's values or its own, never infra's: `jail.py`'s real wiring t
 infra's sentinels on the way in. `driver.py` performs a generator's effects through the ports,
 for every jail type.
 
-Each jail type's own presentation is its slice (decision-0007 item 5): `drivers/bwrap.py`
-refuses and compiles the policy, writes the supervisor script, starts the jail through the
-driver, holds its PID namespace for readiness, and exports `create_bwrap_jail`. With
+Each jail type's own presentation is its slice (decision-0007 item 5, decision-0010):
+`drivers/bwrap.py` (`create_bwrap_jail`) and `drivers/seatbelt.py` (`create_seatbelt_jail`)
+each refuse and compile the policy, write the supervisor script (and for Seatbelt, `profile.sb`
+in the jail's state directory), start the jail through the driver, and hold its namespace/group
+fd for readiness. With
 `egress=EgressPolicy(...)` it first refuses a malformed policy through `check_egress_policy`,
 whose errors it raises, and an `EnvPolicy` naming a proxy variable
 (`PolicyEnvNamesProxyVariable`), before anything is looked at. Then it reads the decision's
@@ -423,15 +485,16 @@ socket the embedder's user can reach on the host, and a plain connect follows th
 (TASK-0001.34). Readiness is a property of one connection (decision-0005 item 1): a second
 connection is a second `await_channel_ready`. Only the attempt that reads ready leaves a socket
 open. Readiness itself never dials as the embedder what the jail planted, and never outlasts its
-deadline (law 7): `create_bwrap_jail` opens an fd on the channel directory as soon as it is
-made and holds it on the `Jail` until `destroy_jail` closes it, each attempt opens the
+deadline (law 7): `create_bwrap_jail` and `create_seatbelt_jail` open an fd on the channel directory as soon as it is
+made and hold it on the `Jail` until `destroy_jail` closes it, each attempt opens the
 reservation's name beneath that fd through no link, refuses a link there as `PEER_OUTSIDE_JAIL`
 without connecting, and connects without blocking, so a jail that fills its own listen backlog
 reads not ready until the deadline instead of holding the embedder (TASK-0045). *Held by*
 `tests/e2e/test_channel_readiness_battery.py` (the swap after readiness),
 `tests/e2e/test_channel_readiness_refusals.py` (every other outcome closes its socket),
 `tests/e2e/test_channel_readiness_dial.py` (the deadline against a full backlog, and a planted
-link never dialled) and `tests/e2e/test_channel_readiness_beneath.py`. `errors.py` names
+link never dialled), `tests/e2e/test_channel_readiness_beneath.py` and
+`tests/e2e/test_seatbelt_channels.py`. `errors.py` names
 every exception an embedder can see, one per failure, so an embedder handles brig's own types
 and never infra's: a host that refuses brig's own state directory, its empty directory or the
 supervisor script before a jail starts is `StateDirectoryWriteFailed` (TASK-0046), a path the
@@ -442,5 +505,5 @@ reported as the state directory (TASK-0047). *Held by*
 `tests/integration/test_create_inspection_errors.py`. `src/brig/__init__.py` re-exports exactly this layer's surface and the
 domain's plain data, nothing from infra.
 
-Not yet built: `drivers/seatbelt.py`. (decision-0001's layout had a `proxy_main.py` entry point
+(decision-0001's layout had a `proxy_main.py` entry point
 here; the proxy is instead one assembled file run from its stdin, so it never imports brig.)

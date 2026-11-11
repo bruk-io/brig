@@ -1,0 +1,9 @@
+// Component: infra/members.py (decision-0010 item 2).
+model {
+  extend brig.library {
+    members = component 'Members' {
+      technology 'Python 3.15, stdlib only'
+      description 'Finds, on Darwin, every process of the user that carries a Seatbelt jail\'s profile, by asking sandbox_check what each process\'s profile decides for the jail\'s mark and decoy, and kills them until none is left, however they left the jail\'s process group. Plain data in and out -- never a brig type.'
+    }
+  }
+}

@@ -192,10 +192,64 @@ class _Decisions:
                 pass
 
 
+def _darwin_local_addresses() -> tuple[str, ...]:
+    """Every IPv4 and IPv6 address assigned to a local interface on Darwin (`getifaddrs`).
+
+    `ctypes` is imported here, never at the top: on Linux, importing it holds an fd open on the
+    interpreter's own binary for the life of the process (measured in an Ubuntu 24.04 container:
+    libffi maps its trampolines from it), one more than the proxy holds on `main`, which
+    `test_egress_connection_caps.py` counts. Only Darwin reaches this function.
+    """
+    import ctypes
+
+    class _IfAddrs(ctypes.Structure):
+        pass
+
+    _IfAddrs._fields_ = [
+        ("ifa_next", ctypes.POINTER(_IfAddrs)),
+        ("ifa_name", ctypes.c_char_p),
+        ("ifa_flags", ctypes.c_uint),
+        ("ifa_addr", ctypes.c_void_p),
+        ("ifa_netmask", ctypes.c_void_p),
+        ("ifa_dstaddr", ctypes.c_void_p),
+        ("ifa_data", ctypes.c_void_p),
+    ]
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.getifaddrs.argtypes = [ctypes.POINTER(ctypes.POINTER(_IfAddrs))]
+    libc.getifaddrs.restype = ctypes.c_int
+    libc.freeifaddrs.argtypes = [ctypes.POINTER(_IfAddrs)]
+    libc.freeifaddrs.restype = None
+    head = ctypes.POINTER(_IfAddrs)()
+    if libc.getifaddrs(ctypes.byref(head)) != 0:
+        return ()
+    found: dict[str, None] = {}
+    try:
+        cur = head
+        while cur:
+            addr = cur.contents.ifa_addr
+            if addr:
+                header = ctypes.string_at(addr, 2)
+                family = header[1]
+                if family == socket.AF_INET:
+                    raw4 = ctypes.string_at(addr, 8)[4:8]
+                    found[str(ipaddress.IPv4Address(raw4))] = None
+                elif family == socket.AF_INET6:
+                    raw6 = ctypes.string_at(addr, 24)[8:24]
+                    found[str(ipaddress.IPv6Address(raw6))] = None
+            cur = cur.contents.ifa_next
+    finally:
+        libc.freeifaddrs(head)
+    return tuple(found)
+
+
 def local_addresses(if_inet6: str, fib_trie: str) -> tuple[str, ...]:
     """The host's own addresses, from the text of `/proc/net/if_inet6` (every IPv6 address on an
     interface) and `/proc/net/fib_trie` (each IPv4 address the local table marks `/32 host
-    LOCAL`), in that order, each once. A line neither form explains is skipped."""
+    LOCAL`), in that order, each once, or from `getifaddrs` on Darwin when `/proc/net` is absent.
+    A line neither form explains is skipped."""
+    if not if_inet6 and not fib_trie and sys.platform == "darwin":
+        return _darwin_local_addresses()
     found: dict[str, None] = {}
     for line in if_inet6.splitlines():
         fields = line.split()

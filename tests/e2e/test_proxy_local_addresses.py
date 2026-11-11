@@ -44,10 +44,13 @@ def test_local_addresses_reads_each_interface_and_local_address_once() -> None:
 
 def test_local_addresses_of_this_host_include_its_loopback() -> None:
     """`/proc/net/if_inet6` is absent on a host without IPv6 (this one, measured), which the
-    proxy reads as no IPv6 address; `/proc/net/fib_trie` is always there with IPv4."""
+    proxy reads as no IPv6 address; `/proc/net/fib_trie` is always there with IPv4 on Linux, and
+    Darwin reads `getifaddrs` when `/proc/net` is absent."""
     if_inet6 = Path("/proc/net/if_inet6")
+    fib_trie = Path("/proc/net/fib_trie")
     found = program.local_addresses(
-        if_inet6.read_text() if if_inet6.exists() else "", Path("/proc/net/fib_trie").read_text()
+        if_inet6.read_text() if if_inet6.exists() else "",
+        fib_trie.read_text() if fib_trie.exists() else "",
     )
 
     assert "127.0.0.1" in found

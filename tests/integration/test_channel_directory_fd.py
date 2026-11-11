@@ -30,8 +30,9 @@ from brig import (
 
 
 def _open_fds() -> frozenset[str]:
-    """This process's open fds, as `/proc/self/fd` lists them."""
-    return frozenset(os.listdir("/proc/self/fd"))
+    """This process's open fds, as `/proc/self/fd` (or `/dev/fd` on Darwin) lists them."""
+    fd_dir = "/proc/self/fd" if Path("/proc/self/fd").exists() else "/dev/fd"
+    return frozenset(os.listdir(fd_dir))
 
 
 def test_the_jail_holds_an_fd_on_its_channel_directory_until_destroy(tmp_path: Path) -> None:

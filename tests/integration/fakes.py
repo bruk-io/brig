@@ -215,6 +215,37 @@ class FakeChannelDirectories:
 
 
 @dataclass
+class FakeMembers:
+    """A fake `MembersPort`, for a host where a Seatbelt jail's teardown looks for the processes
+    that carry its profile: `kill` records `(mark, decoy)` and answers `gone`; `includes`
+    records `(mark, decoy, pid)` and answers `found` (the canary); `reap` records the state
+    directory it was asked to sweep. No process table is read.
+    """
+
+    gone: bool = True
+    found: bool = True
+    asked: list[tuple[str, str]] = field(default_factory=list)
+    checked: list[tuple[str, str, int]] = field(default_factory=list)
+    reaped: list[str] = field(default_factory=list)
+
+    def kill(self, mark: str, decoy: str, deadline: float) -> bool:
+        """Record `(mark, decoy)` and answer `gone`."""
+        del deadline
+        self.asked.append((mark, decoy))
+        return self.gone
+
+    def includes(self, mark: str, decoy: str, pid: int) -> bool:
+        """Record `(mark, decoy, pid)` and answer `found`."""
+        self.checked.append((mark, decoy, pid))
+        return self.found
+
+    def reap(self, state_dir: str, deadline: float) -> None:
+        """Record `state_dir`."""
+        del deadline
+        self.reaped.append(state_dir)
+
+
+@dataclass
 class FakePlaceholders:
     """A fake `PlaceholderPort`, for a host where brig held placeholders for a jail: `hold`
     records the paths it was given and hands back `record` whatever they are (a jail started

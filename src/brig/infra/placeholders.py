@@ -13,10 +13,12 @@ empty. It sweeps them all together, deepest first, so what is removed does not d
 the records are read in, and keeps in a record each it could not remove yet, for a later sweep.
 """
 
+import ctypes
 import errno
 import fcntl
 import json
 import os
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -24,6 +26,38 @@ from pathlib import Path
 
 _RECORDS = "placeholders"
 _LOCK = "placeholders.lock"
+
+_XATTR_NOFOLLOW = 0x0001
+_ENOATTR = getattr(errno, "ENOATTR", 93)
+_PROC_PIDTBSDINFO = 3
+_SZOMB = 5
+
+
+class _ProcBsdInfo(ctypes.Structure):
+    _fields_ = [
+        ("pbi_flags", ctypes.c_uint32),
+        ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32),
+        ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32),
+        ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32),
+        ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32),
+        ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32),
+        ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * 16),
+        ("pbi_name", ctypes.c_char * 32),
+        ("pbi_nfiles", ctypes.c_uint32),
+        ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32),
+        ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32),
+        ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
 
 
 @dataclass(frozen=True)
@@ -53,23 +87,115 @@ _MARK = "user.brig.placeholder"
 tells brig's directory from one the embedder made in its place, which may have the same inode."""
 
 
+def _darwin_start_time(pid: int) -> str | None:
+    """`pid`'s start time (`tv_sec:tv_usec`) from `proc_pidinfo(PROC_PIDTBSDINFO)` on Darwin, or
+    `None` when `pid` is gone or a zombie (`SZOMB`)."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.proc_pidinfo.argtypes = [
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_uint64,
+        ctypes.c_void_p,
+        ctypes.c_int,
+    ]
+    libc.proc_pidinfo.restype = ctypes.c_int
+    info = _ProcBsdInfo()
+    size = ctypes.sizeof(info)
+    if libc.proc_pidinfo(pid, _PROC_PIDTBSDINFO, 0, ctypes.byref(info), size) != size:
+        return None
+    if info.pbi_status == _SZOMB:
+        return None
+    return f"{info.pbi_start_tvsec}:{info.pbi_start_tvusec}"
+
+
 def _start_time(pid: int) -> str | None:
-    """`pid`'s start time in clock ticks since boot (`/proc/<pid>/stat` field 22), or `None` once
-    it has exited: a zombie (state Z) or a dead process (X) holds no mount, so it counts as gone."""
+    """`pid`'s start time in clock ticks since boot (`/proc/<pid>/stat` field 22 on Linux, or
+    `proc_pidinfo` on Darwin), or `None` once it has exited: a zombie (state Z / SZOMB) or a dead
+    process (X) holds no mount, so it counts as gone."""
     try:
         with open(f"/proc/{pid}/stat") as handle:
             stat = handle.read()
     except OSError:
+        if sys.platform == "darwin":
+            return _darwin_start_time(pid)
         return None
     fields = stat.rsplit(")", 1)[1].split()
     return None if fields[0] in {"Z", "X"} else fields[19]
+
+
+def _setxattr_nofollow(path: str, name: str, value: bytes) -> None:
+    """Set extended attribute `name` on `path` without following symlinks.
+
+    Raises:
+        OSError: the extended attribute could not be set.
+    """
+    std_setxattr = getattr(os, "setxattr", None)
+    if std_setxattr is not None:
+        std_setxattr(path, name, value, follow_symlinks=False)
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.setxattr.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_uint32,
+        ctypes.c_int,
+    ]
+    libc.setxattr.restype = ctypes.c_int
+    rc = libc.setxattr(
+        os.fsencode(path),
+        name.encode(),
+        value,
+        len(value),
+        0,
+        _XATTR_NOFOLLOW,
+    )
+    if rc != 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err), path)
+
+
+def _getxattr_nofollow(path: str, name: str) -> bytes:
+    """Read extended attribute `name` on `path` without following symlinks.
+
+    Raises:
+        OSError: the extended attribute could not be read.
+    """
+    std_getxattr = getattr(os, "getxattr", None)
+    if std_getxattr is not None:
+        raw: bytes = std_getxattr(path, name, follow_symlinks=False)
+        return raw
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.getxattr.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_uint32,
+        ctypes.c_int,
+    ]
+    libc.getxattr.restype = ctypes.c_ssize_t
+    buf = ctypes.create_string_buffer(256)
+    rc = libc.getxattr(
+        os.fsencode(path),
+        name.encode(),
+        buf,
+        ctypes.sizeof(buf),
+        0,
+        _XATTR_NOFOLLOW,
+    )
+    if rc < 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err), path)
+    return buf.raw[:rc]
 
 
 def _marked(directory: Path, jail_id: str) -> bool:
     """Mark `directory` as brig's (`_MARK`) and say whether that worked: a filesystem without user
     extended attributes leaves it to the inode alone, which the record says."""
     try:
-        os.setxattr(directory, _MARK, jail_id.encode(), follow_symlinks=False)
+        _setxattr_nofollow(str(directory), _MARK, jail_id.encode())
     except OSError:
         return False
     return True
@@ -269,8 +395,8 @@ def _has_mark(path: str) -> bool:
         OSError: the attribute could not be read for a reason other than its absence.
     """
     try:
-        return bool(os.getxattr(path, _MARK, follow_symlinks=False))
+        return bool(_getxattr_nofollow(path, _MARK))
     except OSError as error:
-        if error.errno in {errno.ENODATA, errno.ENOTSUP}:
+        if error.errno in {errno.ENODATA, errno.ENOTSUP, _ENOATTR}:
             return False
         raise

@@ -12,6 +12,7 @@ the proxy runs, so a proxy whose embedder reads nothing never blocks on it. Plai
 out.
 """
 
+import errno
 import json
 import os
 import select
@@ -264,11 +265,27 @@ def _close_all(fds: list[int]) -> None:
             pass
 
 
+def _control_socketpair() -> tuple[socket.socket, socket.socket]:
+    """A Unix socketpair for passing per-connection fds from the supervisor to the proxy:
+    `SOCK_SEQPACKET` on Linux, or `SOCK_STREAM` on Darwin where `AF_UNIX` `SOCK_SEQPACKET` is
+    unsupported (`EPROTONOSUPPORT`).
+
+    Raises:
+        OSError: the socketpair could not be created.
+    """
+    try:
+        return socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    except OSError as error:
+        if error.errno != errno.EPROTONOSUPPORT:
+            raise
+        return socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+
+
 def start(launch: ProxyLaunch) -> tuple[RunningProxy, int]:
     """Start the proxy `launch` describes, give it its source and its config, and return it with
     the supervisor's end of the control socketpair: an fd the caller owns, to hand the supervisor
-    as `wire.BRIDGE_FD` and then close. A `SOCK_SEQPACKET` pair, so each fd the supervisor sends
-    arrives as one message.
+    as `wire.BRIDGE_FD` and then close. A `SOCK_SEQPACKET` pair (or `SOCK_STREAM` on Darwin), so
+    each fd the supervisor sends arrives as one message.
 
     Raises:
         ProxySpawnError: the proxy could not be spawned, or it was and its decisions reader
@@ -276,7 +293,7 @@ def start(launch: ProxyLaunch) -> tuple[RunningProxy, int]:
             first); it has then been killed and reaped, and every fd this opened is closed. The
             cause is the `__cause__`.
     """
-    supervisor_end, proxy_end = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    supervisor_end, proxy_end = _control_socketpair()
     source_read, source_write = os.pipe()
     config_read, config_write = os.pipe()
     decisions_read, decisions_write = os.pipe()
