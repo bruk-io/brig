@@ -4,7 +4,7 @@ title: A Seatbelt jail for darwin
 status: In Progress
 assignee: []
 created_date: '2026-11-10 17:16'
-updated_date: '2026-11-11 15:58'
+updated_date: '2026-11-11 16:39'
 labels:
   - darwin
   - security
@@ -80,7 +80,7 @@ The setsid/setpgid refusal above did not hold (posix_spawn with setpgroup or set
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Report of the second worker (2026-11-11), measured on macOS 27.0.1 with /usr/bin/sandbox-exec, revised after the pre-merge review's must-fix list. Not pushed; left In Progress for a reviewer. AC #1 is ready for review; AC #2 is bh-02's and was not attempted.
+Report of the second worker (2026-11-11), measured on macOS 27.0.1 with /usr/bin/sandbox-exec, revised after the pre-merge review and the re-review. Pushed to seatbelt (draft PR bruk-io/brig#1); left In Progress for a reviewer. AC #1 is ready for review; AC #2 is bh-02's and was not attempted.
 
 ## Commits
 
@@ -98,18 +98,23 @@ Mine:
 - `49ee409` docs(seatbelt): correct decision-0010 and the spec to what was measured
 - `0eb97e3` fix(seatbelt): teardown finds every process that carries the jail's profile (the
   review's must-fix list: teardown, the hardware registry, the egress test's teeth)
+- `6b3172a` fix(proxy): import ctypes only on the darwin path (the Linux CI failure)
+- `033d846` fix(seatbelt): freeze the jail from inside before killing it (the re-review:
+  fork-hop, canary, `_decides`, distinct errors)
+- `6768c2c` fix(seatbelt): start the freezer only in a Seatbelt jail, and only sandboxed
 - the commit after it: docs only, naming `sandbox_check` as private interface
 
 ## Results on this Mac
 
-After the review's fixes (`0eb97e3`):
+After the re-review's fixes (`6768c2c`):
 - `uv run just done`: exit 0, "done: all steps passed". Lint, typecheck and gates pass;
-  pypeeker rule tests 51 passed; unit 418 passed; integration 96 passed and 2 skipped, both
-  passes; e2e 119 passed and 118 skipped; docs, architecture validate and architecture lint pass.
-- `uv run just test-e2e`: exit 0, 119 passed, 118 skipped, 0 failed. The 118 skips are the same
-  Linux-only tests as before this work (bwrap, procfs, `SO_PEERCRED`, root); no seatbelt test
-  skips here. Before this work it was 86 passed, 118 skipped.
-- Linux CI was not run (no push). See "What Linux shares" below.
+  pypeeker rule tests 51 passed; unit 418 passed; integration 100 passed and 2 skipped, both
+  passes; e2e 125 passed and 118 skipped; docs, architecture validate and architecture lint pass.
+- `uv run just test-e2e`: exit 0, 125 passed, 118 skipped, 0 failed. The 118 skips are the same
+  Linux-only tests as before this work; no seatbelt test skips. Afterwards no freezer is
+  running and nothing is left in `~/.brig`.
+- Linux CI on the PR (bruk-io/brig#1): green on `6b3172a` (the fix), `033d846` and `6768c2c`
+  (run 43059535845); it was red on `e098b34` (run 43053809271).
 
 ## What Linux shares, and how each change is kept to darwin
 
@@ -136,7 +141,9 @@ Every change to code that also runs on Linux, and its guard:
   Linux.
 - `infra/supervisor/program.py`: `PT_DENY_ATTACH` only when `sys.platform == "darwin"`, else
   `PR_SET_DUMPABLE` as before; a failed `[::1]` bridge bind raises only on darwin, else is
-  skipped as before.
+  skipped as before; the teardown freezer is started only when `sys.platform == "darwin"`.
+- `infra/proxy/program.py`: `ctypes` is imported only inside the darwin-only `getifaddrs`
+  function; at module level it cost Linux one fd (the CI failure).
 - `infra/members.py` (new): answers "no members" off darwin; called only by `dismantle` for a
   jail with a member mark, which only `create_seatbelt_jail` makes.
 - `presentation/jail.py` and `api.py`: `dismantle` also removes a script's `.sb` profile, `.mark`
@@ -162,41 +169,85 @@ directory refused, interrupt delivered, timeout, cwd, no supervisor fd in the co
 the supervisor kills the command (`test_seatbelt_journey.py`, `test_seatbelt_channels.py`,
 `test_seatbelt_supervisor.py`).
 
-## Teardown on darwin
+## Teardown on darwin (revised after the re-review)
 
 Darwin has no PID namespace. A jailed process can leave the supervisor's process group
-(`posix_spawn` with `setpgroup=0` or `setsid=True`; the review's repro, which also beat the
-`setsid`/`setpgid` refusal I had added), and once its parent exits it is launchd's child, so
-neither a group kill nor a walk of the process tree finds it. What it cannot shed is its sandbox.
+(`posix_spawn` with `setpgroup=0` or `setsid=True`), and once its parent exits it is launchd's
+child, so neither a group kill nor a walk of the process tree finds it. What it cannot shed is
+its sandbox.
 
-How it works now (`infra/members.py`, through a `MembersPort`): each Seatbelt jail gets an empty
-mark and decoy file beside its script in brig's state directory, and its profile allows
-`file-read-metadata` on its own mark after the state directory's mask, which refuses the decoy.
-After the group's kill ladder, `destroy_jail` lists every process of the user (`proc_listpids`,
-`proc_pidinfo`) and asks `sandbox_check` what each one's profile decides. It `SIGKILL`s every
-process that is sandboxed, allowed the mark and refused the decoy, and looks again until a look
-finds none. If one is still alive after `kill_grace_s`, teardown raises `JailTeardownFailed` and
-keeps the mark. The mark and decoy are removed once none is left.
+- **Finding the jail's processes** (`infra/members.py`, through a `MembersPort`). Each
+  Seatbelt jail gets an empty mark and decoy beside its script in the state directory. Its
+  profile allows `file-read-metadata` on its own mark after the state-dir mask, which refuses
+  the decoy. `sandbox_check` reports what each process's profile decides, so a member is a
+  process of the user's that is sandboxed, allowed the mark and refused the decoy.
+- **Why the first sweep lost.** It scanned and killed until a scan found nothing. The
+  re-review's fork-hop (fork away, `setsid`, then fork-and-exit in a loop for 8 s, then write a
+  file) beat it, because a scan takes about 3 ms over about 1,000 pids.
+- **Freeze from inside, then kill.**
+  - Measured: from a jailed process, `kill(-1, sig)` reaches every process of that sandbox,
+    including the caller itself, and nothing outside it. It did not reach an unsandboxed
+    parent, nor a process started separately under the same profile file.
+  - One `kill(-1, SIGKILL)` pass dies with its caller and missed the fork loop in 1 run of 15.
+    `SIGSTOP` can be repeated.
+  - The supervisor starts a freezer before the command. It forks away and leads its own
+    session, so it outlives the command and the supervisor, holds none of their fds, and
+    nothing in the jail waits on it.
+  - At teardown, before the group ladder, the host sends the freezer `SIGUSR1`; the freezer is
+    found by its `brig-teardown-freezer` argument. The freezer calls `kill(-1, SIGSTOP)`, and
+    the host `SIGCONT`s it for another pass while any member is still running.
+  - Once two scans in a row find the same members, all stopped, each is killed. A stopped
+    process cannot fork.
+  - A scan in which a listed process vanished before being judged is not trusted, since a
+    running fork chain always shows up as one of those.
+- **Measured.** The fork-hop repro now ends in 30 to 70 ms, and its file is never written
+  (`test_a_process_that_forks_in_a_loop_does_not_outlive_destroy`). With the `SIGUSR1` to the
+  freezer removed, the same test fails with `JailTeardownFailed`. The earlier escape tests and
+  the test that another jail's and the host's processes survive still pass.
+- **What does not hold.** No SBPL signal target lets the freezer reach the jail's orphans while
+  keeping the command away from the freezer. Measured: `same-sandbox` covers both;
+  `children` covers only direct children; `self` and `others` cover only the caller; `pgrp`
+  covers only the caller's group. So a command that kills its freezer and then forks in a loop
+  defeats the freeze.
+  - Teardown then kills each member a scan finds, along with its process group. If one is left
+    after `kill_grace_s`, it raises `JailTeardownFailed` with `members_left` and a message
+    naming a process that left the group.
+  - The mark is kept. Every later `create_seatbelt_jail` and `destroy_jail` sweeps kept marks
+    again and removes each once nothing carries it; seen working here after a mutation run.
+  - A command that forks forever after killing its freezer can outlive every sweep. It stays
+    sandboxed, and brig reports it instead of claiming the jail is gone.
+- **The freezer only where it belongs.** A full run here found 21 freezers left running,
+  unsandboxed: the supervisor's gateway tests run `program.py` outside any jail, and each run
+  had started one. Outside a sandbox, its `kill(-1, SIGSTOP)` would stop every process of the
+  user. Now only the Seatbelt launch asks for a freezer (`--freezer`), and the freezer exits at
+  once unless it is sandboxed. Both are held by `test_seatbelt_supervisor.py`, which fails with
+  the self-check removed. I killed the 21 leftovers.
+- **Canary.** `create_seatbelt_jail` waits until its running supervisor is found carrying the
+  profile and otherwise raises `JailMembersUnverifiable`, tearing the jail down first.
+  `destroy_jail` asks again while the supervisor runs, and raises the same error, after the
+  group kill, if it is not found. A supervisor that has exited tells the canary nothing.
+  Integration tests drive both answers with a fake port.
 
-What measured it:
-- Scratch probes: `sandbox_check` tells jail A's process (mark A allowed, B refused) from jail
-  B's (the reverse) and from an unsandboxed one, and still finds A's process after it called
-  `setsid`. The paths must exist: for a missing path it answers "refused" for everything. On
-  arm64 the variadic path reaches it only when ctypes places it on the stack, behind five unused
-  fixed arguments: without them every check answered "refused". x86_64 is not measured.
-- `test_seatbelt_journey.py`: the review's exact attack and its `setsid=True` variant leave no
-  process alive and no `after` file 4 s later. The control half shows the escaped shell is alive
-  and out of the jail's group before teardown. Another test shows that destroying one jail
-  leaves another jail's process and a host process running.
-- `tests/integration/test_seatbelt_create.py` (with a fake `MembersPort`): a member left alive
-  fails teardown and keeps the mark; a clean sweep removes mark and decoy; a failed create leaves
-  no member files.
-- Mutation: with the sweep disabled, the two escape tests and the orphan test fail.
+**`setsid`/`setpgid`: dropped** (since the first review). A jailed `setsid` works, held by a
+test.
 
-**`setsid`/`setpgid`: dropped.** The refusal held nothing (`posix_spawn` went around it) and cost
-every daemon its session, and teardown no longer needs it. A jailed `setsid` now works, held by a
-test. The channel peer check still requires the listener's process group to be the jail's, so a
-listener that left the group is refused (fail-closed), never let in.
+## Re-review fixes
+
+- **Linux CI.** `test_egress_connection_caps.py:265` failed: the proxy held 13 fds against
+  6 + 2 * 3. I reproduced it in an Ubuntu 24.04 container with bubblewrap: `origin/main`
+  passed and the branch failed on every run. Swapping in `main`'s `infra/proxy/program.py` made
+  it pass. The cause was the module-level `import ctypes` added for `getifaddrs`: on Linux that
+  import holds an fd open on the interpreter's own binary (libffi maps its trampolines from
+  it). The import now happens only inside the darwin-only function, and the container run
+  passes (commit `6b3172a`). The count in the test was right.
+- **`_decides`'s docstring** said a gone process answers -1. It answers 1, as for a refusal
+  (also for a missing path). The docstring is fixed, and `test_seatbelt_members.py` pins it
+  through `profile_decision`, along with 0 for an unsandboxed process and the canary on a live
+  jail.
+- **Distinct teardown errors.** A live group says "jail's process group still alive". A
+  process that left the group says "a process of the jail that left its process group was still
+  alive after teardown, which ended the group itself" (`JailTeardownFailed.members_left`). The
+  canary raises its own `JailMembersUnverifiable`.
 
 ## Other review fixes
 
@@ -244,6 +295,9 @@ cited two test files that did not exist.
 
 ## Not covered, uncertain, or for Bruk
 
+0. **A command that kills its freezer and then forks in a loop forever outlives teardown**
+   (reported as `JailTeardownFailed`, swept again later, never claimed gone). No SBPL signal
+   target closes this; Bruk may want it named to embedders beyond the docs.
 1. **Teardown relies on `sandbox_check`**, a libSystem export with no declaration in the
    macOS SDK's headers (checked: no header under the SDK's `usr/include` names it), so Apple
    may change it without notice. It is reached through ctypes with an arm64-specific argument layout (measured
