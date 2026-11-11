@@ -4,7 +4,7 @@ title: A Seatbelt jail for darwin
 status: In Progress
 assignee: []
 created_date: '2026-11-10 17:16'
-updated_date: '2026-11-11 16:39'
+updated_date: '2026-11-11 16:56'
 labels:
   - darwin
   - security
@@ -83,7 +83,7 @@ The member sweep alone lost to a fork loop. Teardown now freezes the jail from i
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Report of the second worker (2026-11-11), measured on macOS 27.0.1 with /usr/bin/sandbox-exec, revised after the pre-merge review and the re-review. Pushed to seatbelt (draft PR bruk-io/brig#1); left In Progress for a reviewer. AC #1 is ready for review; AC #2 is bh-02's and was not attempted.
+Report of the second worker (2026-11-11), measured on macOS 27.0.1 with /usr/bin/sandbox-exec, revised after the pre-merge review, the re-review and the focused review. Pushed to seatbelt (draft PR bruk-io/brig#1); left In Progress for a reviewer. AC #1 is ready for review; AC #2 is bh-02's and was not attempted.
 
 ## Commits
 
@@ -105,19 +105,22 @@ Mine:
 - `033d846` fix(seatbelt): freeze the jail from inside before killing it (the re-review:
   fork-hop, canary, `_decides`, distinct errors)
 - `6768c2c` fix(seatbelt): start the freezer only in a Seatbelt jail, and only sandboxed
+- the commit after it: act on no scan without an intact mark and decoy; arm the freezer only
+  out of the host's reach (the focused review)
 - the commit after it: docs only, naming `sandbox_check` as private interface
 
 ## Results on this Mac
 
-After the re-review's fixes (`6768c2c`):
+After the focused review's fixes:
 - `uv run just done`: exit 0, "done: all steps passed". Lint, typecheck and gates pass;
   pypeeker rule tests 51 passed; unit 418 passed; integration 100 passed and 2 skipped, both
-  passes; e2e 125 passed and 118 skipped; docs, architecture validate and architecture lint pass.
-- `uv run just test-e2e`: exit 0, 125 passed, 118 skipped, 0 failed. The 118 skips are the same
-  Linux-only tests as before this work; no seatbelt test skips. Afterwards no freezer is
-  running and nothing is left in `~/.brig`.
-- Linux CI on the PR (bruk-io/brig#1): green on `6b3172a` (the fix), `033d846` and `6768c2c`
-  (run 43059535845); it was red on `e098b34` (run 43053809271).
+  passes; e2e 128 passed and 118 skipped; docs, architecture validate and architecture lint pass.
+- `uv run just test-e2e`: exit 0, 128 passed, 118 skipped, 0 failed. No seatbelt test skips.
+  Afterwards `ps -axo pid,command | grep -i freez` shows nothing, and nothing is left in
+  `~/.brig`.
+- Linux CI on the PR (bruk-io/brig#1): green on `00fd1cb` (run 43062239267), and before it on
+  `6b3172a` (the Linux fix), `033d846`, `6768c2c` and `7a01a6c`; it was red on `e098b34`
+  (run 43053809271).
 
 ## What Linux shares, and how each change is kept to darwin
 
@@ -233,6 +236,25 @@ its sandbox.
 
 **`setsid`/`setpgid`: dropped** (since the first review). A jailed `setsid` works, held by a
 test.
+
+## Focused review fixes
+
+- **A missing decoy made bystanders members.** `sandbox_check` reads a missing path as refused,
+  so with a kept mark's decoy deleted, every sandboxed process of the user's that may read the
+  mark passed `_is_member`, and the kept-mark sweep would have killed it and its group.
+  Reproduced (a process under `(allow default)` read as a member). Now:
+  - No scan is acted on unless the mark and decoy are both regular files, looked up through no
+    link, checked before and after the scan.
+  - `is_member` answers no without both.
+  - `reap_kept` skips a mark whose decoy is gone and **leaves it in place**. My choice: removing
+    it would drop the one record that a survivor may exist, and leaving it costs nothing.
+  - Two e2e tests use a broadly sandboxed bystander in its own session; with the check
+    disabled, both fail.
+- **Freezer arming.** The freezer is given the host's pid (its supervisor's parent). It exits
+  unless `kill(host_pid, 0)` fails with `EPERM`, as well as unless it is sandboxed. A test under
+  `(allow default)` fails without that check.
+- **Spec.** It now says a failed teardown leaves the freezer and the runaway alive until the
+  next create or destroy sweeps the kept mark.
 
 ## Re-review fixes
 
