@@ -72,6 +72,9 @@ Changed from the first version of this plan: a per-jail bridge port was planned 
 ### Proof
 - Every header narrowing, the egress rule, the pins, the masks, the peer group check, PT_DENY_ATTACH and the profile cleanup is mutation-checked: putting each weakness back fails its test.
 - uv run just done exits 0 and uv run just test-e2e exits 0 on this Mac, with no seatbelt test skipped.
+
+### Amendment after the pre-merge review (2026-11-11)
+The setsid/setpgid refusal above did not hold (posix_spawn with setpgroup or setsid left the group) and is dropped. Teardown instead kills every process whose sandbox allows the jail's mark and refuses its decoy (src/brig/infra/members.py, a MembersPort through dismantle and destroy_jail), measured by the review's repro and its setsid variant as e2e tests. The Risks line about daemons no longer applies; the new risk is that sandbox_check is private interface, reached through ctypes with an arm64 argument layout measured only here.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
