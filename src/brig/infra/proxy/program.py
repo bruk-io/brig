@@ -37,7 +37,6 @@ lower and never raise:
   the bytes are paced: past it the connection is closed. A relayed connection has no deadline.
 """
 
-import ctypes
 import ipaddress
 import json
 import os
@@ -193,23 +192,29 @@ class _Decisions:
                 pass
 
 
-class _IfAddrs(ctypes.Structure):
-    pass
-
-
-_IfAddrs._fields_ = [
-    ("ifa_next", ctypes.POINTER(_IfAddrs)),
-    ("ifa_name", ctypes.c_char_p),
-    ("ifa_flags", ctypes.c_uint),
-    ("ifa_addr", ctypes.c_void_p),
-    ("ifa_netmask", ctypes.c_void_p),
-    ("ifa_dstaddr", ctypes.c_void_p),
-    ("ifa_data", ctypes.c_void_p),
-]
-
-
 def _darwin_local_addresses() -> tuple[str, ...]:
-    """Every IPv4 and IPv6 address assigned to a local interface on Darwin (`getifaddrs`)."""
+    """Every IPv4 and IPv6 address assigned to a local interface on Darwin (`getifaddrs`).
+
+    `ctypes` is imported here, never at the top: on Linux, importing it holds an fd open on the
+    interpreter's own binary for the life of the process (measured in an Ubuntu 24.04 container:
+    libffi maps its trampolines from it), one more than the proxy holds on `main`, which
+    `test_egress_connection_caps.py` counts. Only Darwin reaches this function.
+    """
+    import ctypes
+
+    class _IfAddrs(ctypes.Structure):
+        pass
+
+    _IfAddrs._fields_ = [
+        ("ifa_next", ctypes.POINTER(_IfAddrs)),
+        ("ifa_name", ctypes.c_char_p),
+        ("ifa_flags", ctypes.c_uint),
+        ("ifa_addr", ctypes.c_void_p),
+        ("ifa_netmask", ctypes.c_void_p),
+        ("ifa_dstaddr", ctypes.c_void_p),
+        ("ifa_data", ctypes.c_void_p),
+    ]
+
     libc = ctypes.CDLL(None, use_errno=True)
     libc.getifaddrs.argtypes = [ctypes.POINTER(ctypes.POINTER(_IfAddrs))]
     libc.getifaddrs.restype = ctypes.c_int
