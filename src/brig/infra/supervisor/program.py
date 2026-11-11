@@ -260,9 +260,19 @@ def _start_child(argv: list[str], env: dict[str, str], bridged: bool = False) ->
 _FREEZER_MARKER = "brig-teardown-freezer"
 """`infra.members.FREEZER_MARKER`, repeated: this file is assembled without brig."""
 
+FREEZER_FLAG = "--freezer"
+"""The argument the Seatbelt launch gives this program, after its own path, to start the freezer:
+nothing else starts it, so a supervisor run outside a Seatbelt jail (bwrap's, a test's) never
+does."""
+
 _FREEZER = """
-import os, signal
+import ctypes, os, signal
 signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGUSR1})
+libsystem = ctypes.CDLL("/usr/lib/libSystem.dylib")
+libsystem.sandbox_check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+libsystem.sandbox_check.restype = ctypes.c_int
+if libsystem.sandbox_check(os.getpid(), None, 0) != 1:
+    os._exit(0)
 if os.fork():
     os._exit(0)
 os.setsid()
@@ -284,7 +294,9 @@ their pipes, and is neither reaped nor waited on as their child. Told with `SIGU
 every process of its sandbox, itself included, with `kill(-1, SIGSTOP)`, and again each time
 the host continues it, until the host has seen the whole jail stopped and killed it
 (`infra.members.freeze_and_kill`). `SIGUSR1` is blocked until its handler is in, so one sent
-early is held, not fatal."""
+early is held, not fatal. Outside a sandbox `kill(-1, SIGSTOP)` would stop every process of
+the user, so it exits at once unless `sandbox_check` says it is sandboxed (with no filter, the
+call takes no variadic argument), whatever started it."""
 
 
 def _is_open(fd: int) -> bool:
@@ -297,12 +309,13 @@ def _is_open(fd: int) -> bool:
 
 
 def _start_freezer() -> None:
-    """Start the teardown freezer (`_FREEZER`) on Darwin, before the command exists: stdio on
+    """Start the teardown freezer (`_FREEZER`) on Darwin when the launch asks for it
+    (`FREEZER_FLAG`), before the command exists: stdio on
     `/dev/null`, none of the supervisor's own fds (the bridge's included, when it has one). A
     no-op elsewhere, where the jail's PID namespace ends every process of the jail with its PID
     1. An `OSError` from the spawn propagates: the supervisor ends before the command starts.
     """
-    if sys.platform != "darwin":
+    if sys.platform != "darwin" or FREEZER_FLAG not in sys.argv[1:]:
         return
     held = [fd for fd in (_REQUEST_FD, _EVENTS_FD, _BRIDGE_FD) if _is_open(fd)]
     actions: list[tuple[int, ...] | tuple[int, int, str, int, int]] = [

@@ -9,12 +9,15 @@ kills its supervisor loses its own exit code. The host is then told the code is 
 a code the command chose.
 """
 
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from brig import JailExitUnknown, create_seatbelt_jail, destroy_jail, run_jail
+from brig.infra.supervisor import program
 
 pytestmark = pytest.mark.skipif(
     not Path("/usr/bin/sandbox-exec").exists(),
@@ -64,3 +67,52 @@ def test_a_command_that_kills_its_supervisor_leaves_its_exit_code_unknown() -> N
             run_jail(jail, timeout_s=15)
     finally:
         destroy_jail(jail)
+
+
+def _freezers() -> set[int]:
+    """Every process on the host that carries the teardown freezer's argument."""
+    found = subprocess.run(
+        ["/usr/bin/pgrep", "-f", "brig-teardown-freezer"], capture_output=True, text=True
+    )
+    return {int(pid) for pid in found.stdout.split()}
+
+
+def _settle(before: set[int], expected: int) -> set[int]:
+    deadline = time.monotonic() + 5
+    while True:
+        now = _freezers() - before
+        if len(now) == expected or time.monotonic() >= deadline:
+            return now
+        time.sleep(0.05)
+
+
+def test_a_jail_has_one_freezer_and_destroy_ends_it() -> None:
+    before = _freezers()
+    jail = create_seatbelt_jail(("/bin/sleep", "30"))
+    try:
+        during = _settle(before, 1)
+    finally:
+        destroy_jail(jail)
+    after = _settle(before, 0)
+
+    assert len(during) == 1
+    assert after == set()
+
+
+def test_a_supervisor_outside_a_sandbox_starts_no_freezer_even_when_asked() -> None:
+    """Outside a sandbox the freezer's `kill(-1, SIGSTOP)` would stop every process of the
+    user: run unjailed with the freezer's argument (no wire fds, so it ends at once), the
+    supervisor's freezer must see it is not sandboxed and exit."""
+    before = _freezers()
+    supervisor = subprocess.run(
+        [sys.executable, "-I", program.__file__, program.FREEZER_FLAG],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    left = _settle(before, 0)
+    for pid in left:
+        subprocess.run(["/bin/kill", "-9", str(pid)], check=False)
+
+    assert supervisor.returncode != 0, "control: with no wire fds the supervisor fails"
+    assert left == set(), "an unsandboxed freezer was left running"

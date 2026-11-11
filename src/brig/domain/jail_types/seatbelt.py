@@ -82,6 +82,11 @@ and without it the system's own paths are readable only where the policy reads t
   `file-ioctl`.
 """
 
+_FREEZER_FLAG = "--freezer"
+"""What the supervisor program is given to start the jail's teardown freezer
+(`infra.supervisor.program.FREEZER_FLAG`, repeated: the domain imports no infra): only a
+Seatbelt jail's supervisor starts one (decision-0010 item 2)."""
+
 EGRESS_BRIDGE_PORT = 3128
 """Where the supervisor listens, on `127.0.0.1`, for the connections it bridges to the egress
 proxy (decision-0009 item 1, decision-0010 item 4)."""
@@ -592,7 +597,7 @@ def compile_supervisor_launch(
     `--chdir` flag, so the supervisor's interpreter changes to `cwd` before running the
     supervisor script, and the command inherits it from the supervisor)."""
     if cwd is None:
-        return (_SANDBOX_EXEC, "-f", profile_path, *supervisor_path)
+        return (_SANDBOX_EXEC, "-f", profile_path, *supervisor_path, _FREEZER_FLAG)
     return (
         _SANDBOX_EXEC,
         "-f",
@@ -602,4 +607,5 @@ def compile_supervisor_launch(
         _CHDIR_RUNNER,
         cwd,
         supervisor_path[-1],
+        _FREEZER_FLAG,
     )

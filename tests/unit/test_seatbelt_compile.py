@@ -246,7 +246,15 @@ def test_a_nul_byte_in_a_path_is_refused() -> None:
 def test_the_supervisor_runs_under_sandbox_exec_with_the_profile() -> None:
     argv = seatbelt.compile_supervisor_launch(("/py", "-I", _SCRIPT), "/state/p.sb")
 
-    assert argv == ("/usr/bin/sandbox-exec", "-f", "/state/p.sb", "/py", "-I", _SCRIPT)
+    assert argv == (
+        "/usr/bin/sandbox-exec",
+        "-f",
+        "/state/p.sb",
+        "/py",
+        "-I",
+        _SCRIPT,
+        "--freezer",
+    )
 
 
 def test_a_cwd_is_entered_by_the_interpreter_before_the_supervisor_runs() -> None:
@@ -254,4 +262,4 @@ def test_a_cwd_is_entered_by_the_interpreter_before_the_supervisor_runs() -> Non
 
     assert argv[:5] == ("/usr/bin/sandbox-exec", "-f", "/state/p.sb", "/py", "-I")
     assert argv[5] == "-c"
-    assert argv[-2:] == ("/work", _SCRIPT)
+    assert argv[-3:] == ("/work", _SCRIPT, "--freezer")

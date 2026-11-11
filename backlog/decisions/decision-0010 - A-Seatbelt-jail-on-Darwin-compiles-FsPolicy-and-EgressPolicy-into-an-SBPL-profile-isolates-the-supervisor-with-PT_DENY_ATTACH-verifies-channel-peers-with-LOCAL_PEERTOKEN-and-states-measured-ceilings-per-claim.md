@@ -149,7 +149,11 @@ decision-0009's body was written after its `create`.
        fork loop, one pass missed the chain in 1 run of 15. `SIGSTOP` can be repeated. The
        supervisor starts a freezer before the command (`program._FREEZER`), which forks away and
        leads a session of its own, so it outlives its command, holds none of the supervisor's
-       fds, and is reaped by no one in the jail. At teardown, before the group's kill ladder,
+       fds, and is reaped by no one in the jail. Only the Seatbelt launch asks for it
+       (`--freezer`), and it exits at once unless it is itself sandboxed: outside a sandbox its
+       `kill(-1, SIGSTOP)` would stop every process of the user. (Found by a full run on this
+       Mac: the supervisor's gateway tests, which run it unjailed, had each left an unsandboxed
+       freezer behind; both guards are now held by `test_seatbelt_supervisor.py`.) At teardown, before the group's kill ladder,
        the host scans the jail, sends the freezer (found by its `brig-teardown-freezer`
        argument) `SIGUSR1`, which makes it call `kill(-1, SIGSTOP)`, and continues it with
        `SIGCONT` for another pass while a scan still finds a member running. A stopped process
