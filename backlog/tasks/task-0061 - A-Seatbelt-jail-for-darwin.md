@@ -4,7 +4,7 @@ title: A Seatbelt jail for darwin
 status: In Progress
 assignee: []
 created_date: '2026-11-10 17:16'
-updated_date: '2026-11-10 20:06'
+updated_date: '2026-11-11 15:07'
 labels:
   - darwin
   - security
@@ -29,10 +29,23 @@ From bh-02's port onto bruk-io/brig v0.1.0: this brig has no darwin jail, so bh-
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Record design rulings in decision-0010 (SBPL compilation of FsPolicy/EgressPolicy, PT_DENY_ATTACH supervisor protection, LOCAL_PEERTOKEN + proc_pidinfo channel readiness, measured Seatbelt grade ceilings).
-2. Update docs/spec/index.md and docs/architecture/ C4 models (seatbelt-jail-type, seatbelt-driver, _relationships, components view) first; verify just arch-validate, just arch-lint, and just docs.
-3. Add Darwin support to brig.infra (placeholders xattr + proc_pidinfo start_time, sockets O_RDONLY/F_GETPATH/LOCAL_PEERTOKEN/proc_pidinfo, supervisor PT_DENY_ATTACH, proxy SOCK_STREAM fallback + getifaddrs host addresses) so all existing unit, integration, and platform-applicable e2e tests pass on macOS.
-4. Implement brig.domain.jail_types.seatbelt (Python 3.15 Template-rendered SBPL compiler, rules, pins, placeholders_for, writable_shared_paths, ceilings, seatbelt_argv) and brig.presentation.drivers.seatbelt (create_seatbelt_jail), re-exported from brig.
-5. Write unit, integration, and e2e test batteries on Darwin (test_seatbelt_compile, test_seatbelt_ceilings, test_seatbelt_driver, test_seatbelt_journey, test_seatbelt_fs_policy_battery, test_seatbelt_supervisor_isolation_battery, test_seatbelt_channel_readiness_battery, test_seatbelt_egress_battery, test_seatbelt_report_battery).
-6. Run uv run just done and uv run just test-e2e until green; record implementation notes on TASK-0061 and write .gemini-report.md and .gemini-done.
+Taken over 2026-11-11 from an agent that ran out of quota. Everything inherited (decision-0010, infra Darwin support, the uncommitted seatbelt jail type and driver) is treated as unreviewed; claims are re-measured on this Mac (macOS 27.0.1, /usr/bin/sandbox-exec).
+
+Measured before planning (scratch probes, to be pinned by e2e tests):
+- The profile does not import system.sb, and Python, sh and git start without it; /etc/passwd and /usr/lib/dyld are then unreadable. decision-0010's reason for fs_read BEST_EFFORT (system.sb's grants) is false; the real reasons are the listing of / and ancestor metadata.
+- Unfiltered (allow signal) lets a jail SIGTERM any host process of the user (killed a host sleep). (allow signal (target same-sandbox)) refuses it and still lets a jail signal its own children.
+- Unfiltered (allow mach-lookup) lets a jail read the host pasteboard (pbpaste). With mach-lookup limited to com.apple.system.opendirectoryd.libinfo, pbpaste is refused and pwd/grp/whoami/git/ssl/subprocess still work.
+- (deny syscall-unix (syscall-number SYS_setsid SYS_setpgid)) refuses both, so a command cannot leave the jail's process group and outlive destroy_jail's group kill.
+- LOCAL_PEERTOKEN (0x006, 32 bytes) layout verified against a forked listener: pid at [5], pidversion at [7] equals proc_pidinfo's p_idversion; pbi_pgid equals os.getpgid.
+- PT_DENY_ATTACH: a child calling ptrace(PT_ATTACHEXC, ppid) is killed with SIGSEGV; without it, attach and task_for_pid already fail (EPERM, KERN_FAILURE).
+- Unix sockets: bind and connect allowed in the channel directory with a subpath-filtered network-bind; connect to a host socket in a readable root and bind outside are EPERM; TCP, UDP and DNS are refused.
+- (remote tcp "localhost:P") also matches [::1]:P and the LAN address at P, not other ports.
+
+Steps:
+1. Domain (seatbelt.py): narrow the header (signal same-sandbox, mach-lookup libinfo only, deny setsid/setpgid, /dev and ioctl narrowed as far as startup allows, / metadata only if startup allows); _render_atom private; claims' text corrected to the measured reasons.
+2. Egress on a shared network stack: per-jail bridge port chosen on the host (fails closed if taken), and on darwin the supervisor's [::1] bind is required rather than best-effort, since the profile's localhost filter reaches [::1].
+3. Presentation: export create_seatbelt_jail and the seatbelt claims from brig; lint fix for the Raises section.
+4. Tests: unit (compile order, render, escaping, ceilings), integration (driver with fakes where bwrap has them), e2e on darwin with an unjailed control beside every attack: write outside the project, network egress, masked secret read, another jail's channel, host process signal, pasteboard, setsid escape, pin rename, channel readiness with a verified peer, interrupt and destroy, report battery held with at_most.
+5. Correct decision-0010's unmeasured or false claims; update docs/spec where it repeats them.
+6. uv run just done and uv run just test-e2e green on this Mac; report in implementation notes and .gemini-report.md.
 <!-- SECTION:PLAN:END -->
