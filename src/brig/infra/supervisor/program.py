@@ -120,7 +120,14 @@ def _listen(port: int) -> list[socket.socket]:
     (decision-0009 item 1; where it has not, IPv4 alone, as the decision states). Called before
     the command starts, so the port is the bridge's before any program of the jail's could take
     it. Each socket is close-on-exec, as Python makes every socket, so the command inherits none.
-    An `OSError` binding `127.0.0.1:<port>` propagates.
+
+    On Darwin the jail shares the host's network stack and its profile lets the command reach
+    the port on every local address, `[::1]` included (measured, decision-0010 item 4), so a
+    `[::1]:<port>` this cannot take would be some host program's, reached past the proxy.
+
+    Raises:
+        OSError: `127.0.0.1:<port>` could not be bound, or, on Darwin, `[::1]:<port>`; the jail
+            never starts.
     """
     listeners = [socket.create_server(("127.0.0.1", port), backlog=128)]
     try:
@@ -130,7 +137,8 @@ def _listen(port: int) -> list[socket.socket]:
             )
         )
     except OSError:
-        pass
+        if sys.platform == "darwin":
+            raise
     return listeners
 
 

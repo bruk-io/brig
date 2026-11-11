@@ -17,6 +17,14 @@ from brig.domain.jail_types.bwrap import (
     declared_channel_paths,
     writable_shared_paths,
 )
+from brig.domain.jail_types.seatbelt import (
+    SEATBELT_CHANNEL_EXCLUSIVITY_CLAIM,
+    SEATBELT_ENV_CLAIM,
+    SEATBELT_FS_READ_CLAIM,
+    SEATBELT_FS_WRITE_CLAIM,
+    SEATBELT_NETWORK_CLAIM,
+    SEATBELT_NETWORK_EGRESS_CLAIM,
+)
 from brig.domain.policy.egress import (
     Destination,
     EgressChangeKind,
@@ -48,6 +56,7 @@ from brig.presentation.api import (
     run_jail,
 )
 from brig.presentation.drivers.bwrap import create_bwrap_jail
+from brig.presentation.drivers.seatbelt import create_seatbelt_jail
 from brig.presentation.errors import (
     ChannelDirectoryCreateFailed,
     ChannelEndpointTooLong,
@@ -104,6 +113,12 @@ __all__ = [
     "FS_WRITE_CLAIM",
     "NETWORK_CLAIM",
     "NETWORK_EGRESS_CLAIM",
+    "SEATBELT_CHANNEL_EXCLUSIVITY_CLAIM",
+    "SEATBELT_ENV_CLAIM",
+    "SEATBELT_FS_READ_CLAIM",
+    "SEATBELT_FS_WRITE_CLAIM",
+    "SEATBELT_NETWORK_CLAIM",
+    "SEATBELT_NETWORK_EGRESS_CLAIM",
     "Channel",
     "ChannelDirectory",
     "ChannelDirectoryPort",
@@ -176,6 +191,7 @@ __all__ = [
     "check_egress_limits",
     "check_egress_policy",
     "create_bwrap_jail",
+    "create_seatbelt_jail",
     "declared_channel_paths",
     "destroy_jail",
     "egress_decisions",

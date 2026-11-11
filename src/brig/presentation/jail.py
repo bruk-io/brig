@@ -17,7 +17,7 @@ from brig.domain import operations
 from brig.domain.claims import Claim
 from brig.domain.effects import ExitCodeUnknown, ExitOutcome, GroupState, Process
 from brig.domain.grades import Grade
-from brig.domain.jail_types import bwrap
+from brig.domain.jail_types import bwrap, seatbelt
 from brig.domain.policy.egress import (
     Destination,
     EgressChangeKind,
@@ -308,6 +308,7 @@ class Jail:
     channel_namespace_fd: int | None = None
     channel_directory_fd: int | None = None
     mounts: tuple[bwrap.Mount, ...] = ()
+    rules: tuple[seatbelt.Rule, ...] = ()
     placeholders: str | None = None
     report: frozendict[Claim, Grade] = frozendict()
     egress: EgressPort | None = None
@@ -386,6 +387,10 @@ def dismantle(
     if supervisor_script is not None:
         try:
             supervisor_script.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            supervisor_script.with_suffix(".sb").unlink(missing_ok=True)
         except OSError:
             pass
     if channel_directory is not None:
