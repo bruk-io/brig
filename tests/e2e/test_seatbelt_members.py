@@ -7,6 +7,7 @@ found carrying its profile (the canary)."""
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -45,3 +46,64 @@ def test_a_running_jail_s_supervisor_is_found_carrying_its_profile() -> None:
         assert not members.is_member(str(jail.member_mark), str(decoy), os.getpid())
     finally:
         destroy_jail(jail)
+
+
+def _broadly_sandboxed(tmp_path: Path) -> subprocess.Popen[bytes]:
+    """A process under a sandbox that allows everything but one file, `tmp_path/denied`, as a
+    tool's own sandbox may: it may read any mark. The one denied file shows when its profile
+    has applied. In a session of its own, so a regression that kills its group spares this
+    test's."""
+    denied = tmp_path / "denied"
+    denied.write_text("")
+    profile = f'(version 1)(allow default)(deny file-read-metadata (literal "{denied}"))'
+    bystander = subprocess.Popen(
+        ["/usr/bin/sandbox-exec", "-p", profile, "/bin/sleep", "30"], start_new_session=True
+    )
+    deadline = time.monotonic() + 5
+    while members.profile_decision(bystander.pid, str(denied)) != 1:
+        assert time.monotonic() < deadline, "the sandboxed process never came up"
+        time.sleep(0.02)
+    return bystander
+
+
+def test_with_its_decoy_gone_a_mark_makes_no_broadly_sandboxed_process_a_member(
+    tmp_path: Path,
+) -> None:
+    """The reviewer's repro: `sandbox_check` reads a missing path as refused, so with the decoy
+    gone a process that may read the mark would pass as the jail's and be killed."""
+    mark = tmp_path / "x.mark"
+    mark.write_text("")
+    missing = tmp_path / "x.decoy"
+    bystander = _broadly_sandboxed(tmp_path)
+    try:
+        assert members.profile_decision(bystander.pid, str(mark)) == 0, (
+            "control: the bystander may read the mark"
+        )
+        assert members.profile_decision(bystander.pid, str(missing)) == 1, (
+            "control: the missing decoy reads as refused"
+        )
+        member = members.is_member(str(mark), str(missing), bystander.pid)
+        swept = members.freeze_and_kill(str(mark), str(missing), time.monotonic() + 1)
+        alive = bystander.poll() is None
+    finally:
+        bystander.kill()
+        bystander.wait()
+
+    assert not member
+    assert not swept, "nothing can be told apart without the decoy, so nothing is swept"
+    assert alive, "a broadly sandboxed bystander was killed"
+
+
+def test_a_kept_mark_whose_decoy_is_gone_is_never_swept(tmp_path: Path) -> None:
+    mark = tmp_path / "brig-supervisor-x.mark"
+    mark.write_text("")
+    bystander = _broadly_sandboxed(tmp_path)
+    try:
+        members.reap_kept(str(tmp_path), time.monotonic() + 1)
+        alive = bystander.poll() is None
+    finally:
+        bystander.kill()
+        bystander.wait()
+
+    assert alive, "a broadly sandboxed bystander was killed by the kept-mark sweep"
+    assert mark.exists(), "the mark is left where it is, not removed"

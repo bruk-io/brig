@@ -116,3 +116,30 @@ def test_a_supervisor_outside_a_sandbox_starts_no_freezer_even_when_asked() -> N
 
     assert supervisor.returncode != 0, "control: with no wire fds the supervisor fails"
     assert left == set(), "an unsandboxed freezer was left running"
+
+
+def test_a_freezer_whose_signals_reach_the_host_does_not_arm() -> None:
+    """Sandboxed is not enough: under a profile that lets it signal outside its sandbox, the
+    freezer's `kill(-1, SIGSTOP)` would reach every process of the user, so it must see that a
+    signal to the host is not refused and exit (no wire fds, so the supervisor ends at once)."""
+    before = _freezers()
+    supervisor = subprocess.run(
+        [
+            "/usr/bin/sandbox-exec",
+            "-p",
+            "(version 1)(allow default)",
+            sys.executable,
+            "-I",
+            program.__file__,
+            program.FREEZER_FLAG,
+        ],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    left = _settle(before, 0)
+    for pid in left:
+        subprocess.run(["/bin/kill", "-9", str(pid)], check=False)
+
+    assert supervisor.returncode != 0, "control: with no wire fds the supervisor fails"
+    assert left == set(), "a freezer that could signal the host was left armed"

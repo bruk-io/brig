@@ -278,6 +278,11 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   canary that the jail's running supervisor is found (decision-0010 item 2). A command that
   kills its freezer and then forks in a loop forever can outlive teardown, which then raises
   `JailTeardownFailed` naming a process that left the group, never claiming the jail gone.
+  A failed teardown leaves the jail's freezer and its runaway process alive until the next
+  `create_seatbelt_jail` or `destroy_jail` sweeps the kept mark. No scan is acted on unless the
+  mark and its decoy are both regular files, before and after it: `sandbox_check` reads a
+  missing decoy as refused, which would make every sandboxed process that may read the mark a
+  member; a kept mark whose decoy is gone is skipped and left in place.
 - `placeholders.py`: the directories made on the host for bwrap to mount over or Seatbelt to pin
   at absent paths, recorded per jail (tagged with the `user.brig.placeholder` extended attribute
   and verified against process start time via `/proc/<pid>/stat` on Linux or

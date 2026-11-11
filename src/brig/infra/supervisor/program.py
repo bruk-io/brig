@@ -266,12 +266,20 @@ nothing else starts it, so a supervisor run outside a Seatbelt jail (bwrap's, a 
 does."""
 
 _FREEZER = """
-import ctypes, os, signal
+import ctypes, os, signal, sys
 signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGUSR1})
 libsystem = ctypes.CDLL("/usr/lib/libSystem.dylib")
 libsystem.sandbox_check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
 libsystem.sandbox_check.restype = ctypes.c_int
 if libsystem.sandbox_check(os.getpid(), None, 0) != 1:
+    os._exit(0)
+try:
+    os.kill(int(sys.argv[2]), 0)
+except PermissionError:
+    pass
+except (OSError, IndexError, ValueError):
+    os._exit(0)
+else:
     os._exit(0)
 if os.fork():
     os._exit(0)
@@ -296,7 +304,9 @@ the host continues it, until the host has seen the whole jail stopped and killed
 (`infra.members.freeze_and_kill`). `SIGUSR1` is blocked until its handler is in, so one sent
 early is held, not fatal. Outside a sandbox `kill(-1, SIGSTOP)` would stop every process of
 the user, so it exits at once unless `sandbox_check` says it is sandboxed (with no filter, the
-call takes no variadic argument), whatever started it."""
+call takes no variadic argument), and unless a signal to the host that started the jail, whose
+pid it is given, is refused (`EPERM`): that checks the signal's reach itself, not only that some
+sandbox is there, so a sandbox whose signals reach outside it never arms one."""
 
 
 def _is_open(fd: int) -> bool:
@@ -310,7 +320,8 @@ def _is_open(fd: int) -> bool:
 
 def _start_freezer() -> None:
     """Start the teardown freezer (`_FREEZER`) on Darwin when the launch asks for it
-    (`FREEZER_FLAG`), before the command exists: stdio on
+    (`FREEZER_FLAG`), before the command exists, given the host's pid (this process's parent:
+    the host spawns `sandbox-exec`, which execs this program in place): stdio on
     `/dev/null`, none of the supervisor's own fds (the bridge's included, when it has one). A
     no-op elsewhere, where the jail's PID namespace ends every process of the jail with its PID
     1. An `OSError` from the spawn propagates: the supervisor ends before the command starts.
@@ -324,7 +335,7 @@ def _start_freezer() -> None:
     actions += [(os.POSIX_SPAWN_CLOSE, fd) for fd in held]
     os.posix_spawn(
         sys.executable,
-        [sys.executable, "-I", "-c", _FREEZER, _FREEZER_MARKER],
+        [sys.executable, "-I", "-c", _FREEZER, _FREEZER_MARKER, str(os.getppid())],
         {},
         file_actions=actions,
     )

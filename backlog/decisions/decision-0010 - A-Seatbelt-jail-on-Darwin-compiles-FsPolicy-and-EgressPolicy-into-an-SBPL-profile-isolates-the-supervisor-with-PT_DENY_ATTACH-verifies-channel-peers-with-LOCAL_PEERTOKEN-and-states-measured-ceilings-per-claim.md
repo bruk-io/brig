@@ -151,7 +151,10 @@ decision-0009's body was written after its `create`.
        leads a session of its own, so it outlives its command, holds none of the supervisor's
        fds, and is reaped by no one in the jail. Only the Seatbelt launch asks for it
        (`--freezer`), and it exits at once unless it is itself sandboxed: outside a sandbox its
-       `kill(-1, SIGSTOP)` would stop every process of the user. (Found by a full run on this
+       `kill(-1, SIGSTOP)` would stop every process of the user. It also exits unless a signal
+       to the host that started the jail, whose pid it is given, is refused with `EPERM`, so a
+       sandbox whose signals reach outside it never arms one (held by a test under
+       `(allow default)`). (Found by a full run on this
        Mac: the supervisor's gateway tests, which run it unjailed, had each left an unsandboxed
        freezer behind; both guards are now held by `test_seatbelt_supervisor.py`.) At teardown, before the group's kill ladder,
        the host scans the jail, sends the freezer (found by its `brig-teardown-freezer`
@@ -175,6 +178,14 @@ decision-0009's body was written after its `create`.
        carries it. A command that forks in a loop forever after killing its freezer can outlive
        every sweep; that residual is named here and in the spec, and teardown reports it rather
        than claiming the jail gone.
+     - *Intact mark and decoy:* `sandbox_check` reads a missing path as refused, so with the
+       decoy gone every sandboxed process of the user's that may read the mark (one under
+       `(allow default)`, a tool's own sandbox) would pass as a member and be killed (measured
+       by the focused review). No scan is acted on unless both are regular files, looked up
+       through no link, before and after it; `is_member` answers no without both; and a kept
+       mark whose decoy is gone is never swept and is left in place, since removing it would
+       drop the one record that a survivor may exist. Held by `test_seatbelt_members.py`
+       against a broadly sandboxed bystander, which both tests kill without the check.
      - *Canary:* a wrong `sandbox_check` call reads every process as no member, and a sweep that
        finds nothing would look like success. So `create_seatbelt_jail` waits until the jail's
        running supervisor is found carrying the profile, and raises `JailMembersUnverifiable`

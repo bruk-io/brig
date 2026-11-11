@@ -18,6 +18,7 @@ import ctypes
 import os
 import platform
 import signal
+import stat
 import sys
 import time
 from dataclasses import dataclass
@@ -190,14 +191,31 @@ def _scan(mark: str, decoy: str) -> tuple[tuple[_Member, ...], bool]:
     return tuple(found), conclusive
 
 
+def _intact(mark: str, decoy: str) -> bool:
+    """Whether `mark` and `decoy` are both still regular files, looked up through no link.
+
+    `sandbox_check` answers "refused" for a path that does not exist (measured), so with the
+    decoy gone every sandboxed process that may read the mark (one under `(allow default)`, a
+    tool's own sandbox) would pass as the jail's and be killed. Nothing tells the jail apart
+    without both, so no scan is acted on unless both are there before and after it."""
+    for path in (mark, decoy):
+        try:
+            if not stat.S_ISREG(os.lstat(path).st_mode):
+                return False
+        except OSError:
+            return False
+    return True
+
+
 def is_member(mark: str, decoy: str, pid: int) -> bool:
     """Whether the live process `pid` carries the profile that names `mark`: the canary that
     `sandbox_check` answers as measured on this host, asked of a process known to be the
-    jail's. Always `False` off Darwin."""
-    if sys.platform != "darwin":
+    jail's. Always `False` off Darwin, and while the mark or decoy is not intact (`_intact`)."""
+    if sys.platform != "darwin" or not _intact(mark, decoy):
         return False
     lib = _libsystem()
-    return _is_member(lib, pid, os.fsencode(mark), os.fsencode(decoy))
+    found = _is_member(lib, pid, os.fsencode(mark), os.fsencode(decoy))
+    return found and _intact(mark, decoy)
 
 
 def _signal(pid: int, sig: signal.Signals) -> None:
@@ -219,6 +237,10 @@ def freeze_and_kill(mark: str, decoy: str, deadline: float) -> bool:
     is continued (`SIGCONT`) and passes again. A stopped process cannot fork, so once two scans
     in a row find the same members, every one stopped, the jail is frozen, and each is killed.
 
+    `False` at once, signalling nothing, whenever the mark or decoy is not intact before or
+    after a scan (`_intact`): without both, the jail's processes cannot be told from any other
+    sandboxed process of the user's.
+
     With no freezer left (the command killed it), each member a scan finds is killed on sight,
     with its process group: that ends a jail that does not fork in a loop, and races one that
     does, which then outlives the deadline, a failure the caller reports.
@@ -228,7 +250,11 @@ def freeze_and_kill(mark: str, decoy: str, deadline: float) -> bool:
     told: set[int] = set()
     frozen: frozenset[int] | None = None
     while True:
+        if not _intact(mark, decoy):
+            return False
         scan, conclusive = _scan(mark, decoy)
+        if not _intact(mark, decoy):
+            return False
         if conclusive and not scan:
             return True
         if time.monotonic() >= deadline:
@@ -264,8 +290,11 @@ def reap_kept(state_dir: str, deadline: float) -> None:
     """Sweep the marks a failed teardown kept (decision-0010 item 2): each `*.mark` in
     `state_dir` whose jail's supervisor script is gone, which only a teardown that could not
     end every member leaves. Each is swept again (`freeze_and_kill`), and its mark and decoy
-    removed once none is left; a mark still carried stays for the next sweep. Every `OSError`
-    is swallowed: this is housekeeping, run before a jail is made or destroyed."""
+    removed once none is left; a mark still carried stays for the next sweep. A mark whose decoy
+    is gone, or either not a regular file, is never swept and is left where it is: nothing can
+    tell its jail's processes from any other sandboxed one of the user's, and removing it would
+    drop the one record that a survivor may exist. Every `OSError` is swallowed: this is
+    housekeeping, run before a jail is made or destroyed."""
     try:
         marks = [name for name in os.listdir(state_dir) if name.endswith(".mark")]
     except OSError:
@@ -273,7 +302,7 @@ def reap_kept(state_dir: str, deadline: float) -> None:
     for name in marks:
         mark = os.path.join(state_dir, name)
         stem = mark[: -len(".mark")]
-        if os.path.exists(stem + ".py"):
+        if os.path.exists(stem + ".py") or not _intact(mark, stem + ".decoy"):
             continue
         if freeze_and_kill(mark, stem + ".decoy", deadline):
             for made in (mark, stem + ".decoy"):
