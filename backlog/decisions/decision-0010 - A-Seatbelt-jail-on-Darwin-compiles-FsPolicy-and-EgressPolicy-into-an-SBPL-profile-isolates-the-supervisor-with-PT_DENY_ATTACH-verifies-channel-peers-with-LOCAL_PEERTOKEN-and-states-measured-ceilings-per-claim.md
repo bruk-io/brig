@@ -15,9 +15,9 @@ report (`jail.report`) that `bwrap` provides on Linux, backed by `/usr/bin/sandb
 Seatbelt MAC policy.
 
 Four design questions had to be settled by measurement on Darwin before writing code:
-1. **How `FsPolicy` compiles to SBPL.** Seatbelt has no mount namespace; XNU evaluates SBPL rules
-   against resolved vnode paths in last-matching-rule-wins order after `(version 1)`,
-   `(deny default)`, and `(import "system.sb")`.
+1. **How `FsPolicy` compiles to SBPL.** Seatbelt has no mount namespace; it evaluates SBPL rules
+   against resolved paths, the last matching rule winning, after `(version 1)` and
+   `(deny default)`.
 2. **How the supervisor is protected inside the jail on Darwin.** Linux uses `PR_SET_DUMPABLE=0`
    plus an unshared user/PID namespace with all capabilities dropped (decision-0006), and closes
    inherited fds 3, 4, and 5 before spawning children. Darwin has no `prctl` and no PID namespace.
@@ -26,143 +26,163 @@ Four design questions had to be settled by measurement on Darwin before writing 
 4. **What grade ceilings Seatbelt reaches per claim (`fs_write`, `fs_read`, `network`, `env`,
    `channel_exclusivity`), held to empirical e2e measurement on Darwin.**
 
+*Revised 2026-11-11 (TASK-0061, second worker).* The first version of this record was written
+before the code was run and stated several things that were not measured, some of them false: it
+cited `(import "system.sb")`, which the code never emitted, as the reason `fs_read` is
+best-effort; it named `(allow signal (target same-sandbox))` where the code allowed every signal;
+and it did not mention that the code allowed every Mach service, all of `/dev` for writing, and
+an outbound rule filtered on the local port. Every claim below was measured on macOS 27.0.1
+(`/usr/bin/sandbox-exec`, CPython 3.15.0) by scratch probes and is now held by the e2e tests
+named. The body was corrected by hand, since `backlog decision edit` sets only the status, as
+decision-0009's body was written after its `create`.
+
 ## Decision
 
-1. **SBPL compilation (`brig.domain.jail_types.seatbelt`) and template-string rendering (decision-0001 rule 16).**
-   - **Header:** `(version 1)`, `(deny default)`, `(import "system.sb")`, `(allow process*)`,
-     `(allow signal (target same-sandbox))`, `(allow sysctl-read)`, `(allow mach-lookup)`,
-     `(allow ipc-posix-shm-read*)`.
-   - **Read and write roots (shallowest-first by path depth, emitting both unresolved and
-     resolved paths when symlinks such as `/var -> /private/var` or `/tmp -> /private/tmp` differ):**
-     - `(import "system.sb")` on macOS grants `file-read*` only on system paths (`/System`,
-       `/usr/lib`, `/usr/share`, `/Library/Apple`, `/private/etc/passwd`, `/dev/null`, etc.), not
-       on arbitrary host paths.
-     - For every root (`readable` or `writable`), emit `(allow file-read-metadata (literal "<dir>"))`
-       on each ancestor directory from `/` down to the root's parent (and on the unresolved root
-       path itself when it is a symlink) so `execvp` and `realpath` traversal into roots work
-       without opening ancestor directories for reading or listing.
-     - Each `readable` root emits `(deny file-write* (subpath "<root>"))` followed by
-       `(allow file-read* (subpath "<root>"))`. Emitting `deny file-write*` on readable roots lets
-       a nested readable root inside a shallower writable root carve out read-only access.
-     - Each `writable` root emits `(allow file-read* file-write* (subpath "<root>"))`.
-   - **Carve-outs after roots:**
-     - Each `write_denies` entry emits `(deny file-write* (subpath "<path>"))`.
-     - Each `masks` entry emits `(deny file-read* file-write* (subpath "<path>"))`.
-     - `state_dir` is masked with `(deny file-read* file-write* (subpath "<state_dir>"))` followed
-       by `(allow file-read* (literal "<supervisor_script>"))`, so the initial `python -I` process
-       can read `supervisor.py` while supervised commands cannot read or write anything else in
-       `state_dir` (including `profile.sb`).
-     - When `channel_directory` is present, emit `(allow file-read-metadata (literal ...))` on its
-       ancestors and `(allow file-read* file-write* (subpath "<channel_directory>"))`.
-   - **Directory pins (`deny file-write-unlink`) and absent-target placeholders:**
-     - Measured on Darwin: `(allow file-write* (subpath "/w"))` permits `rmdir("/w")` unless `/w`
-       itself is pinned, and permits renaming an intermediate directory `/w/a` on the way to a
-       carve-out `/w/a/b/secret` unless `/w/a` and `/w/a/b` are pinned.
-     - Furthermore, if an intermediate directory `/w/a` does not exist when the jail starts, a
-       jailed command can `rename("/w/planted", "/w/a")`, which XNU evaluates as `file-write-create`
-       on `/w/a` rather than `file-write-unlink`, bypassing the deny on `/w/a/secret`!
-     - Therefore:
-       1. `placeholders_for` holds absent carve-out targets (and their intermediate directories)
-          inside writable roots before the jail starts, tagged with Darwin extended attributes
-          (`user.brig.placeholder`) and cleaned up by `placeholders.release` / `placeholders.sweep`.
-       2. Every writable root `!= "/"` and every strict ancestor directory between a writable root
-          and a carve-out (`write_denies`, `masks`, a nested `readable` root, or `state_dir`) is
-          pinned with `(deny file-write-unlink (literal "<dir>"))`.
-   - **Network rules in SBPL:**
-     - Emit `(deny network* (with no-log))` to override `(import "system.sb")`'s unix-socket grants.
-     - Measured on Darwin: XNU's Sandbox MAC hook checks `network-outbound` and `network-bind` on
-       `AF_UNIX` sockets as well as IP sockets. Under `(deny network* (with no-log))`, `connect()`
-       and `bind()` to any Unix socket outside `channel_directory` fail with `EPERM`, even when the
-       socket file sits inside a readable or writable root.
-     - When `channel_directory` is present, emit `(allow network-bind (subpath "<channel_dir>"))`
-       and `(allow network-outbound (subpath "<channel_dir>"))`.
-     - When an `EgressPolicy` is present with `bridge_port`, emit
-       `(allow network-bind (local tcp "localhost:<port>"))`,
-       `(allow network-inbound (local tcp "localhost:<port>"))`, and
-       `(allow network-outbound (remote tcp "localhost:<port>"))` so the supervisor can bind its
-       loopback bridge and jailed commands can connect only to port `<port>`.
-   - **Template-string rendering:** `render_profile` and atom helpers accept only Python 3.15
-     `string.templatelib.Template` (`t"..."`) and reject plain `str` by type (`mypy --strict`),
-     escaping `\` and `"` inside every interpolated value and rejecting NUL bytes (`\x00`).
+1. **SBPL compilation (`brig.domain.jail_types.seatbelt`) and template-string rendering
+   (decision-0001 rule 16).**
+   - **Header**, every line measured (`_HEADER_LINES`):
+     - `(version 1)`, `(deny default)`. No `(import "system.sb")`: CPython, `sh` and `git` start
+       without it, and without it `/etc/passwd` and `/usr/lib/dyld` are unreadable unless the
+       policy reads them. (The old SPEC's "deny default alone aborts even `/bin/echo`" does not
+       hold once the root directory is readable, below.)
+     - `(allow process-exec process-fork sysctl-read)`. `sysctl-read` also lets the jail read
+       every host process's arguments (`KERN_PROCARGS2`; measured, environment not shown).
+     - `(allow signal (target same-sandbox))`. Unfiltered, a jail sent `SIGTERM` to a host
+       process of the same user and killed it; filtered, `kill` of a host process or another
+       jail's supervisor is `EPERM`, and the jail still signals its own children.
+     - `(deny syscall-unix (syscall-number SYS_setsid SYS_setpgid))`: both are then `EPERM`. Darwin
+       has no PID namespace, so a command that left the supervisor's process group would outlive
+       `destroy_jail`'s group kill and `group_alive`'s check; with the deny it cannot. The
+       supervisor's own session comes from the host's spawn of `sandbox-exec`, before the
+       profile applies. The cost: a command that daemonises or asks for a new session
+       (`start_new_session=True`, `setsid(1)`) fails in a jail.
+     - `(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))`, nothing
+       else of Mach. Unfiltered, `pbpaste` in a jail read the host's pasteboard; with only the
+       directory lookups, `pwd`, `grp`, `whoami`, `id`, `git`, `ssl` and `subprocess` still
+       work and `bootstrap_look_up` of the pasteboard is refused. Every other service is a route
+       the compile could not grade, so the profile names the one it can.
+     - `(allow file-read-data file-read-metadata (literal "/"))`: without `file-read-data` on
+       `/`, `dyld` aborts every process (`SIGABRT`). It lists the names at `/`.
+     - `(allow file-read* file-write-data ...)` on `/dev/null`, `/dev/zero`, `/dev/stdin`,
+       `/dev/stdout`, `/dev/stderr` and `/dev/fd`, and `(allow file-read* ...)` on `/dev/urandom`
+       and `/dev/random`. With `file-write-data` on all of `/dev`, a jail opened the user's
+       terminal for writing. No `file-ioctl`: nothing measured needed it.
+   - **Read and write roots (shallowest first by path depth, at both the path and where it
+     resolves when a link such as `/var -> /private/var` or `/tmp -> /private/tmp` differs):**
+     - For every root, `(allow file-read-metadata (literal "<dir>"))` on each ancestor directory
+       from `/` down, so `execvp` and `realpath` reach the root without listing its ancestors.
+     - A readable root emits `(allow file-read* (subpath "<root>"))`, and, nested in a writable
+       root, `(deny file-write* (subpath "<root>"))` after it.
+     - A writable root emits `(allow file-read* file-write* (subpath "<root>"))`.
+   - **Carve-outs after roots:** a write deny emits `(deny file-write* (subpath "<path>"))`, a
+     mask `(deny file-read* file-write* (subpath "<path>"))`. brig's state directory is masked
+     after every policy rule, then this jail's supervisor script is allowed read-only and its
+     channel directory read-write, so the command reaches neither another jail's script, its
+     profile, nor its channels.
+   - **Pins and placeholders** (old SPEC decisions 207 and 208): every writable root other than
+     `/`, and every directory strictly between a writable root and a carve-out (a deny, a mask, a
+     nested readable root, the state directory), is pinned with
+     `(deny file-write-unlink (literal "<dir>"))`; an absent one is made before the jail starts
+     (`placeholders.hold`). Measured: without the pins, a jailed command renamed the directory
+     above a write deny, wrote beneath the new name, and renamed it back.
+   - **Network:** `(deny default)` refuses every network operation; no `(deny network*)` line is
+     needed. With a channel, `(allow network-bind network-outbound (subpath "<channel_dir>"))`.
+     Measured: a subpath-filtered `network-bind` binds in the channel directory (the old SPEC's
+     "`network-bind` must be unscoped" does not reproduce on 27.0.1), and a connect to a host
+     Unix socket in a readable root, a bind outside the channel directory, TCP, UDP and name
+     resolution are all refused.
+   - **Egress:** with an `EgressPolicy`, `(allow network-bind network-inbound (local tcp
+     "localhost:<port>"))` for the supervisor's bridge and `(allow network-outbound (remote tcp
+     "localhost:<port>"))` for the command. Measured: the first version also allowed
+     `network-outbound` under the `local` filter, and with it a jailed command bound its source
+     port to the bridge port and connected to `1.1.1.1:80`; split as above, that is refused and
+     both bridge listeners are still reachable. SBPL accepts only `localhost` or `*` as the host
+     (`127.0.0.1` is a parse error), and `localhost` matches every local address on both sides:
+     `[::1]:<port>` and the LAN address at `<port>` connect, `127.0.0.1:<other port>` does not,
+     and a jailed command can listen on `0.0.0.0:<port>` with `SO_REUSEADDR` beside the
+     supervisor's listeners.
+   - **Template-string rendering:** `render_profile` renders each rule through `_render_atom`,
+     which accepts only a `string.templatelib.Template`, escapes `\` and `"` in every
+     interpolated value, and refuses a NUL byte.
 
 2. **Supervisor protection on Darwin (`brig.infra.supervisor.program`).**
-   - At startup, `_make_undumpable()` on Darwin calls `ptrace(PT_DENY_ATTACH, 0, 0, 0)`
-     (`PT_DENY_ATTACH = 31` via `libSystem.dylib`). Measured: inside `sandbox-exec`, a child
-     process calling `ptrace(PT_ATTACH, ppid, ...)` receives `SIGSEGV` from XNU and `ptrace` fails
-     with `EBUSY`.
-   - The supervisor closes inherited control/handshake/proxy fds `3`, `4`, and `5` before spawning
-     any command, and Darwin has no `/proc/<pid>/fd` through which a child could reopen fds held by
-     its parent.
-   - `sandbox-exec -f <profile.sb> python -I <supervisor.py>` calls `sandbox_init` and `execvp`s
-     Python in place, so the supervisor is the root process of the jail and leads its own process
-     group (`start_new_session=True`).
+   - `_make_undumpable()` on Darwin calls `ptrace(PT_DENY_ATTACH, 0, 0, 0)`. Measured: a jailed
+     command that calls `ptrace(PT_ATTACHEXC, <supervisor>)` is killed with `SIGSEGV`, and the
+     host reads exit -11. Without `PT_DENY_ATTACH` the attach already fails with `EPERM` and
+     `task_for_pid` with `KERN_FAILURE` on this host, so it is a second wall, not the only one.
+   - The supervisor closes fds 3, 4 and 5 in the command (measured: none is open there), and
+     Darwin has no `/proc/<pid>/fd` to reopen them through.
+   - `sandbox-exec -f <profile> python -I <supervisor.py>` execs in place, so the supervisor is
+     the jail's root process and leads its own session and process group.
+   - What differs from Linux: the supervisor shares the command's sandbox, so the command can
+     signal it. Measured: a command that sends its supervisor `SIGKILL` makes `run_jail` raise
+     `JailExitUnknown`; the exit code is lost, never forged, and `destroy_jail` still ends the
+     group.
 
 3. **Channel readiness and peer verification on Darwin (`brig.infra.sockets`).**
-   - `open_directory` uses `O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW` on Darwin (where Linux
-     adds `O_PATH`), and verifies the directory fd's path via `fcntl(F_GETPATH)`.
-   - Before `connect()`, `channel_ready` stats `<directory_fd>/<name>` with `follow_symlinks=False`
-     and verifies `S_ISSOCK(st_mode)`, refusing symlinks or non-sockets before any connection is
-     made (and again after `connect()` verifies `st_dev`/`st_ino` match).
-   - After `connect()`, Darwin reads the peer's kernel audit token via
-     `getsockopt(SOL_LOCAL=0, LOCAL_PEERTOKEN=0x006, 32)`, unpacking
-     `(auid, euid, egid, ruid, rgid, pid, asid, pidversion)`:
-     - `ENOPROTOOPT` returns `ChannelRefused(KERNEL_UNSUPPORTED)`.
-     - `EINVAL` (which XNU returns on `LOCAL_PEERTOKEN` when the `listen()` caller has exited and
-       been reaped, whereas `LOCAL_PEERPID` still returns the dead PID) or `ENOTCONN` (when the
-       peer closed before `getsockopt`, old SPEC decisions 209/210) returns
-       `ChannelRefused(PEER_LOOKUP_FAILED)`.
-     - `euid != expected_uid` returns `ChannelRefused(UID_MISMATCH)`.
-   - Darwin then queries `libproc` (`proc_pidinfo` with `PROC_PIDTBSDINFO = 3` and
-     `PROC_PIDUNIQIDENTIFIERINFO = 17`) for `peer_pid`:
-     - If `proc_pidinfo` fails or `pbi_status == SZOMB (5)`, returns
-       `ChannelRefused(PEER_LOOKUP_FAILED)`.
-     - If `p_idversion != peer_pidversion`, the PID was recycled since the token was minted;
-       returns `ChannelRefused(NAMESPACE_MISMATCH)`.
-     - Compares `pbi_pgid` against the jail's process group recorded in `jail_namespace_fd` (which
-       on Darwin holds an open fd containing the jail supervisor's pgid after verifying the
-       supervisor is alive and not a zombie); if they differ, returns
-       `ChannelRefused(NAMESPACE_MISMATCH)`.
+   - `open_directory` opens the channel directory `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` (no
+     `O_PATH` on Darwin), and `channel_ready` reads its path back with `fcntl(F_GETPATH)`.
+   - Before the connect, the name is `lstat`ed beneath the directory fd: a link is
+     `PEER_OUTSIDE_JAIL` without a connect, anything but a socket is not ready. After the
+     connect, the inode is checked again.
+   - The peer's `audit_token_t` comes from `getsockopt(SOL_LOCAL=0, LOCAL_PEERTOKEN=0x006, 32)`.
+     Measured against a forked listener of known pid: the eight words are
+     `(auid, euid, egid, ruid, rgid, pid, asid, pidversion)`, the pid at index 5 and the
+     pidversion at index 7, equal to `proc_pidinfo(PROC_PIDUNIQIDENTIFIERINFO)`'s `p_idversion`;
+     `proc_pidinfo(PROC_PIDTBSDINFO)`'s `pbi_pgid` equals `os.getpgid`.
+   - The peer is the jail's when its `euid` is the embedder's, it is alive and no zombie, its
+     `p_idversion` is the token's (the pid was not reused), and its process group is the
+     supervisor's, held in `jail_namespace_fd`. Since the profile refuses `setpgid`, no jailed
+     process leaves the group, and POSIX lets `setpgid` join only a group in the caller's own
+     session, so no process outside the jail's session can join it. Measured:
+     a listener the host put in the jail's channel directory is `ChannelRefused`.
+   - Not measured here: the first version's statement that `LOCAL_PEERTOKEN` reads `EINVAL` once
+     the listener has exited and been reaped. Either way such a peer fails the `proc_pidinfo`
+     lookup and is refused.
+   - A residual of Darwin's: the connect goes to the socket's path, so a link the jail swaps in
+     between the `lstat` and the connect is followed. The peer check then refuses what answered,
+     but the embedder has dialled it; Linux connects through the `O_PATH` fd and has no such
+     window.
 
 4. **Measured grade ceilings on Darwin (`seatbelt.ceilings`).**
-   - **`fs_write`:**
-     - `Grade.ENFORCED` when no non-writable carve-out (`write_denies`, `masks`, nested `readable`
-       root, or `state_dir`) lies beneath a writable root: XNU's Seatbelt MAC policy blocks writes
-       outside writable roots, blocks `link(2)` targeting read-only files (`EPERM`), and pins
-       writable roots against `rmdir`/`rename`.
-     - `Grade.BEST_EFFORT` when any non-writable carve-out lies beneath a writable root: Seatbelt
-       matches by path string rather than mounted vnode, so if the *host* renames a read-only
-       carve-out directory inside a writable root to an unguarded name (or hardlinks a denied file
-       to a second name inside the writable root), the jailed process can write through the new
-       host path.
-   - **`fs_read`:** `Grade.BEST_EFFORT` (never `ENFORCED`). Even when `policy.readable` names only
-     a small allowlist of roots, `(import "system.sb")` grants `file-read*` on macOS system paths
-     (`/System`, `/usr/lib`, `/usr/share`, `/private/etc/passwd`, etc.) outside `policy.readable`,
-     and path-based masks do not follow host-side renames or hardlinks of masked files inside a
-     readable root.
-   - **`env`:** `Grade.ENFORCED` (the supervisor spawns every command with `env=dict(request.env)`).
-   - **`channel_exclusivity`:**
-     - `Grade.VIOLATED` when any undeclared writable path is shared with the host.
-     - `Grade.ENFORCED` when no undeclared writable path is shared with the host: unlike Linux bwrap
-       without a socket-scoping filter, XNU's `(deny network* (with no-log))` blocks `connect()` and
-       `bind()` on every `AF_UNIX` socket outside `channel_directory` in the kernel, even inside
-       readable roots or `/tmp`.
-   - **`network`:**
-     - Without `EgressPolicy`: `Grade.ENFORCED` (XNU blocks all IP and Unix-domain network traffic
-       outside `channel_directory`).
-     - With `EgressPolicy`: `Grade.BEST_EFFORT`. While XNU blocks arbitrary remote hosts/ports and
-       blocks DNS resolution (`/var/run/mDNSResponder`), SBPL's
-       `(remote tcp "localhost:<bridge_port>")` matches any local interface IP address owned by the
-       host (e.g. a LAN IP `<host_ip>:<bridge_port>`), whereas the supervisor's bridge binds
-       `127.0.0.1:<bridge_port>` and `[::1]:<bridge_port>` on the shared host network stack. If a
-       host service listens on `<host_ip>:<bridge_port>` (or `0.0.0.0:<bridge_port>`), a jailed
-       process can connect to `<host_ip>:<bridge_port>` directly without traversing the proxy.
+   - **`fs_write`:** `ENFORCED` when no non-writable subpath (a deny, a mask, a nested readable
+     root, brig's state directory) lies beneath a writable root; else `BEST_EFFORT`, since
+     Seatbelt judges a path, not the file at it, and the host renaming or linking an entry on the
+     way moves what lies beneath it. Measured: a write outside the writable root, a hard link
+     from it to a read-only file, a rename of the directory above a write deny, and opening a
+     terminal for writing are refused, each beside an unjailed control that does it.
+   - **`fs_read`:** `BEST_EFFORT` whatever the policy: the jail lists the names at `/`, reads the
+     metadata of every ancestor of a root, reads host processes' arguments through `sysctl`, and
+     looks up the host's users and groups (all measured), and a mask matches a path, so a host
+     hard link or rename of a masked file shows it under another name. Measured: a masked file
+     and a file outside every readable root are refused.
+   - **`env`:** `ENFORCED` (the supervisor spawns every command with the allowed environment
+     alone; measured).
+   - **`channel_exclusivity`:** `VIOLATED` when an undeclared writable path is shared with the
+     host, else `ENFORCED`: Seatbelt refuses a dial of a host Unix socket inside a readable root,
+     a signal to any process outside the jail, and every Mach service but the directory lookups.
+     Measured: each refused beside its unjailed control, and another jail neither dials nor binds
+     in a jail's channel directory.
+   - **`network`:** without an `EgressPolicy`, `ENFORCED` (TCP, UDP, host Unix sockets and Mach
+     refused; measured). With one, `BEST_EFFORT` (`SEATBELT_NETWORK_EGRESS_CLAIM`): a host
+     service listening at the bridge port on any local address other than the supervisor's own
+     is reachable past the proxy, and the command can listen at the bridge port on the wildcard
+     address, reachable from the network. On Darwin the supervisor's `[::1]` bind is required,
+     so `[::1]:<port>` is never some host program's. The bridge port is fixed at 3128 on the
+     host's shared stack, so one egress jail at a time runs per host. Measured: a second's
+     supervisor cannot bind it and exits before its command starts, and `run_jail` raises
+     `JailExitUnknown`.
 
 ## Consequences
 
 - `brig.domain.jail_types.seatbelt` and `brig.presentation.drivers.seatbelt` implement the Darwin
-  Seatbelt jail slice (`create_seatbelt_jail`), re-exported from `brig`.
+  Seatbelt jail (`create_seatbelt_jail`), exported from `brig` with the `SEATBELT_*` claims.
 - `brig.infra` works on both Linux and Darwin (`placeholders`, `sockets`, `supervisor`, `proxy`,
-  `process`).
-- Every Seatbelt ceiling in `jail.report` is held to empirical measurement on Darwin by e2e
-  batteries (`test_seatbelt_*.py`).
-
+  `processes`).
+- Every Seatbelt ceiling in `jail.report` is held by the e2e tests
+  `tests/e2e/test_seatbelt_battery.py`, `test_seatbelt_channels.py`, `test_seatbelt_egress.py`,
+  `test_seatbelt_journey.py` and `test_seatbelt_supervisor.py`, which run on a Mac and skip on
+  Linux; the profile's shape by `tests/unit/test_seatbelt_compile.py` and
+  `test_seatbelt_ceilings.py`.
+- Open: the bridge port's fixed number on a shared stack (one egress jail per host), and the
+  readiness dial's path window above.

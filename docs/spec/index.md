@@ -46,8 +46,9 @@ future contribution; a change that violates one is a SPEC change first, code sec
    command can neither reopen nor ptrace (`PR_SET_DUMPABLE=0` and `--cap-drop ALL` in an unshared
    PID namespace on Linux, decision-0006; `ptrace(PT_DENY_ATTACH)` and no `/proc/<pid>/fd` on
    Darwin, decision-0010), never by the command's own claim. *Held by*
-   `tests/e2e/test_supervisor_isolation_battery.py` and
-   `tests/e2e/test_seatbelt_supervisor_isolation_battery.py`.
+   `tests/e2e/test_supervisor_isolation_battery.py` and `tests/e2e/test_seatbelt_supervisor.py`
+   (on Darwin the command can still signal its supervisor, which leaves the exit code unknown,
+   never forged).
 7. **Control must not require cooperation.** Interrupt and teardown work when the command is
    spinning, wedged or hostile: `interrupt_jail` signals through the supervisor and loses nothing
    while the jail comes up: the command receives it. What the command does with it is its own: a
@@ -214,31 +215,33 @@ lower it.
 
 `jail_types/seatbelt.py` is Seatbelt's slice on Darwin (decision-0010, TASK-0061): `compile_run`
 makes the plan (with `egress_port`, setting the same proxy variables at `EGRESS_BRIDGE_PORT` on
-loopback), `compile_rules` turns the `FsPolicy`, `state_dir`, `supervisor_script`,
-`channel_directory`, and `egress_port` into one ordered tuple of SBPL rules (shallowest root
-first, emitting both unresolved and resolved paths when symlinks such as `/var -> /private/var`
-differ, `file-read-metadata` on ancestor literals, `deny file-write*` + `allow file-read*` on
-readable roots, `allow file-read* file-write*` on writable roots, `deny file-write*` on
-`write_denies`, `deny file-read* file-write*` on `masks` and `state_dir` followed by
-`allow file-read*` on `supervisor_script`, `deny file-write-unlink` literal pins on writable roots
-`!= "/"` and intermediate directories to carve-outs, and `(deny network* (with no-log))` plus
-channel-directory and optional loopback-bridge network grants). `render_profile` renders those
-rules into an SBPL profile string through Python 3.15 template strings (`string.templatelib.Template`,
-decision-0001 rule 16), refusing plain `str` by type, escaping `\` and `"`, and rejecting NUL
-bytes. `placeholders_for` names the absent carve-outs under writable roots whose directories must
-exist and be pinned before the jail starts so a command cannot `rename(2)` a directory onto an
-absent ancestor (`file-write-create`). `ceilings` states Seatbelt's measured grade ceilings per
-claim (decision-0010 item 4): `fs_write` is `ENFORCED` when no non-writable carve-out lies
-beneath a writable root and `BEST_EFFORT` when one does (a host-side rename of a carve-out inside
-a writable root exposes the new name); `fs_read` is `BEST_EFFORT` (`(import "system.sb")` allows
-reading macOS system paths outside `policy.readable`, and path-based masks do not follow host
-renames); `env` is `ENFORCED`; `channel_exclusivity` is `VIOLATED` when any undeclared writable
-path is shared with the host and `ENFORCED` otherwise (XNU's `(deny network* (with no-log))`
-blocks `connect()` and `bind()` on every `AF_UNIX` socket outside `channel_directory` in the
-kernel); `network` without `EgressPolicy` is `ENFORCED`, and with `EgressPolicy`
-(`NETWORK_EGRESS_CLAIM`) is `BEST_EFFORT` (SBPL's `(remote tcp "localhost:<port>")` matches any
-local interface IP address owned by the host, so a host service listening on `<host_lan_ip>:<port>`
-can be reached directly).
+loopback), and `compile_rules` turns the `FsPolicy`, `state_dir`, `supervisor_script`, the channel
+directory and `egress_port` into one ordered tuple of rules: shallowest first, at both a path and
+where it resolves when a link such as `/var -> /private/var` differs; `file-read-metadata` on each
+root's ancestors; `allow file-read*` on readable roots (and `deny file-write*` on one nested in a
+writable root); `allow file-read* file-write*` on writable roots; `deny file-write*` on write
+denies and `deny file-read* file-write*` on masks; `deny file-write-unlink` pins on every writable
+root but `/` and every directory between a writable root and a carve-out (old SPEC decisions 207
+and 208); then brig's state directory masked, this jail's supervisor script readable, its
+channel directory writable and its one place for Unix sockets, and with egress the bridge port.
+`render_profile` renders them after a fixed header, each line of it measured: deny by default;
+signals only within the jail's own sandbox; `setsid` and `setpgid` refused, so no process leaves
+the group `destroy_jail` kills; one Mach service, the directory lookups; read on `/` itself, which
+`dyld` needs; `/dev`'s null, zero and random devices and the process's own descriptors only. No
+`(import "system.sb")`. Every rule is rendered through a Python 3.15 template string
+(`string.templatelib.Template`, decision-0001 rule 16), escaping `\` and `"` and refusing a NUL
+byte. `ceilings` states Seatbelt's grade ceilings per claim (decision-0010 item 4): `fs_write` is
+`ENFORCED` when no non-writable subpath lies beneath a writable root and `BEST_EFFORT` when one
+does (Seatbelt judges a path, so the host renaming or linking an entry on the way moves what lies
+beneath it); `fs_read` is always `BEST_EFFORT` (the jail lists `/`, reads its roots' ancestors'
+metadata and host processes' arguments, and looks up users and groups; and a mask follows a path,
+not a file); `env` is `ENFORCED`; `channel_exclusivity` is `VIOLATED` when an undeclared writable
+path is shared with the host and `ENFORCED` otherwise (Seatbelt refuses a dial of a host Unix
+socket inside a readable root, a signal outside the jail, and every Mach service but the
+directory lookups); `network` without `EgressPolicy` is `ENFORCED`, and with one
+(`SEATBELT_NETWORK_EGRESS_CLAIM`) is `BEST_EFFORT` (SBPL's `localhost` matches every local
+address, so a host service at the bridge port on a LAN address is reachable past the proxy, and
+the command can listen at that port on the wildcard address).
 
 Where the domain and the world alternate, the exchange is a value too. `effects.py` names the
 closed set a generator may yield: start the supervised command, await the supervisor's report,
@@ -476,7 +479,7 @@ reads not ready until the deadline instead of holding the embedder (TASK-0045). 
 `tests/e2e/test_channel_readiness_refusals.py` (every other outcome closes its socket),
 `tests/e2e/test_channel_readiness_dial.py` (the deadline against a full backlog, and a planted
 link never dialled), `tests/e2e/test_channel_readiness_beneath.py` and
-`tests/e2e/test_seatbelt_channel_readiness_battery.py`. `errors.py` names
+`tests/e2e/test_seatbelt_channels.py`. `errors.py` names
 every exception an embedder can see, one per failure, so an embedder handles brig's own types
 and never infra's: a host that refuses brig's own state directory, its empty directory or the
 supervisor script before a jail starts is `StateDirectoryWriteFailed` (TASK-0046), a path the
