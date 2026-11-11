@@ -75,6 +75,9 @@ Changed from the first version of this plan: a per-jail bridge port was planned 
 
 ### Amendment after the pre-merge review (2026-11-11)
 The setsid/setpgid refusal above did not hold (posix_spawn with setpgroup or setsid left the group) and is dropped. Teardown instead kills every process whose sandbox allows the jail's mark and refuses its decoy (src/brig/infra/members.py, a MembersPort through dismantle and destroy_jail), measured by the review's repro and its setsid variant as e2e tests. The Risks line about daemons no longer applies; the new risk is that sandbox_check is private interface, reached through ctypes with an arm64 argument layout measured only here.
+
+### Amendment after the re-review (2026-11-11)
+The member sweep alone lost to a fork loop. Teardown now freezes the jail from inside first: the supervisor starts a freezer (only on the Seatbelt launch, and only when sandboxed) that calls kill(-1, SIGSTOP) on SIGUSR1, repeated until two scans find every member stopped; then every member is killed. A command that kills its freezer and then forks in a loop forever can still outlive teardown: reported as JailTeardownFailed with members_left, swept again later (reap_kept), never claimed gone. Also: a canary (JailMembersUnverifiable), the Linux fd fix in proxy/program.py, and distinct teardown messages.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
