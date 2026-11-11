@@ -20,6 +20,7 @@ import platform
 import signal
 import sys
 import time
+from dataclasses import dataclass
 
 _PROC_ALL_PIDS = 1
 _PROC_PIDTBSDINFO = 3
@@ -100,20 +101,48 @@ def _all_pids(lib: ctypes.CDLL) -> list[int]:
         capacity *= 2
 
 
-def _live_and_mine(lib: ctypes.CDLL, pid: int) -> bool:
-    """Whether `pid` is a live process (no zombie) of this process's real user."""
+_SSTOP = 4
+_CTL_KERN = 1
+_KERN_PROCARGS2 = 49
+
+FREEZER_MARKER = "brig-teardown-freezer"
+"""The argument a jail's teardown freezer carries (`supervisor.program`), by which `freeze_and_kill`
+picks it out among the jail's members. The command can forge it; a forged freezer can keep the
+jail from freezing (a teardown that fails), never make a frozen jail look frozen."""
+
+
+@dataclass(frozen=True)
+class _Member:
+    """One process of the jail, as one scan saw it."""
+
+    pid: int
+    stopped: bool
+    freezer: bool
+
+
+def _info(lib: ctypes.CDLL, pid: int) -> _BsdInfo | None:
+    """`proc_pidinfo(PROC_PIDTBSDINFO)` for `pid`, or `None` once it is gone."""
     info = _BsdInfo()
     size = ctypes.sizeof(info)
     if lib.proc_pidinfo(pid, _PROC_PIDTBSDINFO, 0, ctypes.byref(info), size) != size:
-        return False
-    return bool(info.pbi_status != _SZOMB and info.pbi_uid == os.getuid())
+        return None
+    return info
 
 
 def _decides(lib: ctypes.CDLL, pid: int, path: bytes) -> int:
-    """What `pid`'s sandbox decides for `file-read-metadata` on `path`: 0 allowed, 1 refused,
-    -1 unknown (the process is gone)."""
+    """What `pid`'s sandbox decides for `file-read-metadata` on `path`: 0 allowed, 1 refused
+    (also for a process that is gone, and for a path that does not exist; measured), -1 on an
+    error."""
     flags = _SANDBOX_FILTER_PATH | _SANDBOX_CHECK_NO_REPORT
     return int(lib.sandbox_check(pid, b"file-read-metadata", flags, *_PADS, path))
+
+
+def profile_decision(pid: int, path: str) -> int:
+    """What `pid`'s sandbox decides for `file-read-metadata` on `path`, as `sandbox_check`
+    answers it: 0 allowed, 1 refused. A process that is gone reads 1, as one refused does, so a
+    process that exits mid-scan reads as no member, which is why a scan checks that each one it
+    asked about is still there afterwards (`_scan`). Darwin only."""
+    return _decides(_libsystem(), pid, os.fsencode(path))
 
 
 def _is_member(lib: ctypes.CDLL, pid: int, mark: bytes, decoy: bytes) -> bool:
@@ -122,36 +151,133 @@ def _is_member(lib: ctypes.CDLL, pid: int, mark: bytes, decoy: bytes) -> bool:
     return _decides(lib, pid, mark) == 0 and _decides(lib, pid, decoy) == 1
 
 
-def _members_of(mark: str, decoy: str) -> tuple[int, ...]:
-    """Every live process of this user's whose sandbox allows `mark` and refuses `decoy`: the
-    jail's whose profile names `mark`. Empty off Darwin, which has no `sandbox_check`."""
-    if sys.platform != "darwin":
-        return ()
+def _is_freezer(pid: int) -> bool:
+    """Whether `pid`'s arguments (`KERN_PROCARGS2`) carry `FREEZER_MARKER`."""
+    lib = ctypes.CDLL(None)
+    mib = (ctypes.c_int * 3)(_CTL_KERN, _KERN_PROCARGS2, pid)
+    size = ctypes.c_size_t(65536)
+    buffer = ctypes.create_string_buffer(size.value)
+    if lib.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) != 0:
+        return False
+    return FREEZER_MARKER.encode() in buffer.raw[: size.value]
+
+
+def _scan(mark: str, decoy: str) -> tuple[tuple[_Member, ...], bool]:
+    """Every live process of this user's whose sandbox allows `mark` and refuses `decoy` (the
+    jail's whose profile names `mark`), and whether the scan can be trusted: not when a process
+    of this user's that it listed was gone before it had been judged. `sandbox_check` reads a gone
+    process as refused, so a process that forks and exits faster than a scan (about 3 ms for
+    1,000 processes) would otherwise slip through every one; its chain always has a live
+    member, and a member that exits mid-scan makes the scan inconclusive instead."""
     lib = _libsystem()
-    own = os.getpid()
+    own, uid = os.getpid(), os.getuid()
     raw_mark, raw_decoy = os.fsencode(mark), os.fsencode(decoy)
-    return tuple(
-        pid
-        for pid in _all_pids(lib)
-        if pid != own and _live_and_mine(lib, pid) and _is_member(lib, pid, raw_mark, raw_decoy)
-    )
+    found: list[_Member] = []
+    conclusive = True
+    for pid in _all_pids(lib):
+        if pid == own:
+            continue
+        before = _info(lib, pid)
+        if before is None or before.pbi_uid != uid or before.pbi_status == _SZOMB:
+            continue
+        member = _is_member(lib, pid, raw_mark, raw_decoy)
+        after = _info(lib, pid)
+        if after is None or after.pbi_status == _SZOMB:
+            conclusive = False
+            continue
+        if member:
+            found.append(_Member(pid, after.pbi_status == _SSTOP, _is_freezer(pid)))
+    return tuple(found), conclusive
 
 
-def kill_members(mark: str, decoy: str, deadline: float) -> bool:
-    """`SIGKILL` every member (`_members_of`) and look again, until a look finds none (`True`) or
-    `time.monotonic()` passes `deadline` (`False`). A member forked while the last one was being
-    killed is found by the next look. A pid that exited and was reused between a look and its
-    kill could be signalled; the look and the kill are microseconds apart, and Darwin hands
-    pids out in rising order."""
+def is_member(mark: str, decoy: str, pid: int) -> bool:
+    """Whether the live process `pid` carries the profile that names `mark`: the canary that
+    `sandbox_check` answers as measured on this host, asked of a process known to be the
+    jail's. Always `False` off Darwin."""
+    if sys.platform != "darwin":
+        return False
+    lib = _libsystem()
+    return _is_member(lib, pid, os.fsencode(mark), os.fsencode(decoy))
+
+
+def _signal(pid: int, sig: signal.Signals) -> None:
+    try:
+        os.kill(pid, sig)
+    except OSError:
+        pass
+
+
+def freeze_and_kill(mark: str, decoy: str, deadline: float) -> bool:
+    """End every process that carries the profile naming `mark` (decision-0010 item 2), and say
+    whether none is left (`True`) before `time.monotonic()` passes `deadline` (`False`).
+
+    A process that forks and exits in a loop outruns any scan from the host, so the jail is
+    frozen from inside first: its freezer (`FREEZER_MARKER`), told with `SIGUSR1`, calls
+    `kill(-1, SIGSTOP)`, which Seatbelt's `(target same-sandbox)` confines to the jail and
+    which stops the freezer itself too. One pass can miss a child forked while it runs (measured:
+    1 run in 15 against a fork loop), so while a scan finds a member still running, the freezer
+    is continued (`SIGCONT`) and passes again. A stopped process cannot fork, so once two scans
+    in a row find the same members, every one stopped, the jail is frozen, and each is killed.
+
+    With no freezer left (the command killed it), each member a scan finds is killed on sight,
+    with its process group: that ends a jail that does not fork in a loop, and races one that
+    does, which then outlives the deadline, a failure the caller reports.
+    """
+    if sys.platform != "darwin":
+        return True
+    told: set[int] = set()
+    frozen: frozenset[int] | None = None
     while True:
-        found = _members_of(mark, decoy)
-        if not found:
+        scan, conclusive = _scan(mark, decoy)
+        if conclusive and not scan:
             return True
-        for pid in found:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
         if time.monotonic() >= deadline:
-            return not _members_of(mark, decoy)
+            return False
+        if conclusive and all(member.stopped for member in scan):
+            pids = frozenset(member.pid for member in scan)
+            if frozen == pids:
+                for member in scan:
+                    _signal(member.pid, signal.SIGKILL)
+                frozen = None
+                continue
+            frozen = pids
+            continue
+        frozen = None
+        freezers = [member for member in scan if member.freezer]
+        for freezer in freezers:
+            if freezer.pid not in told:
+                _signal(freezer.pid, signal.SIGUSR1)
+                told.add(freezer.pid)
+            elif freezer.stopped:
+                _signal(freezer.pid, signal.SIGCONT)
+        if not freezers:
+            for member in scan:
+                _signal(member.pid, signal.SIGKILL)
+                try:
+                    os.killpg(os.getpgid(member.pid), signal.SIGKILL)
+                except OSError:
+                    pass
         time.sleep(_POLL_INTERVAL_S)
+
+
+def reap_kept(state_dir: str, deadline: float) -> None:
+    """Sweep the marks a failed teardown kept (decision-0010 item 2): each `*.mark` in
+    `state_dir` whose jail's supervisor script is gone, which only a teardown that could not
+    end every member leaves. Each is swept again (`freeze_and_kill`), and its mark and decoy
+    removed once none is left; a mark still carried stays for the next sweep. Every `OSError`
+    is swallowed: this is housekeeping, run before a jail is made or destroyed."""
+    try:
+        marks = [name for name in os.listdir(state_dir) if name.endswith(".mark")]
+    except OSError:
+        return
+    for name in marks:
+        mark = os.path.join(state_dir, name)
+        stem = mark[: -len(".mark")]
+        if os.path.exists(stem + ".py"):
+            continue
+        if freeze_and_kill(mark, stem + ".decoy", deadline):
+            for made in (mark, stem + ".decoy"):
+                try:
+                    os.unlink(made)
+                except OSError:
+                    pass

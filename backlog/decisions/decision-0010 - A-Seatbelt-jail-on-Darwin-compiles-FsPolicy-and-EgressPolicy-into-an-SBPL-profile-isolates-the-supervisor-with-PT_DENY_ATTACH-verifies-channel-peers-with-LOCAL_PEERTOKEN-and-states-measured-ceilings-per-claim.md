@@ -119,28 +119,66 @@ decision-0009's body was written after its `create`.
      signal it. Measured: a command that sends its supervisor `SIGKILL` makes `run_jail` raise
      `JailExitUnknown`; the exit code is lost, never forged, and `destroy_jail` still ends the
      jail.
-   - **Teardown finds every process of the jail by its sandbox (`brig.infra.members`).** Darwin
-     has no PID namespace: a jailed process can leave the supervisor's group (`posix_spawn` with
+   - **Teardown finds every process of the jail by its sandbox, freezes it from inside, and
+     kills it (`brig.infra.members`).** *Revised 2026-11-11 after the re-review.* Darwin has no
+     PID namespace: a jailed process can leave the supervisor's group (`posix_spawn` with
      `setpgroup` or `setsid`), and once its parent exits it is launchd's child, so neither a
-     group kill nor a walk of the process tree finds it. What it cannot shed is its sandbox, and
-     `sandbox_check` (a libSystem export with no declaration in the SDK's headers, so private
-     interface Apple may change) asks the kernel what a given process's profile decides. Each jail gets
-     two empty files in brig's state directory, a mark and a decoy beside it; its profile allows
-     `file-read-metadata` on its own mark after the state directory's mask, which refuses the
-     decoy. After the group's kill ladder, `destroy_jail` lists every process of the embedder's
-     uid (`proc_listpids`, `proc_pidinfo`), and `SIGKILL`s each that is sandboxed, allowed the
-     mark and refused the decoy, looking again until a look finds none or `kill_grace_s` more
-     passes (then `JailTeardownFailed`, and the mark is kept so nothing that carries it is lost
-     track of); the mark and decoy are removed once none is left. Measured: `sandbox_check` tells
-     jail A's process (mark A allowed, mark B refused) from jail B's (the reverse) and from an
-     unsandboxed process (not sandboxed), and still finds A's process after it called `setsid`;
-     the paths must exist (for a missing path it answers "refused" for every process); and on
-     arm64 its variadic path argument reaches it only when ctypes places it on the stack, behind
-     five unused fixed arguments (without them every check answered "refused"; x86_64 is not
-     measured). The reviewer's repro and its `setsid=True` variant now leave no process and no
-     file behind, and destroying one jail leaves another jail's and the host's processes
-     running. A pid that exited and was reused between a look and its kill could be signalled;
-     the two are microseconds apart and Darwin hands out pids in rising order.
+     group kill nor a walk of the process tree finds it. What it cannot shed is its sandbox.
+     - *Finding:* each jail gets two empty files in brig's state directory, a mark and a decoy
+       beside it; its profile allows `file-read-metadata` on its own mark after the state
+       directory's mask, which refuses the decoy. `sandbox_check` (a libSystem export with no
+       declaration in the SDK's headers, so private interface Apple may change) asks what a
+       given process's profile decides: a process of the embedder's uid that is sandboxed,
+       allowed the mark and refused the decoy is the jail's. Measured: it tells jail A's process
+       from jail B's and from an unsandboxed one, and still finds A's process after it called
+       `setsid`. It answers "refused" for a path that does not exist and for a process that is
+       gone (pinned by `test_seatbelt_members.py`). On arm64 its variadic path reaches it only
+       when ctypes places it on the stack, behind five unused fixed arguments (without them every
+       check answered "refused"); x86_64 is not measured.
+     - *Why a sweep from the host is not enough:* a first version scanned and killed until a scan
+       found nothing. The re-review's repro (fork away, `setsid`, then fork and exit in a loop for
+       8 s, then write a file) beat it: a scan takes about 3 ms over about 1,000 processes, and
+       the chain's newest pid is always one the scan has not judged yet. `destroy_jail` raised
+       after 1 s and the survivor wrote its file 8 s later.
+     - *Freezing from inside:* `kill(-1, sig)` from a jailed process reaches, under
+       `(allow signal (target same-sandbox))`, every process of that sandbox and the caller
+       itself, and nothing outside it. Measured: it reached neither an unsandboxed parent nor a
+       process started separately under the same profile file (a second `sandbox-exec` is a
+       sandbox of its own), and the caller received its own signal. So the killer must already be
+       inside the jail, and one `kill(-1, SIGKILL)` pass dies with it: measured against the
+       fork loop, one pass missed the chain in 1 run of 15. `SIGSTOP` can be repeated. The
+       supervisor starts a freezer before the command (`program._FREEZER`), which forks away and
+       leads a session of its own, so it outlives its command, holds none of the supervisor's
+       fds, and is reaped by no one in the jail. At teardown, before the group's kill ladder,
+       the host scans the jail, sends the freezer (found by its `brig-teardown-freezer`
+       argument) `SIGUSR1`, which makes it call `kill(-1, SIGSTOP)`, and continues it with
+       `SIGCONT` for another pass while a scan still finds a member running. A stopped process
+       cannot fork, so once two scans in a row find the same members, all stopped, each is
+       killed. A scan in which a process it listed vanished before it was judged is not
+       trusted, since a running fork chain always shows as one of those. Measured: the repro
+       now ends in 30 to 70 ms, and its file is never written (`test_seatbelt_journey.py`);
+       without the freeze, the same test fails with `JailTeardownFailed`.
+     - *What does not hold:* every SBPL signal target that lets the freezer reach the jail's
+       orphans (`same-sandbox`) lets the command signal the freezer too; `children` reaches only
+       direct children, `self` and `others` only the caller, and `pgrp` the caller's process
+       group, which a process that left it is out of (measured). So a command that kills its freezer first, and then forks in a loop,
+       defeats the freeze. Teardown then kills each member a scan finds, with its process group,
+       which ends a jail that does not fork in a loop and races one that does. If one is left
+       when `kill_grace_s` has passed, `destroy_jail` raises `JailTeardownFailed` naming a
+       process that left the group (`members_left`), apart from a live group; the survivor is
+       still sandboxed, and its mark and decoy are kept. Every later `create_seatbelt_jail` and
+       `destroy_jail` sweeps the kept marks again (`reap_kept`) and removes each once nothing
+       carries it. A command that forks in a loop forever after killing its freezer can outlive
+       every sweep; that residual is named here and in the spec, and teardown reports it rather
+       than claiming the jail gone.
+     - *Canary:* a wrong `sandbox_check` call reads every process as no member, and a sweep that
+       finds nothing would look like success. So `create_seatbelt_jail` waits until the jail's
+       running supervisor is found carrying the profile, and raises `JailMembersUnverifiable`
+       (the jail torn down first) if it is not; and `destroy_jail` asks again while the
+       supervisor runs, raising the same after its group kill if it is not found. A supervisor
+       that has exited tells the canary nothing, either way.
+     - A pid that exited and was reused between a scan and its kill could be signalled; the two
+       are microseconds apart and Darwin hands out pids in rising order.
 
 3. **Channel readiness and peer verification on Darwin (`brig.infra.sockets`).**
    - `open_directory` opens the channel directory `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` (no
@@ -210,5 +248,6 @@ decision-0009's body was written after its `create`.
   Linux; the profile's shape by `tests/unit/test_seatbelt_compile.py` and
   `test_seatbelt_ceilings.py`. Teardown by `test_seatbelt_journey.py`'s escape tests and
   `tests/integration/test_seatbelt_create.py`.
-- Open: the bridge port's fixed number on a shared stack (one egress jail per host), and the
-  readiness dial's path window above.
+- Open: the bridge port's fixed number on a shared stack (one egress jail per host); the
+  readiness dial's path window above; and a command that kills its freezer and then forks in a
+  loop forever, which outlives teardown (reported, never claimed gone; item 2).

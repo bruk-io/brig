@@ -43,6 +43,7 @@ from brig.presentation.errors import (
     ChannelNameRefused,
     JailExitUnknown,
     JailHasNoEgress,
+    JailMembersUnverifiable,
     JailTeardownFailed,
     JailWaitTimedOut,
     PolicyEgressCidr,
@@ -362,7 +363,10 @@ def destroy_jail(
 ) -> None:
     """Tear `jail` down, verified: no process of its group is left when this returns, and for
     a Seatbelt jail no process that carries its profile, however it left the group (`members`,
-    decision-0010 item 2).
+    decision-0010 item 2): the jail is frozen from inside through its freezer, then killed. A
+    Seatbelt command that kills its freezer and then forks in a loop can outlive this, which
+    then raises `JailTeardownFailed` with `members_left`, never returns as if it were gone; the
+    survivor is still sandboxed, and later Seatbelt creates and destroys sweep for it again.
 
     Runs `dismantle`, the cleanup a failed `create_bwrap_jail` runs too (TASK-0044):
     `kill_grace_s` bounds the post-KILL rung's poll; then, whatever the ladder found, it closes
@@ -377,7 +381,12 @@ def destroy_jail(
             ladder itself raised, so the group was never verified gone; then that error is the
             `__cause__` (TASK-0046). For a Seatbelt jail, also when a process that carries its
             profile was still alive once `kill_grace_s` more had passed.
+        JailMembersUnverifiable: a Seatbelt jail's supervisor was running and the host did not
+            find it carrying the jail's profile, so the sweep for processes that left the group
+            meant nothing; the group kill still ran.
     """
+    if jail.member_mark is not None:
+        members.reap(str(jail.member_mark.parent), time.monotonic() + kill_grace_s)
     dismantled = dismantle(
         jail.process,
         supervisors=supervisors if supervisors is not None else jail.supervisors,
@@ -393,8 +402,12 @@ def destroy_jail(
         member_mark=jail.member_mark,
         members=members,
     )
+    if dismantled.members_unverified:
+        raise JailMembersUnverifiable(jail.process) from dismantled.ladder_error
     if dismantled.state is not GroupState.GONE:
-        raise JailTeardownFailed(jail.process) from dismantled.ladder_error
+        raise JailTeardownFailed(
+            jail.process, members_left=dismantled.members_left
+        ) from dismantled.ladder_error
 
 
 def interrupt_jail(jail: Jail) -> bool:

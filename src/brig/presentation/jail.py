@@ -289,10 +289,27 @@ PLACEHOLDERS: PlaceholderPort = _RealPlaceholders()
 class _RealMembers:
     """`MembersPort` onto infra's `members`."""
 
-    kill: Callable[[str, str, float], bool] = _members.kill_members
+    kill: Callable[[str, str, float], bool] = _members.freeze_and_kill
+    includes: Callable[[str, str, int], bool] = _members.is_member
+    reap: Callable[[str, float], None] = _members.reap_kept
 
 
 MEMBERS: MembersPort = _RealMembers()
+
+
+def _members_found(
+    process: Process, mark: Path, *, members: MembersPort, processes: ProcessPort
+) -> bool:
+    """The canary of a Seatbelt jail's teardown (decision-0010 item 2): whether `members` finds
+    `process`, the jail's own supervisor, carrying the profile `mark` names, while it is known
+    to be running. `True` when it is found, and when it is not running before or after the
+    question (a process that has exited reads as refused, so then nothing was learned); `False`
+    only when it ran throughout and was not found: `sandbox_check` is answering otherwise than
+    measured, and a sweep that found nothing would mean nothing."""
+    if processes.peek(process.pid) is not None:
+        return True
+    found = members.includes(str(mark), str(member_decoy(mark)), process.pid)
+    return found or processes.peek(process.pid) is not None
 
 
 def member_decoy(mark: Path) -> Path:
@@ -354,6 +371,8 @@ class _Dismantled:
     state: GroupState
     ladder_error: Exception | None = None
     close_error: Exception | None = None
+    members_left: bool = False
+    members_unverified: bool = False
 
 
 def dismantle(
@@ -386,11 +405,15 @@ def dismantle(
     mounts over detaches that mount (TASK-0027), so a record a live jail holds is left for a
     later sweep.
 
-    With `member_mark` (a Seatbelt jail), once the ladder has run, `members` kills every process
-    that carries the jail's profile, however it left the group, polling until none is left or a
-    further `kill_grace_s` passes; one left makes the state `ALIVE`. The mark and its decoy are
-    removed only once the state is `GONE`, since a process that carries the profile is found by
-    them and by nothing else.
+    With `member_mark` (a Seatbelt jail), before the ladder, `members` ends every process that
+    carries the jail's profile, however it left the group: it freezes the jail from inside and
+    kills it, within `kill_grace_s` (decision-0010 item 2). One left makes the state `ALIVE` and
+    `members_left` true, with the group itself verified by the ladder that follows as ever.
+    First the canary (`_members_found`): a supervisor still running that `members` does not find
+    makes the state `ALIVE` and `members_unverified` true, whatever the sweep then says. The
+    mark and its decoy are removed only once the state is `GONE`, since a process that carries
+    the profile is found by them and by nothing else; a kept mark is swept again by `members`'
+    `reap` before a later Seatbelt jail is made or destroyed.
 
     Raises nothing, so it never hides the error of a failed step that called it (TASK-0046): an
     exception from the ladder makes the state `ALIVE` (the group was not verified gone), and it
@@ -403,24 +426,29 @@ def dismantle(
     state = GroupState.GONE
     ladder_error: Exception | None = None
     close_error: Exception | None = None
+    members_left = False
+    members_unverified = False
     if process is not None:
+        if member_mark is not None:
+            members_unverified = not _members_found(
+                process, member_mark, members=members, processes=processes
+            )
+            sweep_deadline = time.monotonic() + kill_grace_s
+            try:
+                members_left = not members.kill(
+                    str(member_mark), str(member_decoy(member_mark)), sweep_deadline
+                )
+            except Exception as error:
+                members_left = True
+                ladder_error = error
         deadline = time.monotonic() + kill_grace_s
         try:
             state = run(operations.destroy(process, deadline=deadline), processes, supervisors)
         except Exception as error:
             state = GroupState.ALIVE
-            ladder_error = error
-        if member_mark is not None:
-            sweep_deadline = time.monotonic() + kill_grace_s
-            try:
-                gone = members.kill(
-                    str(member_mark), str(member_decoy(member_mark)), sweep_deadline
-                )
-            except Exception as error:
-                gone = False
-                ladder_error = ladder_error or error
-            if not gone:
-                state = GroupState.ALIVE
+            ladder_error = ladder_error or error
+        if members_left or members_unverified:
+            state = GroupState.ALIVE
         try:
             supervisors.close(process.pid)
         except Exception as error:
@@ -453,4 +481,4 @@ def dismantle(
             placeholders.release(placeholder_record)
         except OSError:
             pass  # left for the next jail's release to sweep
-    return _Dismantled(state, ladder_error, close_error)
+    return _Dismantled(state, ladder_error, close_error, members_left, members_unverified)

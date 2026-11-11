@@ -27,6 +27,7 @@ from brig import (
     EgressPolicy,
     EnvPolicy,
     FsPolicy,
+    JailMembersUnverifiable,
     JailTeardownFailed,
     PolicyEnvNamesProxyVariable,
     PolicyMaskHides,
@@ -166,3 +167,67 @@ def test_a_create_that_fails_after_compiling_leaves_no_member_files_behind() -> 
         )
 
     assert {path.name for path in state_dir.iterdir()} == before
+
+
+def test_a_running_supervisor_the_host_does_not_find_fails_teardown(tmp_path: Path) -> None:
+    """The canary: `sandbox_check` answering otherwise than measured (as on an architecture
+    its call was not measured on) reads every process as no member, so a sweep that found
+    nothing would mean nothing. A supervisor known to be running and not found says so."""
+    mark, _ = _member_files(tmp_path)
+    processes = FakeProcesses()
+    supervisors = FakeSupervisors()
+    members = FakeMembers(found=False, gone=True)
+    jail = create_seatbelt_jail(("true",), processes=processes, supervisors=supervisors)
+    jail = dataclasses.replace(jail, member_mark=mark)
+
+    with pytest.raises(JailMembersUnverifiable):
+        destroy_jail(jail, processes=processes, supervisors=supervisors, members=members)
+
+    assert members.checked == [(str(mark), str(mark.with_suffix(".decoy")), jail.process.pid)]
+    assert mark.exists()
+
+
+def test_a_supervisor_that_has_exited_tells_the_canary_nothing(tmp_path: Path) -> None:
+    mark, _ = _member_files(tmp_path)
+    processes = FakeProcesses(leader_exited=True)
+    supervisors = FakeSupervisors()
+    members = FakeMembers(found=False, gone=True)
+    jail = create_seatbelt_jail(("true",), processes=processes, supervisors=supervisors)
+    jail = dataclasses.replace(jail, member_mark=mark)
+
+    destroy_jail(jail, processes=processes, supervisors=supervisors, members=members)
+
+    assert members.checked == []
+
+
+def test_a_member_left_alive_is_named_apart_from_a_live_group(tmp_path: Path) -> None:
+    mark, _ = _member_files(tmp_path)
+    supervisors = FakeSupervisors()
+    left = FakeMembers(gone=False)
+    jail = create_seatbelt_jail(("true",), processes=FakeProcesses(), supervisors=supervisors)
+    jail = dataclasses.replace(jail, member_mark=mark)
+
+    with pytest.raises(JailTeardownFailed) as members_failed:
+        destroy_jail(jail, processes=FakeProcesses(), supervisors=supervisors, members=left)
+    group_jail = create_seatbelt_jail(
+        ("true",), processes=FakeProcesses(alive=True), supervisors=supervisors
+    )
+    with pytest.raises(JailTeardownFailed) as group_failed:
+        destroy_jail(group_jail, processes=FakeProcesses(alive=True), supervisors=supervisors)
+
+    assert members_failed.value.members_left
+    assert "left its process group" in str(members_failed.value)
+    assert not group_failed.value.members_left
+    assert "process group still alive" in str(group_failed.value)
+
+
+def test_destroy_sweeps_the_marks_earlier_teardowns_kept(tmp_path: Path) -> None:
+    mark, _ = _member_files(tmp_path)
+    members = FakeMembers()
+    supervisors = FakeSupervisors()
+    jail = create_seatbelt_jail(("true",), processes=FakeProcesses(), supervisors=supervisors)
+    jail = dataclasses.replace(jail, member_mark=mark)
+
+    destroy_jail(jail, processes=FakeProcesses(), supervisors=supervisors, members=members)
+
+    assert members.reaped == [str(tmp_path)]

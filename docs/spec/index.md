@@ -228,9 +228,10 @@ channel directory writable and its one place for Unix sockets, and with egress t
 signals only within the jail's own sandbox; one Mach service, the directory lookups; read on `/` itself, which
 `dyld` needs; `/dev`'s null, zero and random devices and the process's own descriptors only. No
 `(import "system.sb")`, and no system call refused by number. With `member_mark`, the profile
-allows the jail's own mark file in the state directory, by which `destroy_jail` finds and kills
-every process that carries the profile however it left the jail's process group (decision-0010
-item 2, `infra/members.py`). Every rule is rendered through a Python 3.15 template string
+allows the jail's own mark file in the state directory, by which `destroy_jail` finds every
+process that carries the profile however it left the jail's process group, freezes the jail
+from inside through the freezer its supervisor starts, and kills it (decision-0010 item 2,
+`infra/members.py`). Every rule is rendered through a Python 3.15 template string
 (`string.templatelib.Template`, decision-0001 rule 16), escaping `\` and `"` and refusing a NUL
 byte. `ceilings` states Seatbelt's grade ceilings per claim (decision-0010 item 4): `fs_write` is
 `ENFORCED` when no non-writable subpath lies beneath a writable root and `BEST_EFFORT` when one
@@ -271,8 +272,12 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
 - `state_dir.py`: brig's state directory (`BRIG_HOME`, else `~/.brig`) and its empty read-only
   directory.
 - `members.py`: on Darwin, every process of the user that carries a Seatbelt jail's profile,
-  found by what `sandbox_check` says the profile decides for the jail's mark and decoy, and
-  killed until none is left (decision-0010 item 2).
+  found by what `sandbox_check` says the profile decides for the jail's mark and decoy; frozen
+  from inside by the jail's freezer (`kill(-1, SIGSTOP)`, repeated until two scans find every
+  member stopped) and then killed; kept marks of failed teardowns swept again later; and the
+  canary that the jail's running supervisor is found (decision-0010 item 2). A command that
+  kills its freezer and then forks in a loop forever can outlive teardown, which then raises
+  `JailTeardownFailed` naming a process that left the group, never claiming the jail gone.
 - `placeholders.py`: the directories made on the host for bwrap to mount over or Seatbelt to pin
   at absent paths, recorded per jail (tagged with the `user.brig.placeholder` extended attribute
   and verified against process start time via `/proc/<pid>/stat` on Linux or

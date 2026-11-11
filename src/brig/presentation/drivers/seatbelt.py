@@ -56,6 +56,7 @@ from brig.presentation.errors import (
     ChannelDirectoryCreateFailed,
     ChannelNamespaceNotFound,
     EgressProxySourceUnreadable,
+    JailMembersUnverifiable,
     JailSpawnFailed,
     JailTeardownFailed,
     PlaceholdersFailed,
@@ -76,6 +77,8 @@ from brig.presentation.errors import (
 )
 from brig.presentation.jail import (
     CHANNEL_DIRECTORIES,
+    KILL_GRACE_S,
+    MEMBERS,
     PLACEHOLDERS,
     PROCESSES,
     Jail,
@@ -88,6 +91,7 @@ from brig.presentation.jail import (
 from brig.presentation.ports import (
     ChannelDirectoryPort,
     EgressPort,
+    MembersPort,
     PlaceholderPort,
     ProcessPort,
     SupervisorPort,
@@ -401,6 +405,7 @@ def create_seatbelt_jail(
     directories: ChannelDirectoryPort = CHANNEL_DIRECTORIES,
     placeholders: PlaceholderPort = PLACEHOLDERS,
     proc_root: str = "/proc",
+    members: MembersPort = MEMBERS,
 ) -> Jail:
     """Compile `command` into a Darwin Seatbelt jail and start its supervisor running it.
 
@@ -417,6 +422,11 @@ def create_seatbelt_jail(
         JailTeardownFailed: a step failed once the supervisor had been spawned, and the
             teardown that followed still found its group alive, or itself raised so the group
             was never verified gone; the step's own exception is the `__cause__`.
+
+    Before compiling, `members` sweeps again what earlier teardowns could not end
+    (decision-0010 item 2). Once the supervisor runs, the canary (`_await_members_found`)
+    raises `JailMembersUnverifiable` if the host cannot find it carrying the jail's profile;
+    the jail is torn down first.
     """
     if egress is not None:
         check_egress_policy(egress)
@@ -436,6 +446,7 @@ def create_seatbelt_jail(
         absent: tuple[str, ...] = ()
         member_mark: Path | None = None
     else:
+        members.reap(resolved_state_dir(), time.monotonic() + KILL_GRACE_S)
         bridge = None if egress is None else _bridge(egress, egress_hosts, egress_limits)
         (
             resolved_supervisors,
@@ -485,6 +496,8 @@ def create_seatbelt_jail(
                 placeholders.attach(record, process.pid)
             except OSError as error:
                 raise PlaceholdersFailed(absent) from error
+        if member_mark is not None:
+            _await_members_found(process, member_mark, members, processes)
         if channel_directory is not None:
             namespace_fd = _namespace_fd_for(process, proc_root)
     except BaseException as error:
@@ -500,13 +513,14 @@ def create_seatbelt_jail(
             channel_directory_fd=directory_fd,
             placeholder_record=record,
             member_mark=member_mark,
+            members=members,
         )
         if dismantled.ladder_error is not None:
             error.add_note(f"tearing the jail down after this raised {dismantled.ladder_error!r}")
         if dismantled.close_error is not None:
             error.add_note(f"closing the supervisor's pipe raised {dismantled.close_error!r}")
         if process is not None and dismantled.state is not GroupState.GONE:
-            raise JailTeardownFailed(process) from error
+            raise JailTeardownFailed(process, members_left=dismantled.members_left) from error
         raise
     return Jail(
         process=process,
@@ -523,6 +537,36 @@ def create_seatbelt_jail(
         ),
         egress=egress_port,
     )
+
+
+_MEMBERS_FOUND_TIMEOUT_S = 5.0
+"""How long `_await_members_found` waits for the supervisor's profile to read as applied:
+`sandbox-exec` applies it before it execs the supervisor, so a running supervisor is found at
+once (measured), and this only bounds a slow host."""
+
+
+def _await_members_found(
+    process: Process, mark: Path, members: MembersPort, processes: ProcessPort
+) -> None:
+    """Wait until the canary finds the jail's supervisor carrying its profile,
+    or the supervisor has exited, which tells nothing (a fast command ends it).
+
+    Raises:
+        JailMembersUnverifiable: the supervisor ran throughout and was not found before
+            `_MEMBERS_FOUND_TIMEOUT_S` passed: teardown could not find the jail's processes on
+            this host.
+    """
+    deadline = time.monotonic() + _MEMBERS_FOUND_TIMEOUT_S
+    while True:
+        if processes.peek(process.pid) is not None:
+            return
+        if members.includes(str(mark), str(member_decoy(mark)), process.pid):
+            return
+        if time.monotonic() >= deadline:
+            if processes.peek(process.pid) is not None:
+                return
+            raise JailMembersUnverifiable(process)
+        time.sleep(0.01)
 
 
 def _namespace_fd_for(process: Process, proc_root: str = "/proc") -> int | None:

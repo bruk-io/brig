@@ -442,12 +442,46 @@ class JailTeardownFailed(Exception):
     step's error is the `__cause__`, with the teardown's own failure added to it as a note,
     TASK-0046).
 
+    For a Seatbelt jail it is raised too when the group was ended but a process that carries
+    the jail's profile, having left the group, was still alive (`members_left`); the message
+    says which failed (decision-0010 item 2).
+
     Args:
-        process: The jail's supervisor, whose group is still alive.
+        process: The jail's supervisor.
+        members_left: Whether what survived is a process that left the jail's group, the group
+            itself having been ended.
+    """
+
+    def __init__(self, process: Process, *, members_left: bool = False) -> None:
+        if members_left:
+            message = (
+                "a process of the jail that left its process group was still alive after "
+                f"teardown, which ended the group itself: {process!r}"
+            )
+        else:
+            message = f"jail's process group still alive after teardown: {process!r}"
+        super().__init__(message)
+        self.process = process
+        self.members_left = members_left
+
+
+class JailMembersUnverifiable(Exception):
+    """Raised when a Seatbelt jail's supervisor is running but the host does not find it carrying
+    the jail's own profile (`sandbox_check` answering otherwise than measured, as on an
+    architecture its call was not measured on): teardown finds the jail's processes that way,
+    and could not here. By `create_seatbelt_jail`, which does not hand the jail out, and by
+    `destroy_jail`, whose group kill still ran but whose sweep for processes that left the
+    group means nothing (decision-0010 item 2).
+
+    Args:
+        process: The jail's supervisor.
     """
 
     def __init__(self, process: Process) -> None:
-        super().__init__(f"jail's process group still alive after teardown: {process!r}")
+        super().__init__(
+            "this host's sandbox_check did not find the jail's running supervisor carrying the "
+            f"jail's profile, so teardown could not find the jail's processes: {process!r}"
+        )
         self.process = process
 
 

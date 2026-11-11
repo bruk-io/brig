@@ -109,8 +109,18 @@ class MembersPort(Protocol):
     item 2)."""
 
     def kill(self, mark: str, decoy: str, deadline: float) -> bool:
-        """Kill every process whose sandbox allows `mark` and refuses `decoy`, looking again
-        until none is left (`True`) or `time.monotonic()` passes `deadline` (`False`)."""
+        """End every process whose sandbox allows `mark` and refuses `decoy`, freezing the jail
+        from inside first, and say whether none is left (`True`) before `time.monotonic()`
+        passes `deadline` (`False`)."""
+        ...
+
+    def includes(self, mark: str, decoy: str, pid: int) -> bool:
+        """Whether the live process `pid` is found carrying the profile that names `mark`."""
+        ...
+
+    def reap(self, state_dir: str, deadline: float) -> None:
+        """Sweep again the marks earlier teardowns kept in `state_dir` because a process still
+        carried them, removing each that none carries any more."""
         ...
 
 

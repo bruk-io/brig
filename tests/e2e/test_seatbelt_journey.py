@@ -187,6 +187,42 @@ def test_a_process_that_left_the_group_does_not_outlive_destroy(tmp_path: Path, 
     assert not wrote
 
 
+_FORK_HOP = """
+import os, sys, time
+if os.fork():
+    os._exit(0)
+os.setsid()
+end = time.monotonic() + 8
+while time.monotonic() < end:
+    if os.fork():
+        os._exit(0)
+with open(sys.argv[1], "w") as handle:
+    handle.write("outlived")
+time.sleep(60)
+"""
+"""The re-review's repro: fork away from the command, start a session, then fork and exit in a
+loop for 8 s, faster than a scan from the host finds each new pid, and then write a file. It
+outlived the first sweep (`JailTeardownFailed` after 1 s, the file written 8 s later)."""
+
+
+def test_a_process_that_forks_in_a_loop_does_not_outlive_destroy(tmp_path: Path) -> None:
+    directory = tmp_path / "d"
+    directory.mkdir()
+    after = directory / "after"
+    jail = create_seatbelt_jail(
+        _python(_FORK_HOP, str(after)),
+        policy=FsPolicy(readable=("/",), writable=(str(directory),)),
+    )
+    try:
+        assert run_jail(jail, timeout_s=15) == 0
+        time.sleep(0.5)
+    finally:
+        destroy_jail(jail)
+
+    time.sleep(9)
+    assert not after.exists(), "a process that forked in a loop outlived destroy_jail"
+
+
 def test_destroy_kills_nothing_outside_the_jail() -> None:
     """The sweep finds a jail's processes by what its own profile decides, so another jail's
     and the host's own are left running."""

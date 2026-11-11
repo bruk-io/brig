@@ -257,6 +257,66 @@ def _start_child(argv: list[str], env: dict[str, str], bridged: bool = False) ->
     )
 
 
+_FREEZER_MARKER = "brig-teardown-freezer"
+"""`infra.members.FREEZER_MARKER`, repeated: this file is assembled without brig."""
+
+_FREEZER = """
+import os, signal
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGUSR1})
+if os.fork():
+    os._exit(0)
+os.setsid()
+
+
+def freeze(signum, frame):
+    while True:
+        os.kill(-1, signal.SIGSTOP)
+
+
+signal.signal(signal.SIGUSR1, freeze)
+signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGUSR1})
+while True:
+    signal.pause()
+"""
+"""The jail's teardown freezer on Darwin (decision-0010 item 2): it forks away from the supervisor
+and leads a session of its own, so it outlives its command and the supervisor, holds none of
+their pipes, and is neither reaped nor waited on as their child. Told with `SIGUSR1`, it stops
+every process of its sandbox, itself included, with `kill(-1, SIGSTOP)`, and again each time
+the host continues it, until the host has seen the whole jail stopped and killed it
+(`infra.members.freeze_and_kill`). `SIGUSR1` is blocked until its handler is in, so one sent
+early is held, not fatal."""
+
+
+def _is_open(fd: int) -> bool:
+    """Whether `fd` is open in this process."""
+    try:
+        os.fstat(fd)
+    except OSError:
+        return False
+    return True
+
+
+def _start_freezer() -> None:
+    """Start the teardown freezer (`_FREEZER`) on Darwin, before the command exists: stdio on
+    `/dev/null`, none of the supervisor's own fds (the bridge's included, when it has one). A
+    no-op elsewhere, where the jail's PID namespace ends every process of the jail with its PID
+    1. An `OSError` from the spawn propagates: the supervisor ends before the command starts.
+    """
+    if sys.platform != "darwin":
+        return
+    held = [fd for fd in (_REQUEST_FD, _EVENTS_FD, _BRIDGE_FD) if _is_open(fd)]
+    actions: list[tuple[int, ...] | tuple[int, int, str, int, int]] = [
+        (os.POSIX_SPAWN_OPEN, fd, "/dev/null", os.O_RDWR, 0) for fd in (0, 1, 2)
+    ]
+    actions += [(os.POSIX_SPAWN_CLOSE, fd) for fd in held]
+    os.posix_spawn(
+        sys.executable,
+        [sys.executable, "-I", "-c", _FREEZER, _FREEZER_MARKER],
+        {},
+        file_actions=actions,
+    )
+
+
 def _forward_signal(child_pid: int, sig: int, frame: FrameType | None) -> None:
     """Forward a signal to the started child. PID 1 of a namespace ignores every signal it has
     no handler for (`pid_namespaces(7)`), so without this teardown's TERM would do nothing.
@@ -316,6 +376,7 @@ def _main() -> None:
 
     for forwarded in (signal.SIGTERM, signal.SIGINT):
         signal.signal(forwarded, forward)
+    _start_freezer()
     argv, env, bridge_port, bridge_limit = _read_exec_request()
     listeners = _listen(bridge_port) if bridge_port is not None else []
     child_pid = _start_child(argv, env, bridged=bridge_port is not None)
