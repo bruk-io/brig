@@ -123,7 +123,8 @@ decision-0009's body was written after its `create`.
      has no PID namespace: a jailed process can leave the supervisor's group (`posix_spawn` with
      `setpgroup` or `setsid`), and once its parent exits it is launchd's child, so neither a
      group kill nor a walk of the process tree finds it. What it cannot shed is its sandbox, and
-     `sandbox_check(3)` asks the kernel what a given process's profile decides. Each jail gets
+     `sandbox_check` (a libSystem export with no declaration in the SDK's headers, so private
+     interface Apple may change) asks the kernel what a given process's profile decides. Each jail gets
      two empty files in brig's state directory, a mark and a decoy beside it; its profile allows
      `file-read-metadata` on its own mark after the state directory's mask, which refuses the
      decoy. After the group's kill ladder, `destroy_jail` lists every process of the embedder's

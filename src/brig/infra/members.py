@@ -4,8 +4,9 @@ by what the profile decides, and killed until none is left (decision-0010 item 2
 Darwin has no PID namespace. A jailed process can leave the process group teardown kills
 (`posix_spawn` with `setpgroup` or `setsid`, measured), and once its parent exits it is
 launchd's child, so neither the group nor the process tree finds it. What it cannot shed is its
-sandbox: every process the jail starts carries the profile, and `sandbox_check(3)` asks the
-kernel what a given process's profile decides. Each jail's profile allows `file-read-metadata`
+sandbox: every process the jail starts carries the profile, and `sandbox_check` (a libSystem
+export no SDK header declares, so private interface Apple may change) asks the kernel what a
+given process's profile decides. Each jail's profile allows `file-read-metadata`
 on its own `mark` and nothing allows it on the `decoy` beside it (brig's state directory is
 masked), so a process of this user's that is sandboxed, allowed the mark and refused the decoy
 is that jail's: another jail refuses the mark, an unsandboxed process is not sandboxed, and a
