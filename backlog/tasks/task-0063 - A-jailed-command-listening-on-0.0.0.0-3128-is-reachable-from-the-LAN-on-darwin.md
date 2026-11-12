@@ -4,7 +4,7 @@ title: 'A jailed command listening on 0.0.0.0:3128 is reachable from the LAN on 
 status: In Progress
 assignee: []
 created_date: '2026-11-11 17:16'
-updated_date: '2026-11-12 03:51'
+updated_date: '2026-11-12 06:03'
 labels:
   - darwin
   - security
@@ -60,3 +60,42 @@ Measured before planning (macOS 27.0.1, scratch probes):
 - The new e2e tests fail with the old egress rule restored, and the concurrency test fails with a fixed port.
 - just done, just test-e2e and Linux CI green; ps -axo pid,command | grep -i freez empty.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Report (2026-11-12), measured on macOS 27.0.1 with /usr/bin/sandbox-exec. Draft PR bruk-io/brig#2; left In Progress for a reviewer. Per-jail ports were the orchestrator's choice on Bruk's behalf; decision-0011 records that and stays proposed until Bruk confirms.
+
+## Commits
+- bbc97d3 feat(seatbelt): a bridge port per egress jail, bound by the host, so the jail binds nothing
+- 3e77bd9 and the notes commit after it: plan and report, written by the backlog CLI
+
+## Results
+- uv run just done: exit 0, all steps pass. Unit 418 passed; integration 100 passed and 2 skipped in each pass; e2e 132 passed and 118 skipped.
+- uv run just test-e2e: exit 0, 132 passed, 118 skipped, 0 failed. No seatbelt test skips.
+- ps -axo pid,command | grep -i freez: nothing. ~/.brig: no leftovers.
+- Linux CI on PR #2: green (run 43164505840).
+
+## What changed
+- The host binds 127.0.0.1 at a port the kernel picks and [::1] at the same port, with no address-reuse option (infra.sockets.bridge_listeners).
+- Both listeners go to the supervisor as fds 6 and 7 (wire.BRIDGE_LISTENER_FDS; bridge_inherited in the exec request). The supervisor marks them close-on-exec before starting anything, then accepts on them.
+- The profile's one egress rule is (allow network-outbound (remote tcp "localhost:<port>")).
+- bwrap's path (binding 3128 in the jail's own network namespace) is unchanged; Linux requests carry bridge_inherited false.
+
+## Measured
+- A jailed process accepts on listeners passed in, with no network-bind or network-inbound rule.
+- With only the outbound rule, every bind in the jail is EPERM, 0.0.0.0:<port> included.
+- With the TASK-0061 rule (bind and inbound on the local port), a jailed command listened on 0.0.0.0:<port>.
+- A host wildcard reservation on the port refuses a third party's plain bind of LAN:<port> but not one with SO_REUSEADDR or SO_REUSEPORT. It was rejected, since most servers set those options.
+
+## Done means
+1. Two egress jails at once: test_two_jails_with_egress_run_at_once. With a fixed port it fails; the second jail's start raised JailSpawnFailed.
+2. No connection from off the host: test_a_jailed_command_cannot_listen_for_a_connection_from_off_the_host. It tries the wildcard at the jail's port (with each reuse option), the LAN address there, and any port. All four are EPERM; unjailed, the same program listens. With the old rule restored the test fails. test_the_command_holds_none_of_the_bridge_s_listeners fails without the close-on-exec: the command held fds 6 and 7.
+3. Host service at another local address on the jail's port: cannot be delivered. SBPL takes only localhost or * as the host, and localhost matches every local address. test_a_host_program_on_the_jails_port_at_another_address_is_reached_past_the_proxy pins that a squatter at the LAN address with SO_REUSEADDR is reached. What is narrower than before: the port is the jail's own, picked by the kernel at create, so only a host program that binds that one port after the jail starts is reached. It is no longer any service on a well-known port (3128 is a common proxy port).
+4. Re-grade: network with egress stays BEST_EFFORT. Two of its three reasons are gone (LAN reach to the command; one egress jail per host), each shown above. The third (item 3) holds until the host binds the jail's port, which is BEST_EFFORT as decision-0008 defines it. Every other grade is unchanged.
+5. decision-0010 item 4 and the egress bullet in item 1, the spec (the seatbelt paragraph and the supervisor/proxy paragraph), and the C4 sockets and supervisor-link components plus the seatbeltDriver to sockets relationship are updated. decision-0011 is new.
+
+## Open
+- decision-0011 needs Bruk's confirmation.
+- The residual in item 3.
+<!-- SECTION:NOTES:END -->
