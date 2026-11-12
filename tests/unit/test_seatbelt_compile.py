@@ -219,16 +219,15 @@ def test_no_channel_and_no_egress_allows_no_network_operation() -> None:
     assert not any("network" in line for line in lines)
 
 
-def test_egress_allows_outbound_only_to_the_bridge_port_never_from_it() -> None:
+def test_egress_allows_one_connect_to_the_jail_s_own_port_and_no_bind() -> None:
     """An outbound rule filtered on the local port let a jail bind its source port to the
-    bridge's and connect anywhere (measured, TASK-0061)."""
-    lines = _profile(WHOLE_HOST_READ_ONLY, _same("/"), egress_port=3128)
+    bridge's and connect anywhere (TASK-0061), and a bind or inbound rule let it listen on the
+    wildcard address, reachable from the LAN (TASK-0063). The host binds the bridge's listeners
+    and passes them in; accepting on them needs no rule (measured)."""
+    lines = _profile(WHOLE_HOST_READ_ONLY, _same("/"), egress_port=51234)
 
     network = [line for line in lines if "network" in line]
-    assert network == [
-        '(allow network-bind network-inbound (local tcp "localhost:3128"))',
-        '(allow network-outbound (remote tcp "localhost:3128"))',
-    ]
+    assert network == ['(allow network-outbound (remote tcp "localhost:51234"))']
 
 
 def test_a_quote_or_backslash_in_a_path_cannot_end_its_string() -> None:

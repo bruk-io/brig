@@ -214,8 +214,8 @@ jail sees any root; a writable shared root alone carries files, not a route out,
 lower it.
 
 `jail_types/seatbelt.py` is Seatbelt's slice on Darwin (decision-0010, TASK-0061): `compile_run`
-makes the plan (with `egress_port`, setting the same proxy variables at `EGRESS_BRIDGE_PORT` on
-loopback), and `compile_rules` turns the `FsPolicy`, `state_dir`, `supervisor_script`, the channel
+makes the plan (with `egress_port`, setting the same proxy variables at the jail's own bridge
+port on loopback, a port the host binds per jail, decision-0011), and `compile_rules` turns the `FsPolicy`, `state_dir`, `supervisor_script`, the channel
 directory and `egress_port` into one ordered tuple of rules: shallowest first, at both a path and
 where it resolves when a link such as `/var -> /private/var` differs; `file-read-metadata` on each
 root's ancestors; `allow file-read*` on readable roots (and `deny file-write*` on one nested in a
@@ -242,9 +242,10 @@ not a file); `env` is `ENFORCED`; `channel_exclusivity` is `VIOLATED` when an un
 path is shared with the host and `ENFORCED` otherwise (Seatbelt refuses a dial of a host Unix
 socket inside a readable root, a signal outside the jail, and every Mach service but the
 directory lookups); `network` without `EgressPolicy` is `ENFORCED`, and with one
-(`SEATBELT_NETWORK_EGRESS_CLAIM`) is `BEST_EFFORT` (SBPL's `localhost` matches every local
-address, so a host service at the bridge port on a LAN address is reachable past the proxy, and
-the command can listen at that port on the wildcard address).
+(`SEATBELT_NETWORK_EGRESS_CLAIM`) is `BEST_EFFORT` (the jail's one rule is a connect to its own
+bridge port on a local address, and it binds and listens on nothing, so nothing off the host can
+reach it; but SBPL's `localhost` matches every local address, so a host program that binds the
+jail's own port on a LAN address, with an address-reuse option, is reachable past the proxy).
 
 Where the domain and the world alternate, the exchange is a value too. `effects.py` names the
 closed set a generator may yield: start the supervised command, await the supervisor's report,
@@ -307,6 +308,10 @@ a value that means "unknown" is infra's own sentinel, translated at presentation
   TASK-0001.36). With an egress policy, the supervisor's exec request names a bridge port: before
   the command starts it listens on `127.0.0.1:<port>` in the jail's own network namespace (and
   `[::1]` where the namespace has IPv6), and once the command runs it accepts on daemon threads.
+  A Seatbelt jail shares the host's stack, so its host binds a port per jail on `127.0.0.1` and
+  `[::1]` (`sockets.bridge_listeners`) and passes both listeners as `wire.BRIDGE_LISTENER_FDS`
+  (6 and 7, `bridge_inherited` in the request); the supervisor accepts on them, binds nothing,
+  and keeps them from every process it starts (decision-0011).
   For each connection it makes a socketpair, sends one end to the egress proxy with
   `SCM_RIGHTS` over `wire.BRIDGE_FD` (5, its end of a `SOCK_SEQPACKET` pair on Linux, or
   `SOCK_STREAM` on Darwin where `AF_UNIX` `SOCK_SEQPACKET` is unsupported), and

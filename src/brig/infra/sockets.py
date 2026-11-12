@@ -598,6 +598,55 @@ def create(path: str) -> None:
     directory.chmod(stat.S_IRWXU)
 
 
+_BRIDGE_PORT_ATTEMPTS = 16
+"""How many ports `bridge_listeners` tries before it gives up: one is taken only when some
+other program already holds `[::1]` at the port the kernel just handed out on `127.0.0.1`."""
+
+
+def _loopback_listener(family: socket.AddressFamily, address: str, port: int) -> socket.socket:
+    """A listening TCP socket on `address:port`, with no address-reuse option, so no other
+    socket can share it.
+
+    Raises:
+        OSError: the address could not be bound or listened on; the socket is closed.
+    """
+    listener = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        if family == socket.AF_INET6:
+            listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        listener.bind((address, port))
+        listener.listen(128)
+    except OSError:
+        listener.close()
+        raise
+    return listener
+
+
+def bridge_listeners() -> tuple[int, tuple[socket.socket, socket.socket]]:
+    """A fresh port for one Seatbelt jail's egress bridge, with the host listening on it at
+    `127.0.0.1` and `[::1]` (decision-0010 item 4): the kernel picks a free port on IPv4 and the
+    same port is bound on IPv6, another tried if a program holds that one. The caller owns both
+    sockets and hands them to the jail's supervisor, which accepts on them; the jail itself then
+    binds nothing. Each is close-on-exec, as Python makes every socket.
+
+    Raises:
+        OSError: no port was free on both after `_BRIDGE_PORT_ATTEMPTS` tries, or a bind failed
+            for another reason; nothing is left open.
+    """
+    for _ in range(_BRIDGE_PORT_ATTEMPTS):
+        v4 = _loopback_listener(socket.AF_INET, "127.0.0.1", 0)
+        port = int(v4.getsockname()[1])
+        try:
+            v6 = _loopback_listener(socket.AF_INET6, "::1", port)
+        except OSError as error:
+            v4.close()
+            if error.errno == errno.EADDRINUSE:
+                continue
+            raise
+        return port, (v4, v6)
+    raise OSError(errno.EADDRINUSE, "no port was free on both 127.0.0.1 and [::1]")
+
+
 def open_directory(path: str) -> int:
     """An `O_PATH` fd on the directory `path` (or `O_RDONLY` on Darwin), opened through no link at
     its last component, for `channel_ready` to open each channel's name beneath (TASK-0045). The

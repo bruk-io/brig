@@ -1,8 +1,12 @@
-"""TASK-0061 and decision-0010 item 4: a Seatbelt jail's one route out, on a Mac, against the real
-`/usr/bin/sandbox-exec` and brig's egress proxy. The command reaches a granted destination only
-through the supervisor's bridge; it cannot connect around it, nor bind its own source port to the
-bridge's and connect anywhere, which an outbound rule filtered on the local port allowed
-(measured, TASK-0061).
+"""TASK-0061, TASK-0063 and decision-0010 item 4: a Seatbelt jail's one route out, on a Mac,
+against the real `/usr/bin/sandbox-exec` and brig's egress proxy. Each jail gets a bridge port of
+its own, which the host listens on and hands its supervisor; the command reads it from its proxy
+variables. The command reaches a granted destination only through that bridge; it cannot connect
+around it, nor bind its own source port to the bridge's and connect anywhere (an outbound rule
+filtered on the local port allowed that, TASK-0061), nor listen for a connection from off the host
+(a bind rule allowed that, TASK-0063). Two jails with egress run at once. What stays open, and
+keeps the grade best-effort, is pinned too: a host program that binds the jail's own port on
+another local address.
 
 A TLS-less HTTP server on the host's `127.0.0.1:<ephemeral>` stands in for the internet, granted
 by its IP literal (decision-0009 item 4 refuses a name resolving to loopback).
@@ -14,6 +18,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -40,8 +45,12 @@ pytestmark = pytest.mark.skipif(
 
 _BODY = b"hello from the test server"
 
-_BRIDGE_PORT = 3128
-"""The supervisor's bridge port, the one TCP port the profile lets the command reach."""
+_BRIDGE_FROM_ENV = r"""
+import os
+BRIDGE = int(os.environ["HTTP_PROXY"].rsplit(":", 1)[1])
+"""
+"""Every jailed client starts with this: its own bridge port, from the proxy variable brig sets
+to it (decision-0009 item 7), the one TCP port its profile lets it reach."""
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -66,10 +75,13 @@ def server_port() -> Iterator[int]:
         server.server_close()
 
 
-_THROUGH_BRIDGE = r"""
-import socket, sys
+_THROUGH_BRIDGE = (
+    _BRIDGE_FROM_ENV
+    + r"""
+import socket, sys, time
 port = int(sys.argv[1])
-sock = socket.create_connection(("127.0.0.1", 3128), timeout=10)
+time.sleep(float(sys.argv[2]) if len(sys.argv) > 2 else 0)
+sock = socket.create_connection(("127.0.0.1", BRIDGE), timeout=10)
 sock.sendall(f"CONNECT 127.0.0.1:{port} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n".encode())
 head = b""
 while b"\r\n\r\n" not in head:
@@ -85,6 +97,7 @@ while chunk := sock.recv(65536):
     data += chunk
 sys.exit(0 if b"hello from the test server" in data else 5)
 """
+)
 
 _AROUND_BRIDGE = r"""
 import errno, socket, sys
@@ -97,12 +110,15 @@ except OSError as error:
 _OFF_HOST = ("1.1.1.1", "80")
 """An address off this host: what the bypass first measured reached (TASK-0061)."""
 
-_FROM_BRIDGE_PORT = r"""
+_FROM_BRIDGE_PORT = (
+    _BRIDGE_FROM_ENV.replace('os.environ["HTTP_PROXY"]', 'os.environ.get("HTTP_PROXY", "x:0")')
+    + r"""
 import socket, sys
+source = BRIDGE if sys.argv[3] == "bridge" else int(sys.argv[3])
 sock = socket.socket()
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 try:
-    sock.bind(("0.0.0.0", int(sys.argv[3])))
+    sock.bind(("0.0.0.0", source))
     sock.settimeout(5)
     sock.connect((sys.argv[1], int(sys.argv[2])))
 except OSError as error:
@@ -110,6 +126,7 @@ except OSError as error:
     sys.exit(1)
 print(f"connected from {sock.getsockname()}", flush=True)
 """
+)
 """Bind the source port to the bridge's, on the wildcard address beside the supervisor's own
 loopback listener, and connect off the host. Exits 0 only when the connect succeeded, and says
 why when it did not."""
@@ -152,7 +169,7 @@ def test_a_source_port_bound_to_the_bridge_s_does_not_open_a_route(
     control connects from an ephemeral port: from the bridge's own, its closed connection's
     TIME_WAIT would hold the very address pair the attack uses, which then fails `EADDRINUSE`
     whatever the profile says, a probe that measured nothing (so that errno fails too)."""
-    target = (*_OFF_HOST, str(_BRIDGE_PORT))
+    target = (*_OFF_HOST, "bridge")
     control = subprocess.run(
         (sys.executable, "-I", "-c", _FROM_BRIDGE_PORT, *_OFF_HOST, "0"),
         check=False,
@@ -184,3 +201,182 @@ def test_an_ungranted_destination_is_refused_by_the_proxy(server_port: int) -> N
         result, _ = _egress_jail_exit(_THROUGH_BRIDGE, str(ungranted), granted=server_port)
 
     assert result == 4, "the proxy answers the CONNECT with a refusal, not a 200"
+
+
+def _jail(program: str, *argv: str, granted: int, out: Path) -> Jail:
+    return create_seatbelt_jail(
+        (sys.executable, "-I", "-c", program, *argv),
+        egress=EgressPolicy(allow=(Destination("127.0.0.1", granted),)),
+        stdio=Stdio(stdout=str(out), stderr=str(out)),
+    )
+
+
+def test_two_jails_with_egress_run_at_once(server_port: int, tmp_path: Path) -> None:
+    """bh-02 starts two jails with egress; with one fixed bridge port on the host's one stack,
+    the second's supervisor could not bind it and never started its command (TASK-0063)."""
+    first = _jail(_THROUGH_BRIDGE, str(server_port), "1", granted=server_port, out=tmp_path / "a")
+    try:
+        second = _jail(
+            _THROUGH_BRIDGE, str(server_port), "1", granted=server_port, out=tmp_path / "b"
+        )
+        try:
+            results = (run_jail(first, timeout_s=30), run_jail(second, timeout_s=30))
+        finally:
+            destroy_jail(second)
+    finally:
+        destroy_jail(first)
+
+    assert results == (0, 0), (
+        (tmp_path / "a").read_text() if (tmp_path / "a").exists() else "",
+        (tmp_path / "b").read_text() if (tmp_path / "b").exists() else "",
+    )
+
+
+_LISTEN = (
+    _BRIDGE_FROM_ENV
+    + r"""
+import socket, sys
+attempts = [
+    (("0.0.0.0", BRIDGE), ("SO_REUSEADDR",)),
+    (("0.0.0.0", BRIDGE), ("SO_REUSEADDR", "SO_REUSEPORT")),
+    ((sys.argv[1], BRIDGE), ("SO_REUSEADDR",)),
+    (("0.0.0.0", 0), ()),
+]
+listening = []
+for address, options in attempts:
+    sock = socket.socket()
+    for option in options:
+        sock.setsockopt(socket.SOL_SOCKET, getattr(socket, option), 1)
+    try:
+        sock.bind(address)
+        sock.listen(1)
+    except OSError as error:
+        print(f"refused {address} {options}: errno {error.errno}", flush=True)
+        continue
+    listening.append(f"{address} {options}")
+print("listening:", listening, flush=True)
+sys.exit(0 if listening else 7)
+"""
+)
+"""Try to listen where a machine off the host could connect: the wildcard address at the jail's
+own bridge port (with each reuse option), the host's LAN address there, and any port. Exits 0 if
+any listen succeeded, 7 if all were refused, and prints each errno."""
+
+
+def _lan_address() -> str | None:
+    """This host's address towards the internet (no packet is sent), or `None` with no route."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        try:
+            probe.connect(("1.1.1.1", 80))
+        except OSError:
+            return None
+        address = str(probe.getsockname()[0])
+    return None if address.startswith("127.") else address
+
+
+def test_a_jailed_command_cannot_listen_for_a_connection_from_off_the_host(
+    server_port: int, tmp_path: Path
+) -> None:
+    lan = _lan_address() or "0.0.0.0"
+    control = subprocess.run(
+        (sys.executable, "-I", "-c", _LISTEN, lan),
+        env={"HTTP_PROXY": "http://127.0.0.1:0"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    out = tmp_path / "out"
+    jail = _jail(_LISTEN, lan, granted=server_port, out=out)
+    try:
+        attack = run_jail(jail, timeout_s=30)
+    finally:
+        destroy_jail(jail)
+
+    said = out.read_text()
+    assert control.returncode == 0, f"control: unjailed, a listen succeeds: {control.stdout}"
+    assert attack == 7, f"a jailed command listened where the LAN can reach it: {said}"
+    refusals = [line for line in said.splitlines() if line.startswith("refused")]
+    assert len(refusals) == 4, said
+    assert all(line.endswith(f"errno {errno.EPERM}") for line in refusals), said
+
+
+_CUED = (
+    _BRIDGE_FROM_ENV
+    + r"""
+import errno, os, socket, sys, time
+print(BRIDGE, flush=True)
+cue = sys.argv[2]
+while not os.path.exists(cue):
+    time.sleep(0.02)
+try:
+    socket.create_connection((sys.argv[1], BRIDGE), timeout=5).close()
+except OSError as error:
+    print(f"refused: errno {error.errno}", flush=True)
+    sys.exit(7 if error.errno in (errno.EPERM, errno.EACCES) else 3)
+print("reached", flush=True)
+"""
+)
+"""Print the jail's bridge port, wait for the host's cue, then connect to that port at the host's
+LAN address. Exits 0 if it connected."""
+
+
+def test_a_host_program_on_the_jails_port_at_another_address_is_reached_past_the_proxy(
+    server_port: int, tmp_path: Path
+) -> None:
+    """Pins the one reason egress stays best-effort on Darwin (decision-0010 item 4): Seatbelt's
+    `localhost` matches every local address, so a host program that binds the jail's own port at
+    the LAN address, with an address-reuse option, is reached. Measured, so the grade is not
+    raised while it holds."""
+    lan = _lan_address()
+    if lan is None:
+        pytest.skip("this host has no address off loopback to measure against")
+    out = tmp_path / "out"
+    cue = tmp_path / "cue"
+    jail = _jail(_CUED, lan, str(cue), granted=server_port, out=out)
+    try:
+        deadline = time.monotonic() + 10
+        while not (out.exists() and out.read_text().strip()):
+            assert time.monotonic() < deadline, "the jail never printed its port"
+            time.sleep(0.02)
+        port = int(out.read_text().split()[0])
+        squatter = socket.socket()
+        squatter.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        squatter.bind((lan, port))
+        squatter.listen(1)
+        cue.write_text("")
+        try:
+            reached = run_jail(jail, timeout_s=30)
+        finally:
+            squatter.close()
+    finally:
+        destroy_jail(jail)
+
+    assert reached == 0, out.read_text()
+    assert jail.report[SEATBELT_NETWORK_EGRESS_CLAIM].name == "BEST_EFFORT"
+
+
+_OPEN_FDS = r"""
+import os, sys
+held = []
+for fd in range(3, 256):
+    try:
+        os.fstat(fd)
+    except OSError:
+        continue
+    held.append(fd)
+print("held:", held, flush=True)
+sys.exit(0 if not held else 9)
+"""
+"""List every fd above stdio the command holds: the bridge's listeners, passed to its supervisor,
+must not be among them, or the command could accept on its own bridge port."""
+
+
+def test_the_command_holds_none_of_the_bridge_s_listeners(server_port: int, tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    jail = _jail(_OPEN_FDS, granted=server_port, out=out)
+    try:
+        held = run_jail(jail, timeout_s=30)
+    finally:
+        destroy_jail(jail)
+
+    assert held == 0, out.read_text()

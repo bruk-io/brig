@@ -19,7 +19,7 @@ root or rename an intermediate directory to replace what it leads to. Then brig'
 its state directory, metadata literals for the directories inside it leading to this jail's
 supervisor script and channel directory, the supervisor script allowed read-only, the channel
 directory allowed writable and for Unix-domain socket bind and connect, and (with an egress
-policy) the loopback TCP bridge port.
+policy) a connect to the jail's own loopback TCP bridge port, and no bind.
 """
 
 from collections.abc import Mapping
@@ -86,10 +86,6 @@ _FREEZER_FLAG = "--freezer"
 """What the supervisor program is given to start the jail's teardown freezer
 (`infra.supervisor.program.FREEZER_FLAG`, repeated: the domain imports no infra): only a
 Seatbelt jail's supervisor starts one (decision-0010 item 2)."""
-
-EGRESS_BRIDGE_PORT = 3128
-"""Where the supervisor listens, on `127.0.0.1`, for the connections it bridges to the egress
-proxy (decision-0009 item 1, decision-0010 item 4)."""
 
 
 def compile_run(
@@ -419,11 +415,6 @@ def render_profile(rules: tuple[Rule, ...]) -> str:
                 )
             case RuleKind.EGRESS_BRIDGE:
                 lines.append(
-                    _render_atom(
-                        t'(allow network-bind network-inbound (local tcp "localhost:{target}"))'
-                    )
-                )
-                lines.append(
                     _render_atom(t'(allow network-outbound (remote tcp "localhost:{target}"))')
                 )
     return "\n".join(lines) + "\n"
@@ -484,13 +475,14 @@ SEATBELT_NETWORK_EGRESS_CLAIM = Claim(
     name="network",
     description=(
         "the command reaches only the destinations the policy grants, and only through the "
-        "proxy: Seatbelt allows TCP only to the supervisor's bridge port on a local address, "
+        "proxy: Seatbelt allows the jail one network operation, a TCP connect to its own bridge "
+        "port, a port the host picked for this jail alone and listens on at 127.0.0.1 and [::1], "
         "where the supervisor bridges each connection to a proxy on the host that decides it and "
-        "resolves a granted name itself. Best-effort on Darwin: the jail shares the host's "
-        "network stack, and Seatbelt's localhost filter matches every local address, so a host "
-        "service listening at the bridge port on any local address (a LAN address, or a "
-        "wildcard) is reachable past the proxy, and the command can listen at the bridge port on "
-        "the wildcard address, reachable from the network. Not covered: the proxy judges an "
+        "resolves a granted name itself. The jail binds and listens on nothing, so nothing off "
+        "the host can connect to it. Best-effort on Darwin: the jail shares the host's network "
+        "stack, and Seatbelt's localhost filter matches every local address, so a host program "
+        "that binds this jail's port on another local address (a LAN address), with an "
+        "address-reuse option, is reachable past the proxy. Not covered: the proxy judges an "
         "HTTP CONNECT's authority, never the TLS SNI inside it, and the bytes inside a granted "
         "connection are not inspected"
     ),
@@ -566,7 +558,9 @@ def ceilings(
       metadata, `sysctl-read`, the directory lookups) and the hardware registry, which Seatbelt
       lets any process read, show the jail host data no policy names.
     - `network` is `ENFORCED` without `egress` (Seatbelt refuses every network operation outside
-      the channel directory), `BEST_EFFORT` with it (`SEATBELT_NETWORK_EGRESS_CLAIM`'s gaps).
+      the channel directory), `BEST_EFFORT` with it: the one route a jail with egress keeps, a
+      connect to its own port on a local address, reaches a host program that binds that port
+      on another local address with an address-reuse option (`SEATBELT_NETWORK_EGRESS_CLAIM`).
     - `channel_exclusivity` is `VIOLATED` when a writable path the jail shares with the host is
       not a declared channel, else `ENFORCED`: unlike a bind mount, Seatbelt refuses a dial of
       a host socket inside a readable root, so a root the jail reads lowers nothing.

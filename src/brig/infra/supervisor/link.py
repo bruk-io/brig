@@ -16,6 +16,7 @@ jail's group, so every path here that fails after its start ends it here.
 
 import os
 import select
+import socket
 import stat
 import time
 from collections.abc import Mapping
@@ -74,11 +75,18 @@ class ReadTimedOut:
 class Bridge:
     """A jail's one route out (decision-0009 item 1): the supervisor listens on `port` in the
     jail's loopback and hands each connection to the egress proxy `proxy` describes, relaying
-    at most `limit` at once (`wire.BRIDGE_CONNECTION_LIMIT`, or lower for a test)."""
+    at most `limit` at once (`wire.BRIDGE_CONNECTION_LIMIT`, or lower for a test).
+
+    With `listeners` (a Seatbelt jail's, `sockets.bridge_listeners`), the host has bound the
+    port already, on `127.0.0.1` and `[::1]`: the supervisor gets them as
+    `wire.BRIDGE_LISTENER_FDS` and binds nothing. The start closes them in this process
+    whatever happens, and closing a socket twice is harmless, so a caller that fails before the
+    start closes them too (decision-0010 item 4)."""
 
     port: int
     proxy: launch.ProxyLaunch
     limit: int = wire.BRIDGE_CONNECTION_LIMIT
+    listeners: tuple[socket.socket, ...] = ()
 
 
 class Supervisor:
@@ -243,7 +251,8 @@ def _start(
     pumped to and from where `stdio` says (`_plumb`), and write it the one exec request for
     `command_argv` in `command_env`. With `bridge`, its egress proxy is started first, the
     supervisor gets its end of their socketpair as `wire.BRIDGE_FD`, and the request names the
-    bridge's port.
+    bridge's port; a bridge's host-bound listeners (`Bridge.listeners`) become its
+    `wire.BRIDGE_LISTENER_FDS`, and the caller closes its own copies after.
 
     The request pipe's read end and the events pipe's write end become the child's
     `wire.REQUEST_FD` and `wire.EVENTS_FD`; this process closes its copies of both, and of the
@@ -279,6 +288,13 @@ def _start(
     request_read_fd, request_write_fd = os.pipe()
     events_read_fd, events_write_fd = os.pipe()
     bridged = {} if bridge_fd is None else {wire.BRIDGE_FD: bridge_fd}
+    inherited = (
+        {}
+        if bridge is None
+        else dict(
+            zip(wire.BRIDGE_LISTENER_FDS, (listener.fileno() for listener in bridge.listeners))
+        )
+    )
     try:
         spawned = processes.spawn(
             supervisor_argv,
@@ -289,6 +305,7 @@ def _start(
                 wire.REQUEST_FD: request_read_fd,
                 wire.EVENTS_FD: events_write_fd,
                 **bridged,
+                **inherited,
             },
         )
     except (processes.SpawnError, OSError) as exc:
@@ -308,10 +325,13 @@ def _start(
     pumps: Pumps | None = None
     port = None if bridge is None else bridge.port
     limit = wire.BRIDGE_CONNECTION_LIMIT if bridge is None else bridge.limit
+    passed = bool(inherited)
     try:
         pumps = Pumps(flows)
         with os.fdopen(request_write_fd, "w") as request_pipe:
-            request_pipe.write(wire.encode_exec_request(command_argv, command_env, port, limit))
+            request_pipe.write(
+                wire.encode_exec_request(command_argv, command_env, port, limit, passed)
+            )
     except (OSError, RuntimeError) as exc:
         # Spawned, then failed: a thread that could not start (`RuntimeError`), or a request
         # that hit a pipe its reader closed. Left for the caller's verified teardown.
@@ -389,7 +409,11 @@ class LiveSupervisor:
         """Start the supervisor with `argv` in `env` as its one command; `_start` raises
         `SupervisorSpawnError` if it cannot, with the supervisor it spawned, if any, for the
         caller to tear down."""
-        supervisor = _start(self._supervisor_argv, argv, env, self._stdio, self._bridge)
+        try:
+            supervisor = _start(self._supervisor_argv, argv, env, self._stdio, self._bridge)
+        finally:
+            for listener in () if self._bridge is None else self._bridge.listeners:
+                listener.close()
         self._supervisor = supervisor
         self._proxy = supervisor.proxy
         return supervisor
