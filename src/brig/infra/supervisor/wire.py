@@ -24,6 +24,12 @@ BRIDGE_FD = 5
 end of a `SOCK_SEQPACKET` socketpair, over which it sends one end of a socketpair per connection
 it accepts on the jail's loopback, with `SCM_RIGHTS`."""
 
+BRIDGE_LISTENER_FDS = (6, 7)
+"""The supervisor's fds for the bridge's two listeners, `127.0.0.1:<port>` and `[::1]:<port>`,
+when the host bound them and the exec request says so (`bridge_inherited`): a Seatbelt jail's,
+whose profile then lets nothing in the jail bind a socket (decision-0010 item 4). A bwrap jail's
+supervisor binds its own, in the jail's network namespace."""
+
 BRIDGE_CONNECTION_LIMIT = 256
 """How many connections the bridge relays at once, per jail, unless the exec request lowers it
 (`bridge_limit`): one more is accepted and closed at once, never handed to the proxy
@@ -45,7 +51,8 @@ class _ExecRequest(TypedDict, closed=True):
     the supervisor listens on in the jail's loopback and bridges to the egress proxy over
     `BRIDGE_FD`, bound before the command starts (decision-0009 item 1); `bridge_limit` is how
     many connections it relays at once (`BRIDGE_CONNECTION_LIMIT`, or lower), unused without a
-    port.
+    port. `bridge_inherited` says the host bound the bridge's listeners and passed them as
+    `BRIDGE_LISTENER_FDS`, so the supervisor accepts on those and binds nothing.
     """
 
     kind: _MessageKind
@@ -53,6 +60,7 @@ class _ExecRequest(TypedDict, closed=True):
     env: dict[str, str]
     bridge_port: int | None
     bridge_limit: int
+    bridge_inherited: bool
 
 
 class _StartedEvent(TypedDict, closed=True):
@@ -102,16 +110,18 @@ def encode_exec_request(
     env: Mapping[str, str],
     bridge_port: int | None = None,
     bridge_limit: int = BRIDGE_CONNECTION_LIMIT,
+    bridge_inherited: bool = False,
 ) -> str:
     """Encode an `exec` request as one newline-delimited JSON line; `bridge_port` is the egress
-    bridge's port, or `None` for a jail with none, and `bridge_limit` how many connections the
-    bridge relays at once."""
+    bridge's port, or `None` for a jail with none, `bridge_limit` how many connections the
+    bridge relays at once, and `bridge_inherited` whether the host passed its listeners in."""
     message: _ExecRequest = {
         "kind": _MessageKind.EXEC,
         "argv": list(argv),
         "env": dict(env),
         "bridge_port": bridge_port,
         "bridge_limit": bridge_limit,
+        "bridge_inherited": bridge_inherited,
     }
     return json.dumps(message) + "\n"
 
@@ -133,6 +143,7 @@ def _decode_exec_request(line: str) -> _ExecRequest:
             "env": {str(name): str(value) for name, value in raw["env"].items()},
             "bridge_port": None if port is None else int(port),
             "bridge_limit": int(raw["bridge_limit"]),
+            "bridge_inherited": bool(raw.get("bridge_inherited", False)),
         }
     except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError) as exc:
         raise WireError(line) from exc

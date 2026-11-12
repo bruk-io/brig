@@ -92,16 +92,23 @@ decision-0009's body was written after its `create`.
      "`network-bind` must be unscoped" does not reproduce on 27.0.1), and a connect to a host
      Unix socket in a readable root, a bind outside the channel directory, TCP, UDP and name
      resolution are all refused.
-   - **Egress:** with an `EgressPolicy`, `(allow network-bind network-inbound (local tcp
-     "localhost:<port>"))` for the supervisor's bridge and `(allow network-outbound (remote tcp
-     "localhost:<port>"))` for the command. Measured: the first version also allowed
+   - **Egress:** with an `EgressPolicy`, one rule, `(allow network-outbound (remote tcp
+     "localhost:<port>"))`, where `<port>` is the jail's own (*amended 2026-11-12, TASK-0063*,
+     decision-0011). The host binds `127.0.0.1:<port>` (a port the kernel picks) and `[::1]` at
+     the same port, with no address-reuse option, and hands both listeners to the supervisor as
+     fds 6 and 7, which it accepts on; it marks them close-on-exec first, so neither the freezer
+     nor the command holds them (a test reads the command's fds; without that it held 6 and 7).
+     Measured: a jailed process accepts on listeners passed in with no `network-bind` and no
+     `network-inbound` rule at all, and with only the outbound rule every bind in the jail is
+     `EPERM`, `0.0.0.0:<port>` included. History: the first version also allowed
      `network-outbound` under the `local` filter, and with it a jailed command bound its source
-     port to the bridge port and connected to `1.1.1.1:80`; split as above, that is refused and
-     both bridge listeners are still reachable. SBPL accepts only `localhost` or `*` as the host
-     (`127.0.0.1` is a parse error), and `localhost` matches every local address on both sides:
-     `[::1]:<port>` and the LAN address at `<port>` connect, `127.0.0.1:<other port>` does not,
-     and a jailed command can listen on `0.0.0.0:<port>` with `SO_REUSEADDR` beside the
-     supervisor's listeners.
+     port to the bridge port and connected to `1.1.1.1:80`; the TASK-0061 version kept
+     `(allow network-bind network-inbound (local tcp "localhost:<port>"))` for the supervisor to
+     bind with, and with it a jailed command listened on `0.0.0.0:<port>`, reachable from the
+     LAN, and the fixed port 3128 let one egress jail run per host. SBPL accepts only
+     `localhost` or `*` as the host (`127.0.0.1` is a parse error), and `localhost` matches every
+     local address: `[::1]:<port>` and the LAN address at `<port>` connect,
+     `127.0.0.1:<other port>` does not.
    - **Template-string rendering:** `render_profile` renders each rule through `_render_atom`,
      which accepts only a `string.templatelib.Template`, escapes `\` and `"` in every
      interpolated value, and refuses a NUL byte.
@@ -242,14 +249,26 @@ decision-0009's body was written after its `create`.
      Measured: each refused beside its unjailed control, and another jail neither dials nor binds
      in a jail's channel directory.
    - **`network`:** without an `EgressPolicy`, `ENFORCED` (TCP, UDP, host Unix sockets and Mach
-     refused; measured). With one, `BEST_EFFORT` (`SEATBELT_NETWORK_EGRESS_CLAIM`): a host
-     service listening at the bridge port on any local address other than the supervisor's own
-     is reachable past the proxy, and the command can listen at the bridge port on the wildcard
-     address, reachable from the network. On Darwin the supervisor's `[::1]` bind is required,
-     so `[::1]:<port>` is never some host program's. The bridge port is fixed at 3128 on the
-     host's shared stack, so one egress jail at a time runs per host. Measured: a second's
-     supervisor cannot bind it and exits before its command starts, and `run_jail` raises
-     `JailExitUnknown`.
+     refused; measured). With one, `BEST_EFFORT` (`SEATBELT_NETWORK_EGRESS_CLAIM`), re-graded
+     after TASK-0063 and left there on measurement. Removed: the command can no longer listen
+     anywhere (each listen attempt, the wildcard and LAN address at its own port with either
+     reuse option, and any port, is `EPERM`; with the TASK-0061 rule restored it listened), so
+     nothing off the host can connect to it; and jails with egress run side by side (two at once
+     in a test that fails with a fixed port). The host holds `127.0.0.1` and `[::1]` at the
+     jail's port itself, so neither is some other program's. What remains: `localhost` in the
+     outbound rule matches every local address, so a host program that binds the jail's own
+     port at another local address is reached past the proxy (pinned by a test with a squatter
+     at the LAN address). Measured: a host wildcard reservation on the port refuses a third
+     party's plain bind of `LAN:<port>` but not one with `SO_REUSEADDR` or `SO_REUSEPORT`, so no
+     reservation was added; the port is the jail's own, picked by the kernel at create, so only a
+     program that binds that one port after the jail starts is reached. That holds until the
+     host does it, which is `BEST_EFFORT` as decision-0008 defines it. *Corrected 2026-11-12,
+     DRAFT-0036:* a plain bind, with no reuse option, also took the port at the LAN and
+     link-local addresses, and the jail reached it. The host now holds the port, bound and not
+     listening, at every local address present at create, link-local included, until destroy
+     (decision-0011 item 4), and every such bind fails `EADDRINUSE`. What stays open is an
+     address that appears after create (a DHCP change, a VPN), so the grade stays
+     `BEST_EFFORT`.
 
 ## Consequences
 
@@ -263,6 +282,6 @@ decision-0009's body was written after its `create`.
   Linux; the profile's shape by `tests/unit/test_seatbelt_compile.py` and
   `test_seatbelt_ceilings.py`. Teardown by `test_seatbelt_journey.py`'s escape tests and
   `tests/integration/test_seatbelt_create.py`.
-- Open: the bridge port's fixed number on a shared stack (one egress jail per host); the
+- Open: a host program binding a jail's own bridge port at another local address (item 4); the
   readiness dial's path window above; and a command that kills its freezer and then forks in a
   loop forever, which outlives teardown (reported, never claimed gone; item 2).

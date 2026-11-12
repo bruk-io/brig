@@ -401,6 +401,7 @@ def destroy_jail(
         placeholder_record=jail.placeholders,
         member_mark=jail.member_mark,
         members=members,
+        bridge_sockets=jail.bridge_sockets,
     )
     if dismantled.members_unverified:
         raise JailMembersUnverifiable(jail.process) from dismantled.ladder_error

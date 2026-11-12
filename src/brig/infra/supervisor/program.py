@@ -29,6 +29,9 @@ _EVENTS_FD = 4
 _BRIDGE_FD = 5
 """`wire.BRIDGE_FD`, repeated."""
 
+_BRIDGE_LISTENER_FDS = (6, 7)
+"""`wire.BRIDGE_LISTENER_FDS`, repeated."""
+
 _RELAY_CHUNK = 65536
 """How many bytes one bridged read takes at most."""
 
@@ -90,7 +93,7 @@ def _make_undumpable() -> None:
         )
 
 
-def _read_exec_request() -> tuple[list[str], dict[str, str], int | None, int]:
+def _read_exec_request() -> tuple[list[str], dict[str, str], int | None, int, bool]:
     """Read and parse the one exec request on `_REQUEST_FD`.
 
     Leaves `_REQUEST_FD` open (`closefd=False`): `_start_child`'s `CLOSE` action names it, and
@@ -112,7 +115,28 @@ def _read_exec_request() -> tuple[list[str], dict[str, str], int | None, int]:
         raise ValueError("exec request names an empty argv")
     env = {str(name): str(value) for name, value in raw["env"].items()}
     port = raw["bridge_port"]
-    return argv, env, None if port is None else int(port), int(raw["bridge_limit"])
+    inherited = bool(raw.get("bridge_inherited", False))
+    return argv, env, None if port is None else int(port), int(raw["bridge_limit"]), inherited
+
+
+def _keep_listeners_from_children() -> None:
+    """Make each of `_BRIDGE_LISTENER_FDS` that the host passed in close-on-exec, first thing,
+    so neither the freezer nor the command, nor anything they start, inherits a listener and
+    accepts on the bridge's port. An fd that is not open is left alone."""
+    for fd in _BRIDGE_LISTENER_FDS:
+        try:
+            os.set_inheritable(fd, False)
+        except OSError:
+            pass
+
+
+def _inherited_listeners() -> list[socket.socket]:
+    """The bridge's listeners the host bound and passed as `_BRIDGE_LISTENER_FDS`
+    (`bridge_inherited`): a Seatbelt jail's, whose profile lets nothing in it bind
+    (decision-0010 item 4). An `OSError` from a listener fd that is not open, or not a
+    socket, propagates: the supervisor ends before the command starts.
+    """
+    return [socket.socket(fileno=fd) for fd in _BRIDGE_LISTENER_FDS]
 
 
 def _listen(port: int) -> list[socket.socket]:
@@ -389,6 +413,7 @@ def _main() -> None:
     before the command exists, so nothing runs with a route the host did not see made.
     """
     _make_undumpable()
+    _keep_listeners_from_children()
     started: list[int] = []
     held: list[int] = []
 
@@ -401,8 +426,13 @@ def _main() -> None:
     for forwarded in (signal.SIGTERM, signal.SIGINT):
         signal.signal(forwarded, forward)
     _start_freezer()
-    argv, env, bridge_port, bridge_limit = _read_exec_request()
-    listeners = _listen(bridge_port) if bridge_port is not None else []
+    argv, env, bridge_port, bridge_limit, inherited = _read_exec_request()
+    if bridge_port is None:
+        listeners: list[socket.socket] = []
+    elif inherited:
+        listeners = _inherited_listeners()
+    else:
+        listeners = _listen(bridge_port)
     child_pid = _start_child(argv, env, bridged=bridge_port is not None)
     started.append(child_pid)
     for sig in held:

@@ -337,6 +337,8 @@ class Jail:
     proxy (decision-0009 items 5 and 6), `None` for a jail with none. `member_mark` is a Seatbelt
     jail's mark (with its decoy beside it, `member_decoy`), which `destroy_jail` finds every
     process of the jail by and removes once none is left; `None` for any other jail.
+    `bridge_sockets` are what the host holds at a Seatbelt jail's egress bridge port, on every
+    local address, until `destroy_jail` (decision-0011); `None` without egress.
     """
 
     process: Process
@@ -351,6 +353,7 @@ class Jail:
     report: frozendict[Claim, Grade] = frozendict()
     egress: EgressPort | None = None
     member_mark: Path | None = None
+    bridge_sockets: _sockets.BridgeSockets | None = None
 
 
 def _close_fd(fd: int) -> None:
@@ -390,6 +393,7 @@ def dismantle(
     placeholder_record: str | None = None,
     member_mark: Path | None = None,
     members: MembersPort = MEMBERS,
+    bridge_sockets: _sockets.BridgeSockets | None = None,
 ) -> _Dismantled:
     """Tear down what a jail made, and return what teardown found: the one cleanup `destroy_jail`
     and a failed `create_bwrap_jail` both run, so the two cannot disagree (TASK-0044).
@@ -414,6 +418,9 @@ def dismantle(
     mark and its decoy are removed only once the state is `GONE`, since a process that carries
     the profile is found by them and by nothing else; a kept mark is swept again by `members`'
     `reap` before a later Seatbelt jail is made or destroyed.
+    The host's sockets at a Seatbelt jail's bridge port (`bridge_sockets`) are closed only once
+    the state is `GONE` too: while a process of the jail may live, the port stays the jail's on
+    every local address, so no other program can take it and be reached (decision-0011).
 
     Raises nothing, so it never hides the error of a failed step that called it (TASK-0046): an
     exception from the ladder makes the state `ALIVE` (the group was not verified gone), and it
@@ -470,6 +477,8 @@ def dismantle(
     for fd in (channel_namespace_fd, channel_directory_fd):
         if fd is not None:
             _close_fd(fd)
+    if state is GroupState.GONE and bridge_sockets is not None:
+        bridge_sockets.close()
     if state is GroupState.GONE and member_mark is not None:
         for made in (member_mark, member_decoy(member_mark)):
             try:

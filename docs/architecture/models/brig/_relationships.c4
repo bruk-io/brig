@@ -112,7 +112,7 @@ model {
     bwrapDriver -> stateDir 'makes the empty read-only directory through'
     bwrapDriver -> supervisorLink 'assembles the supervisor file, and builds the live supervisor, with'
     seatbeltDriver -> files 'looks up the policy\'s host facts through'
-    seatbeltDriver -> sockets 'opens the channel directory\'s fd, and finds the jail\'s group identity fd, through'
+    seatbeltDriver -> sockets 'opens the channel directory\'s fd, finds the jail\'s group identity fd, and binds the jail\'s own egress bridge port, through'
     seatbeltDriver -> supervisorLink 'assembles the supervisor file, and builds the live supervisor, with'
     driver -> supervisorLink 'catches start and wire failures from'
     jail -> placeholders 'wires the placeholder port onto'

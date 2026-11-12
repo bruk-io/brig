@@ -187,15 +187,27 @@ def _write_profile(script_path: Path, profile_text: str, state_dir: str) -> Path
 
 
 def _bridge(
-    egress: EgressPolicy, hosts: Mapping[str, tuple[str, ...]] | None, limits: EgressLimits
-) -> link.Bridge:
-    """The jail's egress route: the supervisor's port on `127.0.0.1`, and the proxy that decides
-    with `egress`, its program assembled with the decision's own source inlined
-    (`infra.proxy.assemble`), run from its stdin under `-I` by this interpreter.
+    command: tuple[str, ...],
+    egress: EgressPolicy,
+    hosts: Mapping[str, tuple[str, ...]] | None,
+    limits: EgressLimits,
+) -> tuple[link.Bridge, _sockets.BridgeSockets]:
+    """The jail's egress route, and the sockets the host holds at its port: a port of its own,
+    which the host listens on at `127.0.0.1` and `[::1]` and hands the supervisor, and holds,
+    not listening, at every other local address (`infra.sockets.bridge_listeners`,
+    decision-0011); and the proxy that
+    decides with `egress`, its program assembled with the decision's own source inlined
+    (`infra.proxy.assemble`), run from its stdin under `-I` by this interpreter. A port per
+    jail, so jails with egress run side by side on the host's one network stack, and the jail
+    itself binds nothing (decision-0010 item 4). The caller holds the sockets for the jail's
+    life: on the `Jail` once it is made, closed by `dismantle`; closed by the caller itself on a
+    failure before that.
 
     Raises:
         EgressProxySourceUnreadable: brig's own proxy or decision source could not be read;
             nothing was written or started.
+        JailSpawnFailed: no port could be bound free on every local address; the `OSError` is
+            the `__cause__`, and nothing is left open.
     """
     try:
         decision_source = Path(_egress.__file__).read_text(encoding="utf-8")
@@ -215,9 +227,20 @@ def _bridge(
         connections=limits.connections,
         handshake_s=limits.handshake_s,
     )
-    return link.Bridge(
-        port=seatbelt.EGRESS_BRIDGE_PORT, proxy=launch, limit=limits.bridge_connections
+    try:
+        held = _sockets.bridge_listeners()
+    except OSError as error:
+        raise JailSpawnFailed(command) from error
+    bridge = link.Bridge(
+        port=held.port, proxy=launch, limit=limits.bridge_connections, listeners=held.listeners
     )
+    return bridge, held
+
+
+def _release(held: _sockets.BridgeSockets | None) -> None:
+    """Close every socket the host holds at a jail's bridge port; a no-op once closed."""
+    if held is not None:
+        held.close()
 
 
 def _facts(paths: tuple[str, ...]) -> dict[str, tuple[str, str]]:
@@ -438,6 +461,8 @@ def create_seatbelt_jail(
                 pass
             case _ as unreachable:
                 assert_never(unreachable)
+    bridge: link.Bridge | None = None
+    held: _sockets.BridgeSockets | None = None
     if supervisors is not None:
         resolved_supervisors: SupervisorPort = supervisors
         egress_port: EgressPort | None = None
@@ -447,15 +472,20 @@ def create_seatbelt_jail(
         member_mark: Path | None = None
     else:
         members.reap(resolved_state_dir(), time.monotonic() + KILL_GRACE_S)
-        bridge = None if egress is None else _bridge(egress, egress_hosts, egress_limits)
-        (
-            resolved_supervisors,
-            egress_port,
-            supervisor_script,
-            rules,
-            absent,
-            member_mark,
-        ) = _supervisors_for(policy, channels, cwd, stdio, bridge)
+        if egress is not None:
+            bridge, held = _bridge(command, egress, egress_hosts, egress_limits)
+        try:
+            (
+                resolved_supervisors,
+                egress_port,
+                supervisor_script,
+                rules,
+                absent,
+                member_mark,
+            ) = _supervisors_for(policy, channels, cwd, stdio, bridge)
+        except BaseException:
+            _release(held)
+            raise
     channel_directory = (
         Path(channels.directory.host_path)
         if channels is not None and channels.reservations
@@ -484,7 +514,7 @@ def create_seatbelt_jail(
         plan = seatbelt.compile_run(
             command,
             env=env,
-            egress_port=None if egress is None else seatbelt.EGRESS_BRIDGE_PORT,
+            egress_port=_proxy_port(egress, bridge),
         )
         try:
             process = run(operations.create(plan, env_policy), processes, resolved_supervisors)
@@ -514,6 +544,7 @@ def create_seatbelt_jail(
             placeholder_record=record,
             member_mark=member_mark,
             members=members,
+            bridge_sockets=held,
         )
         if dismantled.ladder_error is not None:
             error.add_note(f"tearing the jail down after this raised {dismantled.ladder_error!r}")
@@ -536,6 +567,7 @@ def create_seatbelt_jail(
             seatbelt.ceilings(rules, channels, egress=egress is not None) if rules else frozendict()
         ),
         egress=egress_port,
+        bridge_sockets=held,
     )
 
 
@@ -567,6 +599,18 @@ def _await_members_found(
                 return
             raise JailMembersUnverifiable(process)
         time.sleep(0.01)
+
+
+_NO_BRIDGE_PORT = 0
+"""The port the proxy variables name for a jail with egress started through a caller's own
+`supervisors`, which starts no bridge: one nothing listens on."""
+
+
+def _proxy_port(egress: EgressPolicy | None, bridge: link.Bridge | None) -> int | None:
+    """The port the command's proxy variables name: its bridge's, `None` without egress."""
+    if egress is None:
+        return None
+    return _NO_BRIDGE_PORT if bridge is None else bridge.port
 
 
 def _namespace_fd_for(process: Process, proc_root: str = "/proc") -> int | None:
