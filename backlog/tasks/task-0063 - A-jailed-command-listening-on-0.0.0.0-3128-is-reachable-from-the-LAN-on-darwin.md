@@ -4,7 +4,7 @@ title: 'A jailed command listening on 0.0.0.0:3128 is reachable from the LAN on 
 status: In Progress
 assignee: []
 created_date: '2026-11-11 17:16'
-updated_date: '2026-11-12 07:11'
+updated_date: '2026-11-12 08:18'
 labels:
   - darwin
   - security
@@ -29,8 +29,8 @@ From TASK-0061's pre-merge review (2026-11-11). On darwin, egress uses a fixed b
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A jailed command on darwin cannot accept connections from off the host
-- [ ] #2 Two egress jails can run at once on one Mac
+- [x] #1 A jailed command on darwin cannot accept connections from off the host
+- [x] #2 Two egress jails can run at once on one Mac
 <!-- AC:END -->
 
 ## Implementation Plan
