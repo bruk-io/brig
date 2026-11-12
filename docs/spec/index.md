@@ -244,8 +244,11 @@ socket inside a readable root, a signal outside the jail, and every Mach service
 directory lookups); `network` without `EgressPolicy` is `ENFORCED`, and with one
 (`SEATBELT_NETWORK_EGRESS_CLAIM`) is `BEST_EFFORT` (the jail's one rule is a connect to its own
 bridge port on a local address, and it binds and listens on nothing, so nothing off the host can
-reach it; but SBPL's `localhost` matches every local address, so a host program that binds the
-jail's own port on a LAN address, with an address-reuse option, is reachable past the proxy).
+reach it. SBPL's `localhost` matches every local address, so the host holds the port, bound and
+not listening, at every local address present at create, link-local included, until destroy:
+any other bind there fails `EADDRINUSE`, reuse option or not, and a wildcard squatter is not
+reached. Left open: an address that appears after create, such as a DHCP change or a VPN
+coming up, where a program that binds the port is reachable past the proxy).
 
 Where the domain and the world alternate, the exchange is a value too. `effects.py` names the
 closed set a generator may yield: start the supervised command, await the supervisor's report,

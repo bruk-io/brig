@@ -622,16 +622,134 @@ def _loopback_listener(family: socket.AddressFamily, address: str, port: int) ->
     return listener
 
 
-def bridge_listeners() -> tuple[int, tuple[socket.socket, socket.socket]]:
-    """A fresh port for one Seatbelt jail's egress bridge, with the host listening on it at
-    `127.0.0.1` and `[::1]` (decision-0010 item 4): the kernel picks a free port on IPv4 and the
-    same port is bound on IPv6, another tried if a program holds that one. The caller owns both
-    sockets and hands them to the jail's supervisor, which accepts on them; the jail itself then
-    binds nothing. Each is close-on-exec, as Python makes every socket.
+class _IfAddrs(ctypes.Structure):
+    """`struct ifaddrs` (`<ifaddrs.h>`), as `getifaddrs` lists the host's addresses."""
+
+
+_IfAddrs._fields_ = [
+    ("ifa_next", ctypes.POINTER(_IfAddrs)),
+    ("ifa_name", ctypes.c_char_p),
+    ("ifa_flags", ctypes.c_uint),
+    ("ifa_addr", ctypes.c_void_p),
+    ("ifa_netmask", ctypes.c_void_p),
+    ("ifa_dstaddr", ctypes.c_void_p),
+    ("ifa_data", ctypes.c_void_p),
+]
+
+
+def _local_addresses() -> list[tuple[socket.AddressFamily, str, int]]:
+    """Every IPv4 and IPv6 address on a local interface now, as `(family, address, scope)`:
+    `scope` is the interface's index for an IPv6 link-local address, 0 otherwise. Darwin's
+    `sockaddr` layout (`sa_len` first, KAME's interface index embedded in a link-local
+    address's second 16 bits, cleared here).
 
     Raises:
-        OSError: no port was free on both after `_BRIDGE_PORT_ATTEMPTS` tries, or a bind failed
-            for another reason; nothing is left open.
+        OSError: `getifaddrs` failed.
+    """
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.getifaddrs.argtypes = [ctypes.POINTER(ctypes.POINTER(_IfAddrs))]
+    libc.getifaddrs.restype = ctypes.c_int
+    libc.freeifaddrs.argtypes = [ctypes.POINTER(_IfAddrs)]
+    libc.freeifaddrs.restype = None
+    head = ctypes.POINTER(_IfAddrs)()
+    if libc.getifaddrs(ctypes.byref(head)) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    found: dict[tuple[socket.AddressFamily, str, int], None] = {}
+    try:
+        current = head
+        while current:
+            entry = current.contents
+            if entry.ifa_addr:
+                family = ctypes.string_at(entry.ifa_addr, 2)[1]
+                if family == socket.AF_INET:
+                    raw4 = ctypes.string_at(entry.ifa_addr, 8)[4:8]
+                    found[(socket.AF_INET, socket.inet_ntop(socket.AF_INET, raw4), 0)] = None
+                elif family == socket.AF_INET6:
+                    raw6 = bytearray(ctypes.string_at(entry.ifa_addr, 24)[8:24])
+                    scope = 0
+                    if raw6[0] == 0xFE and raw6[1] & 0xC0 == 0x80:
+                        raw6[2:4] = b"\x00\x00"
+                        scope = socket.if_nametoindex((entry.ifa_name or b"").decode())
+                    address = socket.inet_ntop(socket.AF_INET6, bytes(raw6))
+                    found[(socket.AF_INET6, address, scope)] = None
+            current = entry.ifa_next
+    finally:
+        libc.freeifaddrs(head)
+    return list(found)
+
+
+@dataclass(frozen=True)
+class BridgeSockets:
+    """One Seatbelt jail's egress bridge port and every socket the host holds at it
+    (decision-0011): `listeners`, at `127.0.0.1` and `[::1]`, which the supervisor accepts on,
+    and `reservations`, bound and not listening at every other local address that was present
+    when the jail was made, so no other program can bind the port there and be reached past the
+    proxy by the jail's one connect rule. The caller holds them all for the jail's life."""
+
+    port: int
+    listeners: tuple[socket.socket, socket.socket]
+    reservations: tuple[socket.socket, ...]
+
+    def close(self) -> None:
+        """Close every socket; a no-op for one already closed."""
+        for held in (*self.listeners, *self.reservations):
+            held.close()
+
+
+def _reserve(port: int) -> tuple[socket.socket, ...] | None:
+    """Bind `port`, with no address-reuse option and without listening, at every local address
+    but the loopbacks the listeners hold, or `None` when some program already holds it at one
+    (the caller then tries another port). An address the kernel will not bind (gone since it was
+    listed, or not yet usable) is passed over.
+
+    Raises:
+        OSError: a bind failed for any other reason; what was bound is closed.
+    """
+    held: list[socket.socket] = []
+    try:
+        for family, address, scope in _local_addresses():
+            if address in ("127.0.0.1", "::1"):
+                continue
+            reservation = socket.socket(family, socket.SOCK_STREAM)
+            try:
+                if family == socket.AF_INET6:
+                    reservation.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                    reservation.bind((address, port, 0, scope))
+                else:
+                    reservation.bind((address, port))
+            except OSError as error:
+                reservation.close()
+                if error.errno == errno.EADDRNOTAVAIL:
+                    continue
+                if error.errno == errno.EADDRINUSE:
+                    for done in held:
+                        done.close()
+                    return None
+                raise
+            held.append(reservation)
+    except BaseException:
+        for done in held:
+            done.close()
+        raise
+    return tuple(held)
+
+
+def bridge_listeners() -> BridgeSockets:
+    """A fresh port for one Seatbelt jail's egress bridge (decision-0011): the host listens on it
+    at `127.0.0.1` and `[::1]`, and holds it, bound and not listening, at every other local
+    address present now, link-local included, each with no address-reuse option. The kernel
+    picks a free port on IPv4; another is tried if a program holds it at any other address.
+    The jail's one network rule, a connect to `localhost:<port>`, reaches every local address
+    (Seatbelt's `localhost`); with every one held here, a later bind of the port there by any
+    other program fails `EADDRINUSE`, address-reuse options included (measured), and a connect
+    there reaches no listener. Each socket is close-on-exec, as Python makes every socket. The
+    caller hands the listeners to the jail's supervisor and holds everything until the jail is
+    destroyed (`BridgeSockets.close`).
+
+    Raises:
+        OSError: no port was free everywhere after `_BRIDGE_PORT_ATTEMPTS` tries, or a bind
+            failed for another reason; nothing is left open.
     """
     for _ in range(_BRIDGE_PORT_ATTEMPTS):
         v4 = _loopback_listener(socket.AF_INET, "127.0.0.1", 0)
@@ -643,8 +761,18 @@ def bridge_listeners() -> tuple[int, tuple[socket.socket, socket.socket]]:
             if error.errno == errno.EADDRINUSE:
                 continue
             raise
-        return port, (v4, v6)
-    raise OSError(errno.EADDRINUSE, "no port was free on both 127.0.0.1 and [::1]")
+        try:
+            reservations = _reserve(port)
+        except BaseException:
+            v4.close()
+            v6.close()
+            raise
+        if reservations is None:
+            v4.close()
+            v6.close()
+            continue
+        return BridgeSockets(port, (v4, v6), reservations)
+    raise OSError(errno.EADDRINUSE, "no port was free on every local address")
 
 
 def open_directory(path: str) -> int:

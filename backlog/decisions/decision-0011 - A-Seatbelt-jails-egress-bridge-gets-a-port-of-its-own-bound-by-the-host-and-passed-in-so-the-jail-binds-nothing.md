@@ -35,10 +35,22 @@ does.
 3. **bwrap is unchanged.** Its supervisor binds 3128 in the jail's own network namespace, where no
    other jail or host program can hold it.
 
-Rejected: a host wildcard reservation of the port on every address, to stop a host program from
-binding it at the LAN address. Measured: it refuses a plain bind but not one with
-`SO_REUSEADDR` or `SO_REUSEPORT`, which most servers set, so it would cost two sockets per jail
-for a guarantee it does not give.
+4. **The port is held at every local address.** *Amended 2026-11-12, DRAFT-0036.* SBPL's
+   `localhost` matches every local address, and holding only the two loopbacks left the port
+   free elsewhere: measured by the review, a plain bind with no reuse option succeeded at the
+   LAN address, at `fe80::1%lo0` and at the Wi-Fi link-local address, and a jailed connect to
+   `localhost:<port>` reached all three. So `bridge_listeners` also binds the port, with no
+   reuse option and without listening, at every other address `getifaddrs` lists at create,
+   IPv4 and IPv6, link-local included (another port is tried if any program holds it at one).
+   Measured: each later squatter there, plain, `SO_REUSEADDR` or `SO_REUSEPORT`, then fails
+   `EADDRINUSE`; a wildcard squatter with `SO_REUSEADDR` binds, but a connect to the LAN
+   address at the port does not reach it. The host holds the listeners and the reservations on
+   the `Jail` until `destroy_jail` (released once the jail is verified gone), so the port
+   stays the jail's after its supervisor has exited while any process of it may live.
+
+Rejected: a single wildcard reservation of the port. Measured: it refuses a plain bind at the LAN
+address but not one with `SO_REUSEADDR` or `SO_REUSEPORT`, so it gives no guarantee; a
+reservation at each specific address does.
 
 ## Consequences
 
@@ -49,9 +61,11 @@ for a guarantee it does not give.
   TASK-0061 rule restored); the command holds neither listener
   (`test_the_command_holds_none_of_the_bridge_s_listeners`, which fails without the
   close-on-exec).
-- `network` with egress stays `BEST_EFFORT` on Darwin, for one reason now: SBPL's `localhost`
-  matches every local address, so a host program that binds the jail's own port at another local
-  address is reached past the proxy (`test_a_host_program_on_the_jails_port_at_another_address_
-  is_reached_past_the_proxy` pins it). decision-0010 item 4 is amended to match.
+- `network` with egress stays `BEST_EFFORT` on Darwin, for one reason now: an address that
+  appears after create (a DHCP change, a VPN coming up) is not held, and a program that binds the
+  jail's port there is reached past the proxy. Not measured here: adding an address needs root.
+  `test_a_host_program_cannot_take_the_jails_port_at_another_local_address` holds the rest,
+  beside an unjailed control (with only the loopbacks held, every squatter binds) and fails
+  without the reservations. decision-0010 item 4 is amended to match.
 - The wire gains `BRIDGE_LISTENER_FDS` and `bridge_inherited`; Linux's requests carry
   `bridge_inherited: false` and behave as before.

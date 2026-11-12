@@ -79,9 +79,10 @@ class Bridge:
 
     With `listeners` (a Seatbelt jail's, `sockets.bridge_listeners`), the host has bound the
     port already, on `127.0.0.1` and `[::1]`: the supervisor gets them as
-    `wire.BRIDGE_LISTENER_FDS` and binds nothing. The start closes them in this process
-    whatever happens, and closing a socket twice is harmless, so a caller that fails before the
-    start closes them too (decision-0010 item 4)."""
+    `wire.BRIDGE_LISTENER_FDS` and binds nothing. The caller keeps its own copies open for the
+    jail's life and closes them (decision-0011): held by the host, the port stays the jail's
+    after the supervisor has exited, so no other program takes it while a process of the jail
+    may still connect."""
 
     port: int
     proxy: launch.ProxyLaunch
@@ -252,7 +253,7 @@ def _start(
     `command_argv` in `command_env`. With `bridge`, its egress proxy is started first, the
     supervisor gets its end of their socketpair as `wire.BRIDGE_FD`, and the request names the
     bridge's port; a bridge's host-bound listeners (`Bridge.listeners`) become its
-    `wire.BRIDGE_LISTENER_FDS`, and the caller closes its own copies after.
+    `wire.BRIDGE_LISTENER_FDS`; the caller's own copies stay open, its to close.
 
     The request pipe's read end and the events pipe's write end become the child's
     `wire.REQUEST_FD` and `wire.EVENTS_FD`; this process closes its copies of both, and of the
@@ -409,11 +410,7 @@ class LiveSupervisor:
         """Start the supervisor with `argv` in `env` as its one command; `_start` raises
         `SupervisorSpawnError` if it cannot, with the supervisor it spawned, if any, for the
         caller to tear down."""
-        try:
-            supervisor = _start(self._supervisor_argv, argv, env, self._stdio, self._bridge)
-        finally:
-            for listener in () if self._bridge is None else self._bridge.listeners:
-                listener.close()
+        supervisor = _start(self._supervisor_argv, argv, env, self._stdio, self._bridge)
         self._supervisor = supervisor
         self._proxy = supervisor.proxy
         return supervisor

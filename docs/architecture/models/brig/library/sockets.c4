@@ -3,7 +3,7 @@ model {
   extend brig.library {
     sockets = component 'Sockets' {
       technology 'Python 3.15, stdlib only'
-      description 'Channels on the real host: creates, opens and removes a jail\'s channel directory, finds and holds the jail\'s PID namespace, verifies a channel is ready -- a non-blocking connect to the socket opened by name beneath the held directory fd through no link, confirmed, by PID namespace, to be the jailed process\'s own listener, never path existence (decision-0005, TASK-0045) -- signals the jail\'s PID 1, and binds a Seatbelt jail\'s own egress bridge port on 127.0.0.1 and [::1] for the host to hand its supervisor (decision-0011). Plain data in and out.'
+      description 'Channels on the real host: creates, opens and removes a jail\'s channel directory, finds and holds the jail\'s PID namespace, verifies a channel is ready -- a non-blocking connect to the socket opened by name beneath the held directory fd through no link, confirmed, by PID namespace, to be the jailed process\'s own listener, never path existence (decision-0005, TASK-0045) -- signals the jail\'s PID 1, and binds a Seatbelt jail\'s own egress bridge port, listening on 127.0.0.1 and [::1] for the host to hand its supervisor and held, not listening, at every other local address (decision-0011). Plain data in and out.'
     }
   }
 }

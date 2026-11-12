@@ -320,16 +320,62 @@ print("reached", flush=True)
 LAN address. Exits 0 if it connected."""
 
 
-def test_a_host_program_on_the_jails_port_at_another_address_is_reached_past_the_proxy(
+def _squat(family: socket.AddressFamily, address: tuple[object, ...], option: str | None) -> str:
+    """Bind `address` the way a host program would, with `option` (an address-reuse option) or
+    none, and say what happened: `bound` or the errno."""
+    squatter = socket.socket(family)
+    try:
+        if family == socket.AF_INET6:
+            squatter.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        if option is not None:
+            squatter.setsockopt(socket.SOL_SOCKET, getattr(socket, option), 1)
+        squatter.bind(address)
+    except OSError as error:
+        return f"errno {error.errno}"
+    finally:
+        squatter.close()
+    return "bound"
+
+
+_SQUATS: tuple[tuple[str, str | None], ...] = (
+    ("lan", None),
+    ("lan", "SO_REUSEADDR"),
+    ("lan", "SO_REUSEPORT"),
+    ("link-local", None),
+    ("link-local", "SO_REUSEADDR"),
+)
+"""Each squatter: at the LAN address or at `fe80::1%lo0`, plainly or with a reuse option."""
+
+
+def _squat_all(lan: str, port: int) -> dict[tuple[str, str | None], str]:
+    lo0 = socket.if_nametoindex("lo0")
+    places: dict[str, tuple[socket.AddressFamily, tuple[object, ...]]] = {
+        "lan": (socket.AF_INET, (lan, port)),
+        "link-local": (socket.AF_INET6, ("fe80::1", port, 0, lo0)),
+    }
+    return {(place, option): _squat(*places[place], option) for place, option in _SQUATS}
+
+
+def test_a_host_program_cannot_take_the_jails_port_at_another_local_address(
     server_port: int, tmp_path: Path
 ) -> None:
-    """Pins the one reason egress stays best-effort on Darwin (decision-0010 item 4): Seatbelt's
-    `localhost` matches every local address, so a host program that binds the jail's own port at
-    the LAN address, with an address-reuse option, is reached. Measured, so the grade is not
-    raised while it holds."""
+    """DRAFT-0036: Seatbelt's `localhost` matches every local address, so a host program bound
+    at the jail's port on the LAN or a link-local address would be reached past the proxy. The
+    host holds the port, bound and not listening, at every local address present at create, so
+    each squatter fails `EADDRINUSE`, reuse option or not; a wildcard squatter with a reuse
+    option can bind, and a connect to the LAN address at the port still does not reach it.
+    Control: holding only the two loopback listeners, as before, every squatter binds."""
     lan = _lan_address()
     if lan is None:
         pytest.skip("this host has no address off loopback to measure against")
+    v4 = socket.create_server(("127.0.0.1", 0))
+    control_port = v4.getsockname()[1]
+    loopbacks = (v4, socket.create_server(("::1", control_port), family=socket.AF_INET6))
+    try:
+        control = _squat_all(lan, control_port)
+    finally:
+        for listener in loopbacks:
+            listener.close()
     out = tmp_path / "out"
     cue = tmp_path / "cue"
     jail = _jail(_CUED, lan, str(cue), granted=server_port, out=out)
@@ -339,19 +385,28 @@ def test_a_host_program_on_the_jails_port_at_another_address_is_reached_past_the
             assert time.monotonic() < deadline, "the jail never printed its port"
             time.sleep(0.02)
         port = int(out.read_text().split()[0])
-        squatter = socket.socket()
-        squatter.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        squatter.bind((lan, port))
-        squatter.listen(1)
+        attack = _squat_all(lan, port)
+        wildcard = socket.socket()
+        wildcard.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        wildcard.bind(("0.0.0.0", port))
+        wildcard.listen(1)
+        wildcard.settimeout(3)
         cue.write_text("")
         try:
-            reached = run_jail(jail, timeout_s=30)
+            dialled = run_jail(jail, timeout_s=30)
+            try:
+                wildcard.accept()[0].close()
+                reached = True
+            except TimeoutError:
+                reached = False
         finally:
-            squatter.close()
+            wildcard.close()
     finally:
         destroy_jail(jail)
 
-    assert reached == 0, out.read_text()
+    assert all(result == "bound" for result in control.values()), control
+    assert all(result == f"errno {errno.EADDRINUSE}" for result in attack.values()), attack
+    assert dialled != 0 and not reached, out.read_text()
     assert jail.report[SEATBELT_NETWORK_EGRESS_CLAIM].name == "BEST_EFFORT"
 
 

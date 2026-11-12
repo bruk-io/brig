@@ -479,10 +479,13 @@ SEATBELT_NETWORK_EGRESS_CLAIM = Claim(
         "port, a port the host picked for this jail alone and listens on at 127.0.0.1 and [::1], "
         "where the supervisor bridges each connection to a proxy on the host that decides it and "
         "resolves a granted name itself. The jail binds and listens on nothing, so nothing off "
-        "the host can connect to it. Best-effort on Darwin: the jail shares the host's network "
-        "stack, and Seatbelt's localhost filter matches every local address, so a host program "
-        "that binds this jail's port on another local address (a LAN address), with an "
-        "address-reuse option, is reachable past the proxy. Not covered: the proxy judges an "
+        "the host can connect to it. Seatbelt's localhost filter matches every local address, so "
+        "the host also holds the port, bound and not listening, at every other local address "
+        "present when the jail was made, link-local included, until the jail is destroyed: no "
+        "other program can bind it there, reuse option or not. Best-effort on Darwin: an "
+        "address that appears after the jail was made (a DHCP change, a VPN coming up) is not "
+        "held, and a program that binds the port there is reachable past the proxy. Not "
+        "covered: the proxy judges an "
         "HTTP CONNECT's authority, never the TLS SNI inside it, and the bytes inside a granted "
         "connection are not inspected"
     ),
@@ -559,8 +562,9 @@ def ceilings(
       lets any process read, show the jail host data no policy names.
     - `network` is `ENFORCED` without `egress` (Seatbelt refuses every network operation outside
       the channel directory), `BEST_EFFORT` with it: the one route a jail with egress keeps, a
-      connect to its own port on a local address, reaches a host program that binds that port
-      on another local address with an address-reuse option (`SEATBELT_NETWORK_EGRESS_CLAIM`).
+      connect to its own port on any local address, is held by the host at every address
+      present at create, but reaches a program that binds that port at an address that appears
+      later (`SEATBELT_NETWORK_EGRESS_CLAIM`, decision-0011).
     - `channel_exclusivity` is `VIOLATED` when a writable path the jail shares with the host is
       not a declared channel, else `ENFORCED`: unlike a bind mount, Seatbelt refuses a dial of
       a host socket inside a readable root, so a root the jail reads lowers nothing.

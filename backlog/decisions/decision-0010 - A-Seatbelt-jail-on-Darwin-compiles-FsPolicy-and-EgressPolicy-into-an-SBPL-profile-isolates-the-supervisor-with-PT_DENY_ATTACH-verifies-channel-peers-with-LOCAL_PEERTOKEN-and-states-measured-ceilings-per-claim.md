@@ -262,7 +262,13 @@ decision-0009's body was written after its `create`.
      party's plain bind of `LAN:<port>` but not one with `SO_REUSEADDR` or `SO_REUSEPORT`, so no
      reservation was added; the port is the jail's own, picked by the kernel at create, so only a
      program that binds that one port after the jail starts is reached. That holds until the
-     host does it, which is `BEST_EFFORT` as decision-0008 defines it.
+     host does it, which is `BEST_EFFORT` as decision-0008 defines it. *Corrected 2026-11-12,
+     DRAFT-0036:* a plain bind, with no reuse option, also took the port at the LAN and
+     link-local addresses, and the jail reached it. The host now holds the port, bound and not
+     listening, at every local address present at create, link-local included, until destroy
+     (decision-0011 item 4), and every such bind fails `EADDRINUSE`. What stays open is an
+     address that appears after create (a DHCP change, a VPN), so the grade stays
+     `BEST_EFFORT`.
 
 ## Consequences
 
