@@ -1,7 +1,7 @@
 ---
 id: TASK-0063
 title: 'A jailed command listening on 0.0.0.0:3128 is reachable from the LAN on darwin'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-11 17:16'
 updated_date: '2026-11-12 08:34'
@@ -166,4 +166,6 @@ done: all steps passed
 ```
 
 No repro: as a recorded failing run. The fix is on this branch, and a reviewer can't check out the pre-fix code here. The reviewer showed the failure in memory instead: with render_profile patched to add back the TASK-0061 rule (allow network-bind network-inbound (local tcp "localhost:P")), test_a_jailed_command_cannot_listen_for_a_connection_from_off_the_host fails, and the jail listens on 0.0.0.0:P and 192.168.86.243:P. On this branch it passes.
+
+Review (philosophy:reviewer, 2026-11-12, macOS 27): closed. AC1: every bind in the jail is EPERM; listeners on fds 6/7 are close-on-exec before the freezer starts; the listen test fails with the TASK-0061 rule restored in memory. AC2: test_two_jails_with_egress_run_at_once passes. Attacks: off-host, 127.0.0.2 and port P+1 are EPERM from the jail; there is no cross-jail reach (each rule names only its own port); the host binds before spawn, so there is no bind race; SBPL rejects literal IPs. Finding (medium) -> DRAFT-0036: the residual is wider than graded. Plain binds without reuse at LAN:P and at link-local fe80::1%lo0 and fe80::...%en1 succeed while the bridge runs, and the jail reaches all three. A bound, non-listening, no-reuse reservation on each local address present at create closes that. Finding (low, notes only): just done takes about 33 min wall-clock on 32 s CPU. The e2e step takes about 1945 s when stdout is a pipe, against pytest's own 54 s, so some process likely inherits the pipe and outlives pytest; not found which one. No freezer was left. decision-0011 still needs Bruk's confirmation.
 <!-- SECTION:NOTES:END -->
