@@ -4,7 +4,7 @@ title: 'A jailed command listening on 0.0.0.0:3128 is reachable from the LAN on 
 status: In Progress
 assignee: []
 created_date: '2026-11-11 17:16'
-updated_date: '2026-11-12 08:18'
+updated_date: '2026-11-12 08:34'
 labels:
   - darwin
   - security
@@ -164,4 +164,6 @@ uv run python3 scripts/c4lint.py docs/architecture
 
 done: all steps passed
 ```
+
+No repro: as a recorded failing run. The fix is on this branch, and a reviewer can't check out the pre-fix code here. The reviewer showed the failure in memory instead: with render_profile patched to add back the TASK-0061 rule (allow network-bind network-inbound (local tcp "localhost:P")), test_a_jailed_command_cannot_listen_for_a_connection_from_off_the_host fails, and the jail listens on 0.0.0.0:P and 192.168.86.243:P. On this branch it passes.
 <!-- SECTION:NOTES:END -->
