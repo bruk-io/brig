@@ -6,6 +6,7 @@ title: >-
 status: Draft
 assignee: []
 created_date: '2026-11-12 13:02'
+updated_date: '2026-11-12 13:22'
 labels:
   - test-hygiene
   - darwin
@@ -27,3 +28,9 @@ Measured (macOS 27.0.1, branch egress-port):
 
 Next step: run test_processes_gateway.py with stderr on a pipe under PYTHONFAULTHANDLER and send SIGABRT during the gap to get the Python stack; bisect by test with -k.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Intermittent: on the same branch, after 9068f9a, uv run just done took 94 s wall clock and uv run just test-e2e 62 s (pytest reported 61.9 s), with no gap. Earlier runs of that day took 33 min, 942 s for test_processes_gateway.py alone, and 537 s for the e2e suite to a file. So the cause depends on something outside the tests' own timing, and a reproduction should loop the file until the gap appears.
+<!-- SECTION:NOTES:END -->
